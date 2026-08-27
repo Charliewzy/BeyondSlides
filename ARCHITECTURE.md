@@ -5,27 +5,27 @@ Status: Draft for review
 ## 1. Product goal
 
 BeyondSlides finds the useful information a lecturer contributes orally beyond
-the course's written material.
+the course's written sources.
 
 It is not a general lecture summarizer. Given a timestamped lecture transcript
-and the corresponding slides, it should identify and rank explanations,
+and the associated slide deck, it should identify and rank explanations,
 intuitions, caveats, examples, practical advice, and conceptual connections
 that are valuable to a learner but are not already explicit in the slides.
 
-Every retained result must be internally auditable from both directions:
+Every retained result must be internally traceable from both directions:
 
 - what the lecturer said: an exact transcript span and timestamps;
-- why it counts as added value: the closest relevant slide material and a
-  short comparison.
+- what written-source content was considered: the related slides.
 
-The comparison is retained as an analysis artifact for logging, debugging, and
-evaluation. It is not required in the user-facing report.
+An optional comparison note may be retained for logging, debugging, and
+evaluation. It is not required for a valid analysis or in the user-facing
+report.
 
 The central operation is therefore a semantic difference:
 
 ```text
 useful lecture content - what the slides already communicate
-    = oral added value worth the learner's time
+    = oral additions worth the learner's time
 ```
 
 ## 2. MVP user experience
@@ -42,8 +42,8 @@ It produces:
 - `result.html`: a self-contained report with two views.
 
 The report's primary view is a ranked list of high-value oral additions. Each
-item shows a concise description, its score, timestamp, transcript evidence,
-and related slides.
+item shows its score, timestamp, transcript evidence, and related slides. An
+optional summary may provide a shorter user-facing description when available.
 
 The secondary view preserves the complete transcript and overlays its scores.
 This view makes the analysis inspectable and lets a learner browse lower-ranked
@@ -93,11 +93,10 @@ to stable IDs rather than copying or rewriting source text.
 
 ### Evidence-backed analysis
 
-Every novelty judgment internally records its transcript span, relevant slide
-evidence, and a concise comparison note. This information supports logging,
-debugging, and evaluation; it is not required in the user-facing report. The
-note is a short justification of the structured judgment, not a request for the
-model's private chain of thought.
+Every novelty judgment internally records its transcript span and relevant
+slide references. It may also include a concise comparison note for logging,
+debugging, and evaluation. The note is a short justification of the structured
+judgment, not a request for the model's private chain of thought.
 
 ### Grade, do not force a binary answer
 
@@ -227,12 +226,12 @@ applying the course:
 | 4 | Important conceptual or practical insight |
 | 5 | Central insight with high leverage for learning or application |
 
-### Annotation groups
+### Lecture passages
 
-An annotation covers a contiguous, inclusive sentence range:
+A lecture passage covers a contiguous, inclusive sentence range:
 
 ```rust
-struct AnnotationGroup {
+struct LecturePassage {
     start: SentenceId,
     end: SentenceId,
     novelty: Score5,
@@ -240,30 +239,28 @@ struct AnnotationGroup {
     importance: Score5,
     related_slides: Vec<SlideId>,
     summary: Option<String>,
-    comparison_note: String,
+    comparison_note: Option<String>,
 }
 ```
 
-`summary` describes the oral contribution in the ranked view. It is required
-for groups admitted to that view and optional for low-value groups retained
-only to cover the transcript. `comparison_note` briefly compares the span with
-the closest written material. It is stored in `annotations.json` for internal
-logging, debugging, and evaluation and is not rendered in the user-facing
-report.
+`summary` is an optional user-facing description of a lecture passage. Its
+absence does not make a passage invalid; a renderer can use the source
+transcript instead. `comparison_note` briefly compares the span with the closest
+written source when such a note is useful. It is optional, stored in
+`annotations.json` for internal logging, debugging, and evaluation, and not
+rendered in the user-facing report.
 
-The source evidence for an annotation is the referenced sentence range itself.
-Its written-material evidence is `related_slides` plus `comparison_note`. A
-later schema may add exact slide excerpts if evaluation shows that slide-level
-references are not sufficiently auditable.
+The source evidence for a passage is the referenced sentence range itself. Its
+written-source evidence is `related_slides`; an optional `comparison_note` may
+supplement it. A later schema may add exact slide excerpts if evaluation shows
+that slide-level references are not sufficiently auditable.
 
 Required invariants:
 
 - start and end IDs exist and follow transcript order;
 - all scores are valid;
 - all related slide IDs exist;
-- related slide IDs contain no duplicates;
-- every group has a non-empty comparison note;
-- ranked groups have a non-empty summary.
+- related slide IDs contain no duplicates.
 
 ## 6. Window ownership
 
@@ -280,18 +277,18 @@ but owns a non-overlapping transcript region:
 ```
 
 Owned regions partition the transcript. The model must partition its entire
-owned region into contiguous annotation groups. Context sentences may influence
+owned region into contiguous lecture passages. Context sentences may influence
 the judgment but may not appear in that window's output.
 
 For every owned region, validation enforces:
 
-- the first group starts at the first owned sentence;
-- the last group ends at the last owned sentence;
-- consecutive groups are adjacent;
+- the first passage starts at the first owned sentence;
+- the last passage ends at the last owned sentence;
+- consecutive passages are adjacent;
 - no sentence is skipped or covered twice.
 
 Consequently, after all windows finish, every transcript sentence belongs to
-exactly one annotation group. No overlap-merging stage is needed.
+exactly one lecture passage. No overlap-merging stage is needed.
 
 ## 7. Intended pipeline
 
@@ -328,8 +325,8 @@ transcription         text extraction
 ### 7.1 Source normalization
 
 Adapters convert external formats into `Transcript` and `SlideDeck`. The core
-pipeline depends only on these normalized models. The initial fixture bypasses
-all adapters.
+pipeline depends only on these normalized source data structures. The initial
+fixture bypasses all adapters.
 
 ### 7.2 Windowing
 
@@ -354,7 +351,7 @@ in memory and cosine similarity can be brute-forced.
 
 ### 7.4 Monotonic alignment
 
-Each transcript window receives an approximate current slide position using a
+Each transcript window receives an approximate slide position using a
 similarity matrix and dynamic programming. The path cannot move backward and is
 penalized for implausibly large forward jumps.
 
@@ -427,8 +424,9 @@ implemented.
 - Missing slide text is represented, not invented.
 - Invalid model output is rejected with actionable validation errors.
 - A failed window remains visibly failed; it is not treated as low novelty.
-- Explanations use calibrated language such as "not found in the inspected
-  slides" when the evidence does not justify an absolute absence claim.
+- When present, comparison notes use calibrated language such as "not found in
+  the inspected slides" when the evidence does not justify an absolute absence
+  claim.
 - The UI always lets the user inspect the underlying transcript and referenced
   slides.
 
@@ -463,9 +461,10 @@ prompts, thresholds, or alignment penalties are heavily tuned.
 
 ## 11. Implementation sequence
 
-1. Add normalized models and the `tiny_course` JSON fixture.
-2. Validate transcript, slides, scores, evidence, and exact annotation coverage.
-3. Rank qualifying groups and render the two-view self-contained HTML report.
+1. Add normalized source data structures and the `tiny_course` JSON fixture.
+2. Validate transcript, slides, scores, evidence, and exact passage coverage.
+3. Rank qualifying lecture passages and render the two-view self-contained HTML
+   report.
 4. Add deterministic owned-region windowing.
 5. Add lexical slide search, followed by dense retrieval and hybrid fusion.
 6. Add monotonic window-to-slide alignment and a human-readable debug view.

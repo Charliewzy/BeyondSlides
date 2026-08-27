@@ -1,0 +1,24 @@
+{
+  "slides": [
+    {
+      "id": 1,
+      "text": "Binary search finds a target in a sorted array by comparing the middle element and discarding half of the remaining range."
+    },
+    {
+      "id": 2,
+      "text": "Loop invariant: if the target exists, it is contained in the active interval."
+    },
+    {
+      "id": 3,
+      "text": "Half-open interval pseudocode: while left < right, let middle = left + (right - left) / 2 and update one boundary."
+    },
+    {
+      "id": 4,
+      "text": "Binary search performs O(log n) comparisons."
+    },
+    {
+      "id": 5,
+      "text": "Common mistakes: incorrect boundary updates, overflow in midpoint calculation, and off-by-one errors."
+    }
+  ]
+}

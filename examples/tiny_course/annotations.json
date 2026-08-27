@@ -1,0 +1,51 @@
+{
+  "passages": [
+    {
+      "start": 10,
+      "end": 30,
+      "novelty": 0,
+      "connection_strength": 0,
+      "importance": 2,
+      "related_slides": [1],
+      "comparison_note": "This passage directly restates the binary-search procedure on slide 1."
+    },
+    {
+      "start": 40,
+      "end": 60,
+      "novelty": 3,
+      "connection_strength": 2,
+      "importance": 5,
+      "related_slides": [1, 4],
+      "summary": "Each binary-search comparison can be understood as gaining one bit of information.",
+      "comparison_note": "The slides state repeated halving and logarithmic complexity but do not provide the information-theoretic intuition linking them."
+    },
+    {
+      "start": 70,
+      "end": 90,
+      "novelty": 2,
+      "connection_strength": 5,
+      "importance": 4,
+      "related_slides": [2, 3],
+      "summary": "Boundary updates are justified by preserving the loop invariant.",
+      "comparison_note": "The invariant and pseudocode appear separately on slides 2 and 3; the passage explicitly connects them."
+    },
+    {
+      "start": 100,
+      "end": 120,
+      "novelty": 5,
+      "connection_strength": 0,
+      "importance": 1,
+      "related_slides": [1]
+    },
+    {
+      "start": 130,
+      "end": 150,
+      "novelty": 3,
+      "connection_strength": 3,
+      "importance": 4,
+      "related_slides": [3, 5],
+      "summary": "Choose and consistently maintain one interval convention to avoid boundary bugs.",
+      "comparison_note": "The slides show a half-open interval and list off-by-one errors, but the practical rule connecting those ideas is added orally."
+    }
+  ]
+}

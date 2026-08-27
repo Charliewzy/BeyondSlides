@@ -1,0 +1,94 @@
+{
+  "sentences": [
+    {
+      "id": 10,
+      "start_ms": 0,
+      "end_ms": 3000,
+      "text": "We will use binary search to find a target in a sorted array."
+    },
+    {
+      "id": 20,
+      "start_ms": 3000,
+      "end_ms": 7000,
+      "text": "At each step, compare the target with the middle element."
+    },
+    {
+      "id": 30,
+      "start_ms": 7000,
+      "end_ms": 11000,
+      "text": "The comparison lets us discard one half of the remaining array."
+    },
+    {
+      "id": 40,
+      "start_ms": 11000,
+      "end_ms": 15000,
+      "text": "A useful way to think about that comparison is as receiving one bit of information."
+    },
+    {
+      "id": 50,
+      "start_ms": 15000,
+      "end_ms": 19000,
+      "text": "It answers a yes-or-no question about which half can still contain the target."
+    },
+    {
+      "id": 60,
+      "start_ms": 19000,
+      "end_ms": 23000,
+      "text": "That information view is why repeatedly halving a search space leads to a logarithm."
+    },
+    {
+      "id": 70,
+      "start_ms": 23000,
+      "end_ms": 27000,
+      "text": "Remember the invariant from earlier: if the target exists, it remains inside the active interval."
+    },
+    {
+      "id": 80,
+      "start_ms": 27000,
+      "end_ms": 31000,
+      "text": "Every boundary update must preserve that statement before the next comparison."
+    },
+    {
+      "id": 90,
+      "start_ms": 31000,
+      "end_ms": 35000,
+      "text": "This connects the pseudocode to the loop-invariant proof rather than treating them as separate topics."
+    },
+    {
+      "id": 100,
+      "start_ms": 35000,
+      "end_ms": 39000,
+      "text": "I first learned binary search by looking up names in my grandparents' phone directory."
+    },
+    {
+      "id": 110,
+      "start_ms": 39000,
+      "end_ms": 43000,
+      "text": "That directory had a bright red cover and was extremely heavy."
+    },
+    {
+      "id": 120,
+      "start_ms": 43000,
+      "end_ms": 46000,
+      "text": "The color of the book has no bearing on the algorithm."
+    },
+    {
+      "id": 130,
+      "start_ms": 46000,
+      "end_ms": 50000,
+      "text": "In practice, choose one interval convention before writing any boundary updates."
+    },
+    {
+      "id": 140,
+      "start_ms": 50000,
+      "end_ms": 54000,
+      "text": "I prefer a half-open interval because its size is always right minus left."
+    },
+    {
+      "id": 150,
+      "start_ms": 54000,
+      "end_ms": 58000,
+      "text": "Most off-by-one bugs come from silently mixing closed and half-open conventions."
+    }
+  ]
+}

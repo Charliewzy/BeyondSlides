@@ -1,4 +1,5 @@
 mod domain;
+pub mod ingestion;
 mod ranking;
 mod report;
 mod retrieval;

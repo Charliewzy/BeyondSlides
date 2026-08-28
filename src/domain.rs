@@ -1,8 +1,8 @@
 use std::{error::Error, fmt};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct SentenceId(pub u32);
 
@@ -43,7 +43,7 @@ impl fmt::Display for ScoreOutOfRange {
 
 impl Error for ScoreOutOfRange {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TranscriptSentence {
     pub id: SentenceId,
     pub start_ms: u64,
@@ -51,7 +51,7 @@ pub struct TranscriptSentence {
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Transcript {
     pub sentences: Vec<TranscriptSentence>,
 }

@@ -334,6 +334,13 @@ fixture bypasses all adapters. `ValidatedSources` accepts the normalized
 transcript and slide deck after enforcing their invariants, allowing windowing
 and other pre-annotation stages to operate on trusted sources.
 
+The FunASR TSV adapter preserves evidence rather than inventing grammatical
+boundaries: every nonblank `start`, `end`, `text` row becomes one transcript
+sentence with a sequential one-based ID. It converts decimal seconds exactly to
+milliseconds, trims surrounding text whitespace, and rejects malformed,
+reversed, or overlapping rows. Punctuation restoration or sentence merging, if
+added later, must remain a separate transformation with traceable source IDs.
+
 ### 7.2 Windowing
 
 The transcript is divided into owned regions with left and right context. The

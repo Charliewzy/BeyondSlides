@@ -75,7 +75,6 @@ The following are deliberately deferred:
 
 - audio/video transcription and speaker diarization;
 - PDF, PPTX, OCR, or textbook ingestion;
-- dense retrieval and hybrid fusion;
 - monotonic slide alignment;
 - LLM or agent API calls;
 - a server, database, or frontend framework;
@@ -343,25 +342,40 @@ on sentence ownership rather than token counts.
 
 ### 7.3 Retrieval
 
-Slides are indexed once. The first implementation is an in-memory BM25 index.
-It applies Unicode compatibility normalization and Jieba's Chinese search-mode
-segmentation to both slide text and queries. This retains overlapping Chinese
-terms while preserving Latin technical terms, numbers, and identifiers. Slides
-with no matching terms are omitted, and presentation order breaks equal-score
-ties. This is deterministic and sufficient for a course-sized deck without
-adding a search engine dependency.
-
-Lexical search and later dense retrieval remain behind one interface:
+Slides are indexed once behind one interface:
 
 ```rust
 trait SlideSearcher {
-    fn search(&self, query: &str, max_results: usize) -> Vec<SearchHit>;
+    fn search(
+        &self,
+        query: &str,
+        max_results: usize,
+    ) -> Result<Vec<SearchHit>, SearchError>;
 }
 ```
 
-The agent asks for slide search; it does not select or tune the underlying
-retrieval algorithms. With a typical course-sized deck, embeddings can remain
-in memory and cosine similarity can be brute-forced.
+The result is fallible because local model loading and inference can fail. Such
+a failure must not be misrepresented as "no related slide found." The agent
+asks for slide search; it does not select or tune the underlying retrieval
+mode.
+
+Three in-memory adapters currently implement this interface:
+
+- lexical retrieval uses BM25, Unicode compatibility normalization, and
+  Jieba's Chinese search-mode segmentation. It preserves Latin technical terms,
+  numbers, and identifiers and omits slides with no matching term;
+- dense retrieval uses `BAAI/bge-small-zh-v1.5` through FastEmbed. It embeds
+  every non-empty slide once, adds the model's recommended Chinese retrieval
+  instruction only to queries, and brute-forces cosine similarity;
+- hybrid retrieval combines the complete lexical and dense rankings with
+  equal-weight reciprocal-rank fusion using `k = 60`. Rank fusion avoids
+  treating BM25 and cosine scores as though they shared a scale.
+
+The lexical and dense adapters preserve slide presentation order for equal
+scores. Exact reciprocal-rank-fusion ties in the hybrid adapter have unspecified
+order. Model files are downloaded into FastEmbed's local cache on first use and
+reused afterward. The model identifier and retrieval mode must eventually be
+recorded in the run manifest.
 
 ### 7.4 Monotonic alignment
 
@@ -477,6 +491,12 @@ separately:
 Evaluation should use a manually annotated portion of a real lecture before
 prompts, thresholds, or alignment penalties are heavily tuned.
 
+The synthetic `retrieval_course` fixture provides a reproducible development
+comparison across semantic-paraphrase, exact-term, and mixed Chinese queries.
+Its metrics guard the evaluation procedure, not a claim that one retrieval mode
+is generally superior. Model or fusion decisions require the real-lecture
+evaluation above.
+
 ## 11. Implementation sequence
 
 1. Add normalized source data structures and the `tiny_course` JSON fixture.
@@ -506,8 +526,8 @@ The following choices should be made when the corresponding milestone begins:
 
 - exact JSON schema versioning and migration policy;
 - word-, token-, or duration-based window sizing;
-- concrete embedding library;
-- retrieval fusion and alignment scoring parameters;
+- whether a larger or newer embedding model justifies its additional cost;
+- retrieval fusion tuning and alignment scoring parameters based on real labels;
 - Traditional Chinese normalization and general multilingual analysis;
 - LLM provider and structured-output protocol;
 - PDF/PPTX extraction backends;

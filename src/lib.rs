@@ -11,6 +11,9 @@ pub use domain::{
 };
 pub use ranking::rank_oral_additions;
 pub use report::render_report;
-pub use retrieval::{LexicalSlideSearcher, SearchHit, SlideSearcher};
+pub use retrieval::{
+    DenseSlideSearcher, HybridSlideSearcher, LexicalSlideSearcher, SearchError, SearchHit,
+    SlideSearcher,
+};
 pub use validation::{ValidatedAnalysis, ValidatedSources, ValidationError};
 pub use windowing::{TranscriptWindow, WindowingConfig, WindowingConfigError, build_windows};

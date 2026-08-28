@@ -67,6 +67,12 @@ pub struct SlideDeck {
     pub slides: Vec<Slide>,
 }
 
+impl SlideDeck {
+    pub fn find(&self, id: SlideId) -> Option<&Slide> {
+        self.slides.iter().find(|slide| slide.id == id)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LecturePassage {
     pub start: SentenceId,

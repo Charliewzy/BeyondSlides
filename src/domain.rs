@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 #[serde(transparent)]
 pub struct SentenceId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct SlideId(pub u32);
 
@@ -56,13 +56,13 @@ pub struct Transcript {
     pub sentences: Vec<TranscriptSentence>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Slide {
     pub id: SlideId,
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct SlideDeck {
     pub slides: Vec<Slide>,
 }

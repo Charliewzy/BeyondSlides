@@ -341,6 +341,14 @@ milliseconds, trims surrounding text whitespace, and rejects malformed,
 reversed, or overlapping rows. Punctuation restoration or sentence merging, if
 added later, must remain a separate transformation with traceable source IDs.
 
+The first PDF adapter uses Poppler's `pdftotext` in raw reading order. Every PDF
+page becomes one slide with its one-based page number as a stable ID, including
+pages whose extracted text is empty. The adapter removes only a trailing line
+whose page-counter-normalized form occurs on a strict majority and at least
+three pages. It reports sparse text and aggregates suspicious glyphs per page;
+these warnings do not trigger OCR or silently drop source evidence. Plain-text
+sufficiency remains an evaluation decision outside the adapter.
+
 ### 7.2 Windowing
 
 The transcript is divided into owned regions with left and right context. The

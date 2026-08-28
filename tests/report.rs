@@ -31,14 +31,14 @@ fn ranked_oral_addition_carries_transcript_and_slide_evidence() {
     assert!(
         [
             "00:11–00:23",
-            "Each binary-search comparison can be understood as gaining one bit of information.",
-            "A useful way to think about that comparison is as receiving one bit of information.",
-            "Importance <strong>5</strong>",
-            "Novelty <strong>3</strong>",
-            "Connection <strong>2</strong>",
-            "Slide 1",
-            "Slide 4",
-            "Binary search performs O(log n) comparisons.",
+            "每次二分查找的比较，都可以理解为获得一比特信息。",
+            "一个很有用的理解方式，是把每次比较看成获得一比特信息。",
+            "重要性 <strong>5</strong>",
+            "新颖度 <strong>3</strong>",
+            "连接强度 <strong>2</strong>",
+            "幻灯片 1",
+            "幻灯片 4",
+            "二分查找需要 O(log n) 次比较。",
         ]
         .into_iter()
         .all(|evidence| report.contains(evidence))
@@ -84,13 +84,13 @@ fn transcript_evidence_becomes_the_title_when_summary_is_absent() {
             id: SentenceId(10),
             start_ms: 0,
             end_ms: 1_000,
-            text: "<binary & search>".to_owned(),
+            text: "<二分 & 查找>".to_owned(),
         }],
     };
     let slide_deck = SlideDeck {
         slides: vec![Slide {
             id: SlideId(1),
-            text: "Binary search".to_owned(),
+            text: "二分查找".to_owned(),
         }],
     };
     let passages = LecturePassages {
@@ -119,8 +119,8 @@ fn transcript_evidence_becomes_the_title_when_summary_is_absent() {
         .expect("the oral addition should have a title");
 
     assert!(
-        title.contains("binary")
-            && title.contains("search")
+        title.contains("二分")
+            && title.contains("查找")
             && !title.contains('<')
             && !title.contains('>')
     );

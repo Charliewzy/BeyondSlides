@@ -75,11 +75,16 @@ The following are deliberately deferred:
 
 - audio/video transcription and speaker diarization;
 - PDF, PPTX, OCR, or textbook ingestion;
-- BM25 and dense retrieval;
+- dense retrieval and hybrid fusion;
 - monotonic slide alignment;
 - LLM or agent API calls;
 - a server, database, or frontend framework;
 - user accounts, collaboration, and deployment.
+
+The initial language target is Simplified Chinese, including the Latin
+technical terms, formulas, and identifiers commonly mixed into Chinese course
+material. General multilingual support and foreign-student export are outside
+the initial scope.
 
 Deferring these features lets the first slice validate the output contract and
 product experience before adding expensive or uncertain machinery.
@@ -338,8 +343,15 @@ on sentence ownership rather than token counts.
 
 ### 7.3 Retrieval
 
-Slides are indexed once. The intended search implementation combines lexical
-and dense retrieval behind one interface:
+Slides are indexed once. The first implementation is an in-memory BM25 index.
+It applies Unicode compatibility normalization and Jieba's Chinese search-mode
+segmentation to both slide text and queries. This retains overlapping Chinese
+terms while preserving Latin technical terms, numbers, and identifiers. Slides
+with no matching terms are omitted, and presentation order breaks equal-score
+ties. This is deterministic and sufficient for a course-sized deck without
+adding a search engine dependency.
+
+Lexical search and later dense retrieval remain behind one interface:
 
 ```rust
 trait SlideSearcher {
@@ -440,6 +452,8 @@ implemented.
 
 The permanent `tiny_course` fixture should contain at least:
 
+- natural Simplified Chinese without artificial spaces between words;
+- mixed Latin technical terms or formulas;
 - direct repetition of a slide;
 - a valuable oral explanation absent from the slide wording;
 - a useful connection to an earlier slide;
@@ -492,8 +506,9 @@ The following choices should be made when the corresponding milestone begins:
 
 - exact JSON schema versioning and migration policy;
 - word-, token-, or duration-based window sizing;
-- concrete BM25 and embedding libraries;
+- concrete embedding library;
 - retrieval fusion and alignment scoring parameters;
+- Traditional Chinese normalization and general multilingual analysis;
 - LLM provider and structured-output protocol;
 - PDF/PPTX extraction backends;
 - whether textbooks become a second written source in the MVP's successor;

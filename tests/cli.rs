@@ -23,7 +23,7 @@ fn tiny_course_can_be_rendered_from_the_command_line() {
     assert!(
         output.status.success()
             && report.starts_with("<!doctype html>")
-            && report.contains("Ranked oral additions")
-            && report.contains("Complete transcript")
+            && report.contains("按价值排序的口头补充")
+            && report.contains("完整讲稿")
     );
 }

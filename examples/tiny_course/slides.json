@@ -2,23 +2,23 @@
   "slides": [
     {
       "id": 1,
-      "text": "Binary search finds a target in a sorted array by comparing the middle element and discarding half of the remaining range."
+      "text": "二分查找通过比较中间元素，并排除剩余区间的一半，在有序数组中寻找目标值。"
     },
     {
       "id": 2,
-      "text": "Loop invariant: if the target exists, it is contained in the active interval."
+      "text": "循环不变式：如果目标值存在，它始终位于当前搜索区间内。"
     },
     {
       "id": 3,
-      "text": "Half-open interval pseudocode: while left < right, let middle = left + (right - left) / 2 and update one boundary."
+      "text": "左闭右开区间伪代码：当 left < right 时，令 middle = left + (right - left) / 2，并更新一侧边界。"
     },
     {
       "id": 4,
-      "text": "Binary search performs O(log n) comparisons."
+      "text": "二分查找需要 O(log n) 次比较。"
     },
     {
       "id": 5,
-      "text": "Common mistakes: incorrect boundary updates, overflow in midpoint calculation, and off-by-one errors."
+      "text": "常见错误：边界更新不正确、中点计算溢出，以及 off-by-one 错误。"
     }
   ]
 }

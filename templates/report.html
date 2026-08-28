@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BeyondSlides report</title>
+  <title>BeyondSlides 学习报告</title>
   <style>
 {% include "report.css" %}
   </style>
@@ -12,30 +12,30 @@
   <main>
     <header class="page-header">
       <p class="eyebrow">BeyondSlides</p>
-      <h1>What the lecture adds</h1>
-      <nav aria-label="Report views">
-        <a href="#ranked">Ranked additions</a>
-        <a href="#transcript">Complete transcript</a>
+      <h1>课堂讲解补充了什么</h1>
+      <nav aria-label="报告视图">
+        <a href="#ranked">重点补充</a>
+        <a href="#transcript">完整讲稿</a>
       </nav>
     </header>
 
     <section id="ranked" aria-labelledby="ranked-title">
-      <h2 id="ranked-title">Ranked oral additions</h2>
+      <h2 id="ranked-title">按价值排序的口头补充</h2>
 {% for passage in ranked %}
       <article class="oral-addition" data-ranked-passage-start="{{ passage.start }}">
         <p class="timestamp">{{ passage.timestamp }}</p>
         <h3>{{ passage.title }}</h3>
-        <ul class="scores" aria-label="Passage scores">
-          <li>Importance <strong>{{ passage.importance }}</strong></li>
-          <li>Novelty <strong>{{ passage.novelty }}</strong></li>
-          <li>Connection <strong>{{ passage.connection_strength }}</strong></li>
+        <ul class="scores" aria-label="讲稿段落评分">
+          <li>重要性 <strong>{{ passage.importance }}</strong></li>
+          <li>新颖度 <strong>{{ passage.novelty }}</strong></li>
+          <li>连接强度 <strong>{{ passage.connection_strength }}</strong></li>
         </ul>
         <blockquote>{{ passage.transcript }}</blockquote>
         <div class="related-slides">
-          <h4>Related slides</h4>
+          <h4>相关幻灯片</h4>
 {% for slide in passage.related_slides %}
           <figure>
-            <figcaption>Slide {{ slide.id }}</figcaption>
+            <figcaption>幻灯片 {{ slide.id }}</figcaption>
             <p>{{ slide.text }}</p>
           </figure>
 {% endfor %}
@@ -45,15 +45,15 @@
     </section>
 
     <section id="transcript" aria-labelledby="transcript-title">
-      <h2 id="transcript-title">Complete transcript</h2>
+      <h2 id="transcript-title">完整讲稿</h2>
 {% for passage in transcript %}
       <article class="transcript-passage" data-transcript-passage-start="{{ passage.start }}">
         <header>
           <p class="timestamp">{{ passage.timestamp }}</p>
-          <ul class="scores" aria-label="Passage scores">
-            <li>Importance <strong>{{ passage.importance }}</strong></li>
-            <li>Novelty <strong>{{ passage.novelty }}</strong></li>
-            <li>Connection <strong>{{ passage.connection_strength }}</strong></li>
+          <ul class="scores" aria-label="讲稿段落评分">
+            <li>重要性 <strong>{{ passage.importance }}</strong></li>
+            <li>新颖度 <strong>{{ passage.novelty }}</strong></li>
+            <li>连接强度 <strong>{{ passage.connection_strength }}</strong></li>
           </ul>
         </header>
 {% for sentence in passage.sentences %}

@@ -4,91 +4,91 @@
       "id": 10,
       "start_ms": 0,
       "end_ms": 3000,
-      "text": "We will use binary search to find a target in a sorted array."
+      "text": "我们会用二分查找在有序数组中寻找目标值。"
     },
     {
       "id": 20,
       "start_ms": 3000,
       "end_ms": 7000,
-      "text": "At each step, compare the target with the middle element."
+      "text": "每一步都把目标值与中间元素进行比较。"
     },
     {
       "id": 30,
       "start_ms": 7000,
       "end_ms": 11000,
-      "text": "The comparison lets us discard one half of the remaining array."
+      "text": "根据比较结果，我们可以排除剩余数组的一半。"
     },
     {
       "id": 40,
       "start_ms": 11000,
       "end_ms": 15000,
-      "text": "A useful way to think about that comparison is as receiving one bit of information."
+      "text": "一个很有用的理解方式，是把每次比较看成获得一比特信息。"
     },
     {
       "id": 50,
       "start_ms": 15000,
       "end_ms": 19000,
-      "text": "It answers a yes-or-no question about which half can still contain the target."
+      "text": "它回答了一个“是或否”的问题：目标值还可能位于哪一半？"
     },
     {
       "id": 60,
       "start_ms": 19000,
       "end_ms": 23000,
-      "text": "That information view is why repeatedly halving a search space leads to a logarithm."
+      "text": "从信息角度看，这也解释了为什么不断将搜索空间减半会得到对数复杂度。"
     },
     {
       "id": 70,
       "start_ms": 23000,
       "end_ms": 27000,
-      "text": "Remember the invariant from earlier: if the target exists, it remains inside the active interval."
+      "text": "还记得前面的循环不变式：如果目标值存在，它始终留在当前搜索区间内。"
     },
     {
       "id": 80,
       "start_ms": 27000,
       "end_ms": 31000,
-      "text": "Every boundary update must preserve that statement before the next comparison."
+      "text": "每次更新边界，都必须保证下一次比较前这个陈述仍然成立。"
     },
     {
       "id": 90,
       "start_ms": 31000,
       "end_ms": 35000,
-      "text": "This connects the pseudocode to the loop-invariant proof rather than treating them as separate topics."
+      "text": "这样一来，伪代码和循环不变式证明就联系起来了，而不是两个孤立的话题。"
     },
     {
       "id": 100,
       "start_ms": 35000,
       "end_ms": 39000,
-      "text": "I first learned binary search by looking up names in my grandparents' phone directory."
+      "text": "我最早是在爷爷奶奶的电话簿里查名字时学会二分查找的。"
     },
     {
       "id": 110,
       "start_ms": 39000,
       "end_ms": 43000,
-      "text": "That directory had a bright red cover and was extremely heavy."
+      "text": "那本电话簿有一个鲜红色封面，而且特别沉。"
     },
     {
       "id": 120,
       "start_ms": 43000,
       "end_ms": 46000,
-      "text": "The color of the book has no bearing on the algorithm."
+      "text": "书的颜色与这个算法没有任何关系。"
     },
     {
       "id": 130,
       "start_ms": 46000,
       "end_ms": 50000,
-      "text": "In practice, choose one interval convention before writing any boundary updates."
+      "text": "实际编程时，写边界更新之前先选定一种区间约定。"
     },
     {
       "id": 140,
       "start_ms": 50000,
       "end_ms": 54000,
-      "text": "I prefer a half-open interval because its size is always right minus left."
+      "text": "我更喜欢左闭右开区间，因为它的长度始终是 right - left。"
     },
     {
       "id": 150,
       "start_ms": 54000,
       "end_ms": 58000,
-      "text": "Most off-by-one bugs come from silently mixing closed and half-open conventions."
+      "text": "大多数 off-by-one 错误，都来自不知不觉地混用闭区间和左闭右开区间。"
     }
   ]
 }

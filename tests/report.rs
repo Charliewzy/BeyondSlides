@@ -1,6 +1,6 @@
 use beyond_slides::{
     LecturePassage, LecturePassages, Score5, SentenceId, Slide, SlideDeck, SlideId, Transcript,
-    TranscriptSentence, ValidatedAnalysis, rank_oral_additions, render_report,
+    TranscriptSentence, ValidatedAnalysis, ValidatedSources, rank_oral_additions, render_report,
 };
 
 #[test]
@@ -105,8 +105,10 @@ fn transcript_evidence_becomes_the_title_when_summary_is_absent() {
             comparison_note: None,
         }],
     };
-    let analysis = ValidatedAnalysis::new(transcript, slide_deck, passages)
-        .expect("the test analysis should be valid");
+    let sources =
+        ValidatedSources::new(transcript, slide_deck).expect("the test sources should be valid");
+    let analysis =
+        ValidatedAnalysis::new(sources, passages).expect("the test analysis should be valid");
 
     let ranked = rank_oral_additions(&analysis);
     let report = render_report(&analysis, &ranked);
@@ -135,6 +137,8 @@ fn tiny_course() -> ValidatedAnalysis {
         serde_json::from_str(include_str!("../examples/tiny_course/annotations.json"))
             .expect("the passage fixture should match its public JSON format");
 
-    ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let sources = ValidatedSources::new(transcript, slide_deck)
+        .expect("the tiny course sources should satisfy every source invariant");
+    ValidatedAnalysis::new(sources, passages)
         .expect("the tiny course should satisfy every analysis invariant")
 }

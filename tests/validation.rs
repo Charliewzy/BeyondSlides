@@ -1,14 +1,14 @@
 use beyond_slides::{
     LecturePassage, LecturePassages, Score5, SentenceId, Slide, SlideDeck, SlideId, Transcript,
-    TranscriptSentence, ValidatedAnalysis, ValidationError,
+    TranscriptSentence, ValidatedAnalysis, ValidatedSources, ValidationError,
 };
 
 #[test]
 fn duplicate_transcript_sentence_id_is_rejected() {
-    let (mut transcript, slide_deck, passages) = valid_analysis_parts();
+    let (mut transcript, slide_deck, _passages) = valid_analysis_parts();
     transcript.sentences[1].id = SentenceId(10);
 
-    let error = ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let error = ValidatedSources::new(transcript, slide_deck)
         .expect_err("duplicate sentence IDs must be rejected");
 
     assert_eq!(
@@ -19,10 +19,10 @@ fn duplicate_transcript_sentence_id_is_rejected() {
 
 #[test]
 fn empty_transcript_sentence_text_is_rejected() {
-    let (mut transcript, slide_deck, passages) = valid_analysis_parts();
+    let (mut transcript, slide_deck, _passages) = valid_analysis_parts();
     transcript.sentences[1].text = "   ".to_owned();
 
-    let error = ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let error = ValidatedSources::new(transcript, slide_deck)
         .expect_err("empty transcript sentence text must be rejected");
 
     assert_eq!(
@@ -33,10 +33,10 @@ fn empty_transcript_sentence_text_is_rejected() {
 
 #[test]
 fn transcript_sentence_ending_before_it_starts_is_rejected() {
-    let (mut transcript, slide_deck, passages) = valid_analysis_parts();
+    let (mut transcript, slide_deck, _passages) = valid_analysis_parts();
     transcript.sentences[1].start_ms = 2_001;
 
-    let error = ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let error = ValidatedSources::new(transcript, slide_deck)
         .expect_err("a reversed timestamp range must be rejected");
 
     assert_eq!(
@@ -51,11 +51,11 @@ fn transcript_sentence_ending_before_it_starts_is_rejected() {
 
 #[test]
 fn transcript_sentence_times_must_follow_presentation_order() {
-    let (mut transcript, slide_deck, passages) = valid_analysis_parts();
+    let (mut transcript, slide_deck, _passages) = valid_analysis_parts();
     transcript.sentences[0].start_ms = 600;
     transcript.sentences[1].start_ms = 500;
 
-    let error = ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let error = ValidatedSources::new(transcript, slide_deck)
         .expect_err("timestamps that move backward must be rejected");
 
     assert_eq!(
@@ -69,10 +69,10 @@ fn transcript_sentence_times_must_follow_presentation_order() {
 
 #[test]
 fn duplicate_slide_id_is_rejected() {
-    let (transcript, mut slide_deck, passages) = valid_analysis_parts();
+    let (transcript, mut slide_deck, _passages) = valid_analysis_parts();
     slide_deck.slides[1].id = SlideId(1);
 
-    let error = ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let error = ValidatedSources::new(transcript, slide_deck)
         .expect_err("duplicate slide IDs must be rejected");
 
     assert_eq!(error, ValidationError::DuplicateSlideId { id: SlideId(1) });
@@ -83,7 +83,7 @@ fn passage_related_slide_must_exist() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
     passages.passages[1].related_slides.push(SlideId(99));
 
-    let error = ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("unknown related slides must be rejected");
 
     assert_eq!(
@@ -100,7 +100,7 @@ fn passage_related_slides_cannot_repeat() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
     passages.passages[1].related_slides.push(SlideId(1));
 
-    let error = ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("duplicate related slides must be rejected");
 
     assert_eq!(
@@ -117,7 +117,7 @@ fn passage_may_omit_a_comparison_note() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
     passages.passages[1].comparison_note = None;
 
-    let analysis = ValidatedAnalysis::new(transcript, slide_deck, passages);
+    let analysis = validate_analysis(transcript, slide_deck, passages);
 
     assert!(analysis.is_ok());
 }
@@ -127,7 +127,7 @@ fn oral_addition_may_omit_a_summary() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
     passages.passages[1].summary = None;
 
-    let analysis = ValidatedAnalysis::new(transcript, slide_deck, passages);
+    let analysis = validate_analysis(transcript, slide_deck, passages);
 
     assert!(analysis.is_ok());
 }
@@ -137,7 +137,7 @@ fn passage_start_must_reference_a_transcript_sentence() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
     passages.passages[0].start = SentenceId(11);
 
-    let error = ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("unknown passage starts must be rejected");
 
     assert_eq!(
@@ -153,7 +153,7 @@ fn passage_end_must_reference_a_transcript_sentence() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
     passages.passages[1].end = SentenceId(31);
 
-    let error = ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("unknown passage ends must be rejected");
 
     assert_eq!(
@@ -171,7 +171,7 @@ fn passage_cannot_end_before_it_starts() {
     passages.passages[0].start = SentenceId(20);
     passages.passages[0].end = SentenceId(10);
 
-    let error = ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("reversed passage ranges must be rejected");
 
     assert_eq!(
@@ -189,7 +189,7 @@ fn first_passage_must_start_at_the_first_transcript_sentence() {
     passages.passages[0].start = SentenceId(20);
     passages.passages[0].end = SentenceId(20);
 
-    let error = ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("an uncovered transcript beginning must be rejected");
 
     assert_eq!(
@@ -206,7 +206,7 @@ fn consecutive_passages_cannot_leave_a_gap() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
     passages.passages[1].start = SentenceId(30);
 
-    let error = ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("a gap between lecture passages must be rejected");
 
     assert_eq!(
@@ -223,7 +223,7 @@ fn final_passage_must_reach_the_end_of_the_transcript() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
     passages.passages[1].end = SentenceId(20);
 
-    let error = ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("an uncovered transcript ending must be rejected");
 
     assert_eq!(
@@ -239,7 +239,7 @@ fn nonempty_transcript_requires_at_least_one_passage() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
     passages.passages.clear();
 
-    let error = ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("a nonempty transcript cannot have no lecture passages");
 
     assert_eq!(
@@ -255,7 +255,7 @@ fn passage_after_the_transcript_is_already_covered_is_rejected() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
     passages.passages[0].end = SentenceId(30);
 
-    let error = ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("an extra overlapping passage must be rejected");
 
     assert_eq!(
@@ -264,6 +264,16 @@ fn passage_after_the_transcript_is_already_covered_is_rejected() {
             actual: SentenceId(20),
         }
     );
+}
+
+fn validate_analysis(
+    transcript: Transcript,
+    slide_deck: SlideDeck,
+    passages: LecturePassages,
+) -> Result<ValidatedAnalysis, ValidationError> {
+    let sources = ValidatedSources::new(transcript, slide_deck)
+        .expect("the shared test sources should be valid");
+    ValidatedAnalysis::new(sources, passages)
 }
 
 fn valid_analysis_parts() -> (Transcript, SlideDeck, LecturePassages) {

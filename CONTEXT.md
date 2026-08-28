@@ -25,6 +25,18 @@ A contiguous part of the transcript evaluated as one meaningful unit. Every
 transcript sentence belongs to exactly one lecture passage after analysis.
 _Avoid_: Annotation group, sentence group
 
+## Windowing
+
+**Transcript window**:
+The part of a transcript visible during one analysis task, consisting of one
+owned region and its optional left and right context.
+_Avoid_: Chunk, annotatable window
+
+**Owned region**:
+A contiguous range of transcript sentences for which exactly one transcript
+window is responsible. All owned regions together partition the transcript.
+_Avoid_: Owned window, annotation span
+
 ## Analysis
 
 **Oral addition**:

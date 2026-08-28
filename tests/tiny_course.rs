@@ -1,4 +1,4 @@
-use beyond_slides::{LecturePassages, SlideDeck, Transcript, ValidatedAnalysis};
+use beyond_slides::{LecturePassages, SlideDeck, Transcript, ValidatedAnalysis, ValidatedSources};
 
 #[test]
 fn tiny_course_crosses_the_json_and_validation_seams() {
@@ -12,7 +12,9 @@ fn tiny_course_crosses_the_json_and_validation_seams() {
         serde_json::from_str(include_str!("../examples/tiny_course/annotations.json"))
             .expect("the passage fixture should match its public JSON format");
 
-    let analysis = ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let sources = ValidatedSources::new(transcript, slide_deck)
+        .expect("the tiny course sources should satisfy every source invariant");
+    let analysis = ValidatedAnalysis::new(sources, passages)
         .expect("the tiny course should satisfy every analysis invariant");
 
     assert_eq!(analysis.passages().len(), 5);

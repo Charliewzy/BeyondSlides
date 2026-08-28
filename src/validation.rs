@@ -7,18 +7,15 @@ use std::{
 use crate::{LecturePassage, LecturePassages, SentenceId, SlideDeck, SlideId, Transcript};
 
 #[derive(Debug)]
-pub struct ValidatedAnalysis {
+pub struct ValidatedSources {
     transcript: Transcript,
     slide_deck: SlideDeck,
-    passages: LecturePassages,
+    sentence_positions: HashMap<SentenceId, usize>,
+    slide_ids: HashSet<SlideId>,
 }
 
-impl ValidatedAnalysis {
-    pub fn new(
-        transcript: Transcript,
-        slide_deck: SlideDeck,
-        passages: LecturePassages,
-    ) -> Result<Self, ValidationError> {
+impl ValidatedSources {
+    pub fn new(transcript: Transcript, slide_deck: SlideDeck) -> Result<Self, ValidationError> {
         let mut sentence_positions = HashMap::new();
         for (position, sentence) in transcript.sentences.iter().enumerate() {
             if sentence_positions.insert(sentence.id, position).is_some() {
@@ -53,13 +50,41 @@ impl ValidatedAnalysis {
             }
         }
 
+        Ok(Self {
+            transcript,
+            slide_deck,
+            sentence_positions,
+            slide_ids,
+        })
+    }
+
+    pub fn transcript(&self) -> &Transcript {
+        &self.transcript
+    }
+
+    pub fn slide_deck(&self) -> &SlideDeck {
+        &self.slide_deck
+    }
+}
+
+#[derive(Debug)]
+pub struct ValidatedAnalysis {
+    sources: ValidatedSources,
+    passages: LecturePassages,
+}
+
+impl ValidatedAnalysis {
+    pub fn new(
+        sources: ValidatedSources,
+        passages: LecturePassages,
+    ) -> Result<Self, ValidationError> {
         for passage in &passages.passages {
-            let Some(&start_position) = sentence_positions.get(&passage.start) else {
+            let Some(&start_position) = sources.sentence_positions.get(&passage.start) else {
                 return Err(ValidationError::UnknownPassageStart {
                     start: passage.start,
                 });
             };
-            let Some(&end_position) = sentence_positions.get(&passage.end) else {
+            let Some(&end_position) = sources.sentence_positions.get(&passage.end) else {
                 return Err(ValidationError::UnknownPassageEnd {
                     passage_start: passage.start,
                     end: passage.end,
@@ -79,7 +104,7 @@ impl ValidatedAnalysis {
                         slide: *slide,
                     });
                 }
-                if !slide_ids.contains(slide) {
+                if !sources.slide_ids.contains(slide) {
                     return Err(ValidationError::UnknownRelatedSlide {
                         passage_start: passage.start,
                         slide: *slide,
@@ -90,18 +115,18 @@ impl ValidatedAnalysis {
 
         let mut next_uncovered = 0;
         for passage in &passages.passages {
-            let Some(&start_position) = sentence_positions.get(&passage.start) else {
+            let Some(&start_position) = sources.sentence_positions.get(&passage.start) else {
                 return Err(ValidationError::UnknownPassageStart {
                     start: passage.start,
                 });
             };
-            let Some(&end_position) = sentence_positions.get(&passage.end) else {
+            let Some(&end_position) = sources.sentence_positions.get(&passage.end) else {
                 return Err(ValidationError::UnknownPassageEnd {
                     passage_start: passage.start,
                     end: passage.end,
                 });
             };
-            let Some(expected) = transcript.sentences.get(next_uncovered) else {
+            let Some(expected) = sources.transcript.sentences.get(next_uncovered) else {
                 return Err(ValidationError::UnexpectedPassage {
                     actual: passage.start,
                 });
@@ -114,25 +139,21 @@ impl ValidatedAnalysis {
             }
             next_uncovered = end_position + 1;
         }
-        if let Some(expected) = transcript.sentences.get(next_uncovered) {
+        if let Some(expected) = sources.transcript.sentences.get(next_uncovered) {
             return Err(ValidationError::UncoveredTranscriptTail {
                 expected: expected.id,
             });
         }
 
-        Ok(Self {
-            transcript,
-            slide_deck,
-            passages,
-        })
+        Ok(Self { sources, passages })
     }
 
     pub fn transcript(&self) -> &Transcript {
-        &self.transcript
+        self.sources.transcript()
     }
 
     pub fn slide_deck(&self) -> &SlideDeck {
-        &self.slide_deck
+        self.sources.slide_deck()
     }
 
     pub fn passages(&self) -> &[LecturePassage] {

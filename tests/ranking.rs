@@ -1,5 +1,6 @@
 use beyond_slides::{
-    LecturePassages, SentenceId, SlideDeck, Transcript, ValidatedAnalysis, rank_oral_additions,
+    LecturePassages, SentenceId, SlideDeck, Transcript, ValidatedAnalysis, ValidatedSources,
+    rank_oral_additions,
 };
 
 #[test]
@@ -28,6 +29,8 @@ fn tiny_course() -> ValidatedAnalysis {
         serde_json::from_str(include_str!("../examples/tiny_course/annotations.json"))
             .expect("the passage fixture should match its public JSON format");
 
-    ValidatedAnalysis::new(transcript, slide_deck, passages)
+    let sources = ValidatedSources::new(transcript, slide_deck)
+        .expect("the tiny course sources should satisfy every source invariant");
+    ValidatedAnalysis::new(sources, passages)
         .expect("the tiny course should satisfy every analysis invariant")
 }

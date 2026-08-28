@@ -326,7 +326,9 @@ transcription         text extraction
 
 Adapters convert external formats into `Transcript` and `SlideDeck`. The core
 pipeline depends only on these normalized source data structures. The initial
-fixture bypasses all adapters.
+fixture bypasses all adapters. `ValidatedSources` accepts the normalized
+transcript and slide deck after enforcing their invariants, allowing windowing
+and other pre-annotation stages to operate on trusted sources.
 
 ### 7.2 Windowing
 
@@ -383,6 +385,8 @@ Model output is untrusted input. Rust code validates its schema, score ranges,
 IDs, owned-region partition, and evidence requirements before accepting it.
 Invalid output may be retried with the validation errors; persistent failure is
 recorded explicitly rather than silently patched into a plausible result.
+`ValidatedAnalysis` combines already-validated sources with the accepted
+lecture passages, so source validation is not repeated after annotation.
 
 ### 7.7 Ranking and rendering
 

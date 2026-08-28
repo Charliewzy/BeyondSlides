@@ -8,7 +8,8 @@ use std::{
 };
 
 use beyond_slides::{
-    LecturePassages, SlideDeck, Transcript, ValidatedAnalysis, rank_oral_additions, render_report,
+    LecturePassages, SlideDeck, Transcript, ValidatedAnalysis, ValidatedSources,
+    rank_oral_additions, render_report,
 };
 use serde::de::DeserializeOwned;
 
@@ -38,7 +39,8 @@ fn run(arguments: Vec<impl AsRef<OsStr>>) -> Result<(), Box<dyn Error>> {
     let transcript: Transcript = read_json(&transcript_path, "transcript")?;
     let slide_deck: SlideDeck = read_json(&slides_path, "slides")?;
     let passages: LecturePassages = read_json(&annotations_path, "annotations")?;
-    let analysis = ValidatedAnalysis::new(transcript, slide_deck, passages)?;
+    let sources = ValidatedSources::new(transcript, slide_deck)?;
+    let analysis = ValidatedAnalysis::new(sources, passages)?;
     let ranked = rank_oral_additions(&analysis);
     let report = render_report(&analysis, &ranked);
 

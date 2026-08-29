@@ -5,17 +5,17 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::{SlideId, ValidatedSources};
 
-use super::{SearchError, SearchHit, SlideSearcher};
+use super::{SearchError, SlideScore, SlideScorer};
 
 const CHINESE_RETRIEVAL_INSTRUCTION: &str = "为这个句子生成表示以用于检索相关文章：";
 
 /// An in-memory dense index using the small BGE Chinese model.
-pub struct DenseSlideSearcher {
+pub struct DenseSlideScorer {
     model: Mutex<TextEmbedding>,
     slides: Vec<EmbeddedSlide>,
 }
 
-impl DenseSlideSearcher {
+impl DenseSlideScorer {
     /// Loads BAAI/bge-small-zh-v1.5 and embeds every non-empty slide once.
     pub fn try_new(sources: &ValidatedSources) -> Result<Self, SearchError> {
         let mut model = TextEmbedding::try_new(
@@ -40,14 +40,32 @@ impl DenseSlideSearcher {
                 .embed(&texts, None)
                 .map_err(|error| SearchError::Embedding(error.to_string()))?
         };
-        let slides = indexed_slides
-            .into_iter()
-            .zip(embeddings)
-            .map(|(slide, embedding)| EmbeddedSlide {
-                id: slide.id,
-                embedding,
+        if embeddings.len() != indexed_slides.len() {
+            return Err(SearchError::Embedding(format!(
+                "the model returned {} slide vectors for {} slides",
+                embeddings.len(),
+                indexed_slides.len()
+            )));
+        }
+        let mut embeddings = embeddings.into_iter();
+        let slides = sources
+            .slide_deck()
+            .slides
+            .iter()
+            .map(|slide| {
+                let embedding = if slide.text.trim().is_empty() {
+                    None
+                } else {
+                    Some(embeddings.next().ok_or_else(|| {
+                        SearchError::Embedding("a slide vector is missing".into())
+                    })?)
+                };
+                Ok(EmbeddedSlide {
+                    id: slide.id,
+                    embedding,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, SearchError>>()?;
 
         Ok(Self {
             model: Mutex::new(model),
@@ -56,10 +74,17 @@ impl DenseSlideSearcher {
     }
 }
 
-impl SlideSearcher for DenseSlideSearcher {
-    fn search(&self, query: &str, max_results: usize) -> Result<Vec<SearchHit>, SearchError> {
-        if max_results == 0 || query.trim().is_empty() || self.slides.is_empty() {
-            return Ok(Vec::new());
+impl SlideScorer for DenseSlideScorer {
+    fn score_slides(&self, query: &str) -> Result<Vec<SlideScore>, SearchError> {
+        if query.trim().is_empty() || self.slides.is_empty() {
+            return Ok(self
+                .slides
+                .iter()
+                .map(|slide| SlideScore {
+                    slide_id: slide.id,
+                    score: 0.0,
+                })
+                .collect());
         }
 
         let instructed_query = format!("{CHINESE_RETRIEVAL_INSTRUCTION}{}", normalize(query));
@@ -72,23 +97,24 @@ impl SlideSearcher for DenseSlideSearcher {
             .pop()
             .ok_or_else(|| SearchError::Embedding("the model returned no query vector".into()))?;
 
-        let mut hits: Vec<_> = self
+        Ok(self
             .slides
             .iter()
-            .map(|slide| SearchHit {
+            .map(|slide| SlideScore {
                 slide_id: slide.id,
-                score: cosine_similarity(&query_embedding, &slide.embedding),
+                score: slide
+                    .embedding
+                    .as_deref()
+                    .map(|embedding| cosine_similarity(&query_embedding, embedding).max(0.0))
+                    .unwrap_or(0.0),
             })
-            .collect();
-        hits.sort_by(|left, right| right.score.total_cmp(&left.score));
-        hits.truncate(max_results);
-        Ok(hits)
+            .collect())
     }
 }
 
 struct EmbeddedSlide {
     id: SlideId,
-    embedding: Vec<f32>,
+    embedding: Option<Vec<f32>>,
 }
 
 fn normalize(text: &str) -> String {

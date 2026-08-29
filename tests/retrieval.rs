@@ -1,8 +1,8 @@
 use std::error::Error;
 
 use beyond_slides::{
-    DenseSlideSearcher, HybridSlideSearcher, LexicalSlideSearcher, SearchHit, Slide, SlideDeck,
-    SlideId, SlideSearcher, Transcript, ValidatedSources,
+    DenseSlideScorer, HybridSlideScorer, LexicalSlideScorer, SearchError, Slide, SlideDeck,
+    SlideId, SlideScore, SlideScorer, Transcript, ValidatedSources,
 };
 use serde::Deserialize;
 
@@ -16,16 +16,23 @@ struct RetrievalCase {
     relevant_slides: Vec<SlideId>,
 }
 
-struct FixedSearcher(Vec<SearchHit>);
+struct FixedScorer(Vec<SlideScore>);
 
-impl SlideSearcher for FixedSearcher {
-    fn search(
-        &self,
-        _query: &str,
-        max_results: usize,
-    ) -> Result<Vec<SearchHit>, beyond_slides::SearchError> {
-        Ok(self.0.iter().copied().take(max_results).collect())
+impl SlideScorer for FixedScorer {
+    fn score_slides(&self, _query: &str) -> Result<Vec<SlideScore>, SearchError> {
+        Ok(self.0.clone())
     }
+}
+
+fn top_scores(
+    scorer: &dyn SlideScorer,
+    query: &str,
+    max_results: usize,
+) -> Result<Vec<SlideScore>, SearchError> {
+    let mut scores = scorer.score_slides(query)?;
+    scores.sort_by(|left, right| right.score.total_cmp(&left.score));
+    scores.truncate(max_results);
+    Ok(scores)
 }
 
 fn tiny_course_sources() -> Result<ValidatedSources, Box<dyn Error>> {
@@ -33,6 +40,31 @@ fn tiny_course_sources() -> Result<ValidatedSources, Box<dyn Error>> {
     let slide_deck = serde_json::from_str(include_str!("../examples/tiny_course/slides.json"))?;
 
     Ok(ValidatedSources::new(transcript, slide_deck)?)
+}
+
+#[test]
+fn lexical_scoring_returns_every_slide_in_presentation_order() -> Result<(), Box<dyn Error>> {
+    let sources = tiny_course_sources()?;
+    let scorer = LexicalSlideScorer::new(&sources);
+
+    let scores = scorer.score_slides("循环不变式")?;
+
+    let expected_ids: Vec<_> = sources
+        .slide_deck()
+        .slides
+        .iter()
+        .map(|slide| slide.id)
+        .collect();
+    assert_eq!(
+        scores
+            .iter()
+            .map(|score| score.slide_id)
+            .collect::<Vec<_>>(),
+        expected_ids
+    );
+    assert_eq!(scores.len(), sources.slide_deck().slides.len());
+    assert!(scores.iter().any(|score| score.score == 0.0));
+    Ok(())
 }
 
 #[test]
@@ -52,9 +84,9 @@ fn lexical_search_matches_chinese_words_across_different_sentences() -> Result<(
             ],
         },
     )?;
-    let searcher = LexicalSlideSearcher::new(&sources);
+    let scorer = LexicalSlideScorer::new(&sources);
 
-    let hits = searcher.search("参数的更新步长由学习率决定", 2)?;
+    let hits = top_scores(&scorer, "参数的更新步长由学习率决定", 2)?;
 
     assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(1)));
     Ok(())
@@ -63,9 +95,9 @@ fn lexical_search_matches_chinese_words_across_different_sentences() -> Result<(
 #[test]
 fn lexical_search_ranks_strongest_term_evidence_first() -> Result<(), Box<dyn Error>> {
     let sources = tiny_course_sources()?;
-    let searcher = LexicalSlideSearcher::new(&sources);
+    let scorer = LexicalSlideScorer::new(&sources);
 
-    let hits = searcher.search("循环不变式 目标值 当前搜索区间", 3)?;
+    let hits = top_scores(&scorer, "循环不变式 目标值 当前搜索区间", 3)?;
 
     assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(2)));
     assert!(hits.windows(2).all(|pair| pair[0].score >= pair[1].score));
@@ -75,9 +107,9 @@ fn lexical_search_ranks_strongest_term_evidence_first() -> Result<(), Box<dyn Er
 #[test]
 fn lexical_search_normalizes_case_and_punctuation() -> Result<(), Box<dyn Error>> {
     let sources = tiny_course_sources()?;
-    let searcher = LexicalSlideSearcher::new(&sources);
+    let scorer = LexicalSlideScorer::new(&sources);
 
-    let hits = searcher.search("中点 overflow & OFF-BY-ONE!", 2)?;
+    let hits = top_scores(&scorer, "中点 overflow & OFF-BY-ONE!", 2)?;
 
     assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(5)));
     Ok(())
@@ -86,23 +118,31 @@ fn lexical_search_normalizes_case_and_punctuation() -> Result<(), Box<dyn Error>
 #[test]
 fn lexical_search_normalizes_full_width_technical_terms() -> Result<(), Box<dyn Error>> {
     let sources = tiny_course_sources()?;
-    let searcher = LexicalSlideSearcher::new(&sources);
+    let scorer = LexicalSlideScorer::new(&sources);
 
-    let hits = searcher.search("Ｏ（ｌｏｇ ｎ）", 2)?;
+    let hits = top_scores(&scorer, "Ｏ（ｌｏｇ ｎ）", 2)?;
 
     assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(4)));
     Ok(())
 }
 
 #[test]
-fn lexical_search_honors_the_result_limit_and_omits_nonmatches() -> Result<(), Box<dyn Error>> {
+fn lexical_scoring_uses_zero_for_queries_without_term_evidence() -> Result<(), Box<dyn Error>> {
     let sources = tiny_course_sources()?;
-    let searcher = LexicalSlideSearcher::new(&sources);
+    let scorer = LexicalSlideScorer::new(&sources);
 
-    assert_eq!(searcher.search("二分查找", 2)?.len(), 2);
-    assert!(searcher.search("二分查找", 0)?.is_empty());
-    assert!(searcher.search("快速排序 枢轴 partition", 5)?.is_empty());
-    assert!(searcher.search("", 5)?.is_empty());
+    assert!(
+        scorer
+            .score_slides("快速排序 枢轴 partition")?
+            .iter()
+            .all(|score| score.score == 0.0)
+    );
+    assert!(
+        scorer
+            .score_slides("")?
+            .iter()
+            .all(|score| score.score == 0.0)
+    );
     Ok(())
 }
 
@@ -123,9 +163,9 @@ fn lexical_search_preserves_english_terms() -> Result<(), Box<dyn Error>> {
             ],
         },
     )?;
-    let searcher = LexicalSlideSearcher::new(&sources);
+    let scorer = LexicalSlideScorer::new(&sources);
 
-    let hits = searcher.search("GRADIENT descent", 2)?;
+    let hits = top_scores(&scorer, "GRADIENT descent", 2)?;
 
     assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(1)));
     Ok(())
@@ -148,10 +188,10 @@ fn equally_relevant_slides_remain_in_presentation_order() -> Result<(), Box<dyn 
             ],
         },
     )?;
-    let searcher = LexicalSlideSearcher::new(&sources);
+    let scorer = LexicalSlideScorer::new(&sources);
 
-    let hit_ids: Vec<_> = searcher
-        .search("alpha", 5)?
+    let hit_ids: Vec<_> = scorer
+        .score_slides("alpha")?
         .into_iter()
         .map(|hit| hit.slide_id)
         .collect();
@@ -162,30 +202,45 @@ fn equally_relevant_slides_remain_in_presentation_order() -> Result<(), Box<dyn 
 
 #[test]
 fn hybrid_search_rewards_agreement_between_retrieval_modes() -> Result<(), Box<dyn Error>> {
-    let lexical = FixedSearcher(vec![
-        SearchHit {
-            slide_id: SlideId(2),
-            score: 8.0,
-        },
-        SearchHit {
+    let lexical = FixedScorer(vec![
+        SlideScore {
             slide_id: SlideId(1),
             score: 3.0,
         },
-    ]);
-    let dense = FixedSearcher(vec![
-        SearchHit {
-            slide_id: SlideId(3),
-            score: 0.92,
+        SlideScore {
+            slide_id: SlideId(2),
+            score: 8.0,
         },
-        SearchHit {
+        SlideScore {
+            slide_id: SlideId(3),
+            score: 0.0,
+        },
+    ]);
+    let dense = FixedScorer(vec![
+        SlideScore {
             slide_id: SlideId(1),
             score: 0.88,
         },
+        SlideScore {
+            slide_id: SlideId(2),
+            score: 0.0,
+        },
+        SlideScore {
+            slide_id: SlideId(3),
+            score: 0.92,
+        },
     ]);
-    let searcher = HybridSlideSearcher::new(&lexical, &dense);
+    let scorer = HybridSlideScorer::new(&lexical, &dense);
 
-    let hit_ids: Vec<_> = searcher
-        .search("共同证据", 3)?
+    let scores = scorer.score_slides("共同证据")?;
+    assert_eq!(
+        scores
+            .iter()
+            .map(|score| score.slide_id)
+            .collect::<Vec<_>>(),
+        vec![SlideId(1), SlideId(2), SlideId(3)]
+    );
+    let hit_ids: Vec<_> = top_scores(&scorer, "共同证据", 3)?
         .into_iter()
         .map(|hit| hit.slide_id)
         .collect();
@@ -215,9 +270,9 @@ fn dense_search_matches_a_chinese_semantic_paraphrase() -> Result<(), Box<dyn Er
             ],
         },
     )?;
-    let searcher = DenseSlideSearcher::try_new(&sources)?;
+    let scorer = DenseSlideScorer::try_new(&sources)?;
 
-    let hits = searcher.search("信号穿过很多层以后几乎衰减没了", 2)?;
+    let hits = top_scores(&scorer, "信号穿过很多层以后几乎衰减没了", 2)?;
 
     assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(1)));
     Ok(())

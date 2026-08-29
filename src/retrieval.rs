@@ -4,21 +4,24 @@ mod lexical;
 
 use std::{error::Error, fmt};
 
+use serde::{Deserialize, Serialize};
+
 use crate::SlideId;
 
-pub use dense::DenseSlideSearcher;
-pub use hybrid::HybridSlideSearcher;
-pub use lexical::LexicalSlideSearcher;
+pub use dense::DenseSlideScorer;
+pub use hybrid::HybridSlideScorer;
+pub use lexical::LexicalSlideScorer;
 
-/// Finds slides by semantic relevance without exposing the retrieval algorithm.
-pub trait SlideSearcher {
-    fn search(&self, query: &str, max_results: usize) -> Result<Vec<SearchHit>, SearchError>;
+/// Scores every slide for semantic relevance without exposing the retrieval algorithm.
+pub trait SlideScorer {
+    /// Returns exactly one score per indexed slide in presentation order.
+    fn score_slides(&self, query: &str) -> Result<Vec<SlideScore>, SearchError>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SearchHit {
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+pub struct SlideScore {
     pub slide_id: SlideId,
-    /// Relative relevance within one query's results; larger values rank first.
+    /// Relative relevance within one query; larger values are more relevant.
     pub score: f64,
 }
 
@@ -27,6 +30,7 @@ pub enum SearchError {
     ModelInitialization(String),
     Embedding(String),
     ModelUnavailable,
+    IncompatibleSlideScores,
 }
 
 impl fmt::Display for SearchError {
@@ -40,6 +44,10 @@ impl fmt::Display for SearchError {
             }
             Self::Embedding(message) => write!(formatter, "could not embed text: {message}"),
             Self::ModelUnavailable => write!(formatter, "the embedding model is unavailable"),
+            Self::IncompatibleSlideScores => write!(
+                formatter,
+                "slide scorers returned different slides or presentation orders"
+            ),
         }
     }
 }

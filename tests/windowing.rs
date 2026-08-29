@@ -1,53 +1,60 @@
+use std::time::Duration;
+
 use beyond_slides::{
-    SentenceId, SlideDeck, Transcript, ValidatedSources, WindowingConfig, build_windows,
+    SentenceId, SlideDeck, Transcript, TranscriptSentence, ValidatedSources, WindowingConfig,
+    build_windows,
 };
 
 #[test]
-fn owned_regions_partition_the_transcript_in_presentation_order() {
-    let sources = tiny_course_sources();
-    let config = WindowingConfig::new(4, 2).expect("four owned sentences should be valid");
+fn owned_regions_respect_character_budget_without_splitting_sentences() {
+    let sources = sources(&[
+        ("甲乙丙", 0, 1_000),
+        ("丁戊", 1_000, 2_000),
+        ("己庚辛壬癸甲", 2_000, 3_000),
+        ("乙丙", 3_000, 4_000),
+    ]);
+    let config = WindowingConfig::new(5, Duration::from_secs(60), 0)
+        .expect("nonzero character and duration budgets should be valid");
 
-    let owned_regions: Vec<Vec<SentenceId>> = build_windows(&sources, config)
+    let owned_regions: Vec<_> = build_windows(&sources, config)
         .iter()
-        .map(|window| {
-            window
-                .owned_region()
-                .iter()
-                .map(|sentence| sentence.id)
-                .collect()
-        })
+        .map(|window| sentence_ids(window.owned_region()))
         .collect();
 
-    assert_eq!(
-        owned_regions,
-        vec![
-            vec![
-                SentenceId(10),
-                SentenceId(20),
-                SentenceId(30),
-                SentenceId(40)
-            ],
-            vec![
-                SentenceId(50),
-                SentenceId(60),
-                SentenceId(70),
-                SentenceId(80)
-            ],
-            vec![
-                SentenceId(90),
-                SentenceId(100),
-                SentenceId(110),
-                SentenceId(120)
-            ],
-            vec![SentenceId(130), SentenceId(140), SentenceId(150)],
-        ]
-    );
+    assert_eq!(owned_regions, vec![vec![1, 2], vec![3], vec![4]]);
 }
 
 #[test]
-fn transcript_windows_add_context_without_changing_ownership() {
-    let sources = tiny_course_sources();
-    let config = WindowingConfig::new(4, 2).expect("four owned sentences should be valid");
+fn owned_regions_stop_before_exceeding_the_duration_budget() {
+    let sources = sources(&[
+        ("甲", 0, 10_000),
+        ("乙", 10_000, 20_000),
+        ("丙", 90_000, 91_000),
+        ("丁", 91_000, 92_000),
+    ]);
+    let config = WindowingConfig::new(100, Duration::from_secs(60), 0)
+        .expect("nonzero character and duration budgets should be valid");
+
+    let owned_regions: Vec<_> = build_windows(&sources, config)
+        .iter()
+        .map(|window| sentence_ids(window.owned_region()))
+        .collect();
+
+    assert_eq!(owned_regions, vec![vec![1, 2], vec![3, 4]]);
+}
+
+#[test]
+fn context_uses_nearest_complete_sentences_within_its_character_budget() {
+    let sources = sources(&[
+        ("甲乙", 0, 1_000),
+        ("丙丁", 1_000, 2_000),
+        ("戊己", 2_000, 3_000),
+        ("庚辛", 3_000, 4_000),
+        ("壬癸", 4_000, 5_000),
+        ("子丑", 5_000, 6_000),
+    ]);
+    let config = WindowingConfig::new(4, Duration::from_secs(60), 3)
+        .expect("nonzero character and duration budgets should be valid");
 
     let visible_regions: Vec<_> = build_windows(&sources, config)
         .iter()
@@ -63,49 +70,31 @@ fn transcript_windows_add_context_without_changing_ownership() {
     assert_eq!(
         visible_regions,
         vec![
-            (vec![], vec![10, 20, 30, 40], vec![50, 60],),
-            (vec![30, 40], vec![50, 60, 70, 80], vec![90, 100],),
-            (vec![70, 80], vec![90, 100, 110, 120], vec![130, 140],),
-            (vec![110, 120], vec![130, 140, 150], vec![],),
+            (vec![], vec![1, 2], vec![3]),
+            (vec![2], vec![3, 4], vec![5]),
+            (vec![4], vec![5, 6], vec![]),
         ]
     );
 }
 
-#[test]
-fn window_sizes_larger_than_the_transcript_are_clamped_to_its_edges() {
-    let sources = tiny_course_sources();
-    let config = WindowingConfig::new(usize::MAX, usize::MAX)
-        .expect("a very large owned region should still be valid");
-
-    let windows = build_windows(&sources, config);
-
-    assert_eq!(
-        windows
-            .iter()
-            .map(|window| {
-                (
-                    window.left_context().len(),
-                    window.owned_region().len(),
-                    window.right_context().len(),
-                )
-            })
-            .collect::<Vec<_>>(),
-        vec![(0, 15, 0)]
-    );
-}
-
-fn sentence_ids(sentences: &[beyond_slides::TranscriptSentence]) -> Vec<u32> {
+fn sentence_ids(sentences: &[TranscriptSentence]) -> Vec<u32> {
     sentences.iter().map(|sentence| sentence.id.0).collect()
 }
 
-fn tiny_course_sources() -> ValidatedSources {
-    let transcript: Transcript =
-        serde_json::from_str(include_str!("../examples/tiny_course/transcript.json"))
-            .expect("the transcript fixture should match its public JSON format");
-    let slide_deck: SlideDeck =
-        serde_json::from_str(include_str!("../examples/tiny_course/slides.json"))
-            .expect("the slide fixture should match its public JSON format");
+fn sources(sentences: &[(&str, u64, u64)]) -> ValidatedSources {
+    let sentences = sentences
+        .iter()
+        .enumerate()
+        .map(|(position, &(text, start_ms, end_ms))| TranscriptSentence {
+            id: SentenceId(
+                u32::try_from(position + 1).expect("the test fixture should fit in a u32"),
+            ),
+            start_ms,
+            end_ms,
+            text: text.to_owned(),
+        })
+        .collect();
 
-    ValidatedSources::new(transcript, slide_deck)
-        .expect("the tiny course sources should satisfy every source invariant")
+    ValidatedSources::new(Transcript { sentences }, SlideDeck { slides: vec![] })
+        .expect("the test sources should be valid")
 }

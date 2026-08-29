@@ -1,8 +1,8 @@
 use std::{collections::HashMap, error::Error};
 
 use beyond_slides::{
-    DenseSlideSearcher, HybridSlideSearcher, LexicalSlideSearcher, SlideDeck, SlideId,
-    SlideSearcher, Transcript, ValidatedSources,
+    DenseSlideScorer, HybridSlideScorer, LexicalSlideScorer, SlideDeck, SlideId, SlideScorer,
+    Transcript, ValidatedSources,
 };
 use serde::Deserialize;
 
@@ -36,17 +36,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     let sources = ValidatedSources::new(Transcript { sentences: vec![] }, slide_deck)?;
 
     eprintln!("Loading BAAI/bge-small-zh-v1.5 and indexing slides...");
-    let lexical = LexicalSlideSearcher::new(&sources);
-    let dense = DenseSlideSearcher::try_new(&sources)?;
-    let hybrid = HybridSlideSearcher::new(&lexical, &dense);
-    let searchers: [(&str, &dyn SlideSearcher); 3] =
+    let lexical = LexicalSlideScorer::new(&sources);
+    let dense = DenseSlideScorer::try_new(&sources)?;
+    let hybrid = HybridSlideScorer::new(&lexical, &dense);
+    let scorers: [(&str, &dyn SlideScorer); 3] =
         [("BM25", &lexical), ("Dense", &dense), ("Hybrid", &hybrid)];
 
     let mut all_results = Vec::new();
-    for (name, searcher) in searchers {
+    for (name, scorer) in scorers {
         let mut queries = HashMap::new();
         for case in &cases.queries {
-            let hits = searcher.search(&case.query, sources.slide_deck().slides.len())?;
+            let mut hits = scorer.score_slides(&case.query)?;
+            hits.sort_by(|left, right| right.score.total_cmp(&left.score));
             let first_relevant_rank = hits
                 .iter()
                 .position(|hit| case.relevant_slides.contains(&hit.slide_id))

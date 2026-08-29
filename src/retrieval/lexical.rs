@@ -5,20 +5,20 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::{SlideId, ValidatedSources};
 
-use super::{SearchError, SearchHit, SlideSearcher};
+use super::{SearchError, SlideScore, SlideScorer};
 
 const BM25_K1: f64 = 1.2;
 const BM25_B: f64 = 0.75;
 
 /// An in-memory BM25 index over the validated slide deck.
-pub struct LexicalSlideSearcher {
+pub struct LexicalSlideScorer {
     analyzer: Jieba,
     slides: Vec<IndexedSlide>,
     document_frequencies: HashMap<String, usize>,
     average_document_length: f64,
 }
 
-impl LexicalSlideSearcher {
+impl LexicalSlideScorer {
     /// Loads the embedded Jieba dictionary and indexes every slide.
     pub fn new(sources: &ValidatedSources) -> Self {
         let analyzer = Jieba::new();
@@ -71,32 +71,21 @@ impl LexicalSlideSearcher {
     }
 }
 
-impl SlideSearcher for LexicalSlideSearcher {
-    fn search(&self, query: &str, max_results: usize) -> Result<Vec<SearchHit>, SearchError> {
-        if max_results == 0 || self.average_document_length == 0.0 {
-            return Ok(Vec::new());
-        }
-
+impl SlideScorer for LexicalSlideScorer {
+    fn score_slides(&self, query: &str) -> Result<Vec<SlideScore>, SearchError> {
         let query_terms: BTreeSet<_> = analyze(query, &self.analyzer).into_iter().collect();
-        if query_terms.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut scored_slides: Vec<_> = self
+        Ok(self
             .slides
             .iter()
-            .filter_map(|slide| {
-                let score = self.score_slide(slide, &query_terms);
-                (score > 0.0).then_some(SearchHit {
-                    slide_id: slide.id,
-                    score,
-                })
+            .map(|slide| SlideScore {
+                slide_id: slide.id,
+                score: if query_terms.is_empty() || self.average_document_length == 0.0 {
+                    0.0
+                } else {
+                    self.score_slide(slide, &query_terms)
+                },
             })
-            .collect();
-
-        scored_slides.sort_by(|left, right| right.score.total_cmp(&left.score));
-        scored_slides.truncate(max_results);
-        Ok(scored_slides)
+            .collect())
     }
 }
 

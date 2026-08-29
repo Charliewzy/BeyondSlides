@@ -2,3 +2,5 @@
 /.fastembed_cache
 /data
 /run
+__pycache__/
+*.py[cod]

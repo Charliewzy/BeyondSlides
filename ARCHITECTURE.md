@@ -312,7 +312,7 @@ transcription         text extraction
           +------------+-------------+
           |                          |
           v                          v
- slide retrieval index      monotonic alignment
+  all-slide scoring         semantic alignment
           |                          |
           +------------+-------------+
                        v
@@ -352,27 +352,31 @@ sufficiency remains an evaluation decision outside the adapter.
 ### 7.2 Windowing
 
 The transcript is divided into owned regions with left and right context. The
-policy should eventually be token-aware, but its correctness contract is based
-on sentence ownership rather than token counts.
+current policy greedily adds complete transcript sentences while both a text
+character budget and a wall-clock duration budget permit it. A single sentence
+that exceeds either budget remains intact in its own owned region. Left and
+right context also contain only complete sentences and each has its own
+character budget. A later agent adapter may translate its model-specific token
+budget into these model-independent source-window limits; the correctness
+contract remains based on sentence ownership rather than token counts.
 
 ### 7.3 Retrieval
 
 Slides are indexed once behind one interface:
 
 ```rust
-trait SlideSearcher {
-    fn search(
-        &self,
-        query: &str,
-        max_results: usize,
-    ) -> Result<Vec<SearchHit>, SearchError>;
+trait SlideScorer {
+    fn score_slides(&self, query: &str) -> Result<Vec<SlideScore>, SearchError>;
 }
 ```
 
-The result is fallible because local model loading and inference can fail. Such
-a failure must not be misrepresented as "no related slide found." The agent
-asks for slide search; it does not select or tune the underlying retrieval
-mode.
+Every adapter returns exactly one score per slide in presentation order,
+including zero scores where it found no evidence. The result is fallible because
+local model loading and inference can fail. Such a failure must not be
+misrepresented as "no related slide found." Dynamic programming consumes the
+complete score rows. Callers that need search results sort a copy and truncate
+it; consequently, `max_results` belongs to the agent's search tool rather than
+the scoring interface.
 
 Three in-memory adapters currently implement this interface:
 
@@ -386,22 +390,60 @@ Three in-memory adapters currently implement this interface:
   equal-weight reciprocal-rank fusion using `k = 60`. Rank fusion avoids
   treating BM25 and cosine scores as though they shared a scale.
 
-The lexical and dense adapters preserve slide presentation order for equal
-scores. Exact reciprocal-rank-fusion ties in the hybrid adapter have unspecified
-order. Model files are downloaded into FastEmbed's local cache on first use and
-reused afterward. The model identifier and retrieval mode must eventually be
+All adapters return slides in presentation order; ranking is a caller-side
+operation. Model files are downloaded into FastEmbed's local cache on first use
+and reused afterward. The model identifier and scoring mode must eventually be
 recorded in the run manifest.
 
-### 7.4 Monotonic alignment
+### 7.4 Semantic alignment
 
-Each transcript window receives an approximate slide position using a
-similarity matrix and dynamic programming. The path cannot move backward and is
-penalized for implausibly large forward jumps.
+Every transcript window is scored against every slide. Each row is normalized
+independently to `0..1`, preventing BM25, cosine, or reciprocal-rank-fusion
+scales from implicitly changing the transition policy. Dynamic programming then
+selects one slide position per window by maximizing semantic evidence minus
+transition costs.
 
-Alignment produces a current position and nearby slides, not a claim that those
-slides contain every idea in the window.
+The path begins at the first slide for a complete lecture recording. Staying
+near the previous position is preferred: movement within three slides receives
+a small distance cost. Backward movement is allowed at the same cost as forward
+movement, and larger jumps remain possible with a larger soft penalty. Support
+for recordings that begin mid-lecture will require making the starting prior
+configurable.
 
-### 7.5 Agent annotation
+The resulting slide position supplies chronological context. It is not itself
+a claim that the selected slide is a related slide.
+
+A self-contained alignment visualization makes the complete score matrix
+inspectable. It renders transcript windows horizontally, slides vertically,
+normalized scores as a heatmap, and the inferred path as an overlay. Selecting
+a window reveals its transcript, highest semantic scores, and the inferred
+slide neighborhood. When optional visual reference evidence exists, the report
+adds a separate dotted path and mismatch markers; the production alignment does
+not consume that reference.
+
+### 7.5 Optional visual reference alignment
+
+BeyondSlides does not require the original lecture video. When it is available,
+visual matching can supply reference evidence for evaluating semantic slide
+positions. Poppler renders every PDF page at `320x180`; FFmpeg
+streams one grayscale video frame per second at the same dimensions; and Rust
+compares each frame with every page using MSSIM. The matcher records the best
+and runner-up slide and their scores for every sampled timestamp. Frames are
+processed as a stream rather than materialized as image files, and callers may
+receive processed and total video time for progress reporting.
+
+This first implementation deliberately preserves raw observations. It does not
+yet convert a small score margin into false confidence, smooth transient
+mismatches, or refine transition timestamps. A later temporal decoder may add
+those policies, but it must permit backward movement because lecturers can
+revisit earlier slides.
+
+Visual reference evidence is not fed into the production semantic alignment
+path. It measures whether inferred slide positions match what was displayed,
+while manually labeled related slides remain necessary to evaluate semantic
+retrieval.
+
+### 7.6 Agent annotation
 
 For each window, the agent initially receives:
 
@@ -420,7 +462,7 @@ Search covers the entire deck so the agent can try to falsify an apparent
 novelty judgment. Tool rounds and calls are bounded. Independent windows may be
 processed concurrently after alignment.
 
-### 7.6 Validation and assembly
+### 7.7 Validation and assembly
 
 Model output is untrusted input. Rust code validates its schema, score ranges,
 IDs, owned-region partition, and evidence requirements before accepting it.
@@ -429,7 +471,7 @@ recorded explicitly rather than silently patched into a plausible result.
 `ValidatedAnalysis` combines already-validated sources with the accepted
 lecture passages, so source validation is not repeated after annotation.
 
-### 7.7 Ranking and rendering
+### 7.8 Ranking and rendering
 
 The initial ranked view sorts primarily by importance, then novelty, then
 connection strength. It should retain the component scores rather than collapse
@@ -520,7 +562,8 @@ evaluation above.
    report.
 4. Add deterministic owned-region windowing.
 5. Add lexical slide search, followed by dense retrieval and hybrid fusion.
-6. Add monotonic window-to-slide alignment and a human-readable debug view.
+6. Add soft non-monotonic window-to-slide alignment and a human-readable
+   visualization.
 7. Add schema-constrained model annotation using only local aligned slides.
 8. Add global `inspect_slide` and `search_slides` agent tools.
 9. Add real PDF slide extraction.

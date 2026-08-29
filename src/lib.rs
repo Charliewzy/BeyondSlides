@@ -1,5 +1,6 @@
 mod alignment;
 mod domain;
+pub mod evaluation;
 pub mod ingestion;
 mod ranking;
 mod report;

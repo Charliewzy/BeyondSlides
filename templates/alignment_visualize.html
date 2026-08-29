@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BeyondSlides 语义对齐可视化</title>
+  <style>
+{% include "alignment_visualize.css" %}
+  </style>
+</head>
+<body>
+  <main>
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">BeyondSlides · Alignment Visualization</p>
+        <h1>讲稿与幻灯片如何对齐</h1>
+        <p class="lede">颜色表示每个讲稿窗口对各幻灯片的相对语义得分；实线是动态规划推断的幻灯片位置。</p>
+      </div>
+      <dl class="summary">
+        <div><dt>讲稿窗口</dt><dd>{{ window_count }}</dd></div>
+        <div><dt>幻灯片</dt><dd>{{ slide_count }}</dd></div>
+{% if has_visual_reference %}
+        <div><dt>视觉参考精确一致</dt><dd>{{ visual_agreement }}</dd></div>
+        <div><dt>不一致窗口</dt><dd>{{ mismatch_count }}</dd></div>
+{% endif %}
+      </dl>
+    </header>
+
+    <section class="chart-card" aria-labelledby="chart-title">
+      <div class="chart-heading">
+        <div>
+          <h2 id="chart-title">语义得分与幻灯片位置</h2>
+          <p>点击任意竖列，在下方检查该窗口的讲稿与幻灯片。</p>
+        </div>
+        <ul class="legend" aria-label="图例">
+          <li><span class="legend-line dp"></span>DP 推断</li>
+{% if has_visual_reference %}
+          <li><span class="legend-line visual"></span>可选视觉参考</li>
+          <li><span class="legend-dot"></span>位置不一致</li>
+{% endif %}
+          <li><span class="legend-gradient"></span>低分 → 高分</li>
+        </ul>
+      </div>
+      <div class="chart-scroll">
+        <svg data-alignment-heatmap width="{{ chart_width }}" height="{{ chart_height }}" viewBox="0 0 {{ chart_width }} {{ chart_height }}" role="img" aria-labelledby="chart-title chart-description">
+          <desc id="chart-description">横轴为讲稿窗口，纵轴为幻灯片。背景热力颜色表示归一化语义得分。</desc>
+          <rect class="plot-background" x="{{ 54 }}" y="{{ 22 }}" width="{{ heatmap_width }}" height="{{ heatmap_height }}" />
+{% for cell in cells %}
+          <rect class="heat-cell" x="{{ cell.x }}" y="{{ cell.y }}" width="8" height="7" fill="{{ cell.fill }}">
+            <title>窗口 {{ cell.window_number }} · 幻灯片 {{ cell.slide_id }} · 得分 {{ cell.score }}</title>
+          </rect>
+{% endfor %}
+{% for connector in mismatch_connectors %}
+          <line class="mismatch-connector-halo" x1="{{ connector.x }}" y1="{{ connector.inferred_y }}" x2="{{ connector.x }}" y2="{{ connector.visual_y }}" />
+          <line data-mismatch-connector class="mismatch-connector" x1="{{ connector.x }}" y1="{{ connector.inferred_y }}" x2="{{ connector.x }}" y2="{{ connector.visual_y }}" />
+{% endfor %}
+          <polyline class="dp-path-halo" points="{{ dp_path }}" />
+          <polyline data-dp-path class="dp-path" points="{{ dp_path }}" />
+{% if has_visual_reference %}
+          <polyline data-visual-path class="visual-path" points="{{ visual_path }}" />
+{% for marker in mismatch_markers %}
+          <circle class="mismatch-marker" cx="{{ marker.x }}" cy="{{ marker.y }}" r="2.8" />
+{% endfor %}
+{% endif %}
+{% for target in window_targets %}
+          <rect class="window-target" data-window-target="{{ target.number }}" x="{{ target.x }}" y="22" width="{{ target.width }}" height="{{ target.height }}" tabindex="0" role="button" aria-label="{{ target.label }}">
+            <title>{{ target.label }}</title>
+          </rect>
+{% endfor %}
+{% for tick in slide_ticks %}
+          <text class="axis-label slide-label" x="{{ tick.x }}" y="{{ tick.y }}">{{ tick.label }}</text>
+{% endfor %}
+{% for tick in window_ticks %}
+          <text class="axis-label window-label" x="{{ tick.x }}" y="{{ chart_height - 14 }}">{{ tick.label }}</text>
+{% endfor %}
+          <text class="axis-title slide-title" x="10" y="14">幻灯片</text>
+          <text class="axis-title window-title" x="{{ chart_width / 2 }}" y="{{ chart_height - 2 }}">讲稿窗口</text>
+        </svg>
+      </div>
+    </section>
+
+    <section class="inspector" aria-labelledby="inspector-title">
+      <h2 id="inspector-title">窗口检查器</h2>
+{% for detail in details %}
+      <article class="window-detail" data-window-detail="{{ detail.number }}"{% if detail.hidden %} hidden{% endif %}>
+        <header class="detail-header">
+          <div>
+            <p class="eyebrow">窗口 {{ detail.number }}</p>
+            <h3>{{ detail.timestamp }}</h3>
+          </div>
+          <div class="position-pills">
+            <span class="position inferred">推断位置 · 幻灯片 {{ detail.inferred_slide }}</span>
+{% if detail.has_visual_slide %}
+            <span class="position visual{% if detail.mismatch %} mismatch{% endif %}">视觉参考 · 幻灯片 {{ detail.visual_slide }}</span>
+{% endif %}
+          </div>
+        </header>
+
+        <div class="detail-grid">
+          <section>
+            <h4>讲稿</h4>
+            <blockquote>{{ detail.transcript }}</blockquote>
+          </section>
+          <section>
+            <h4>最高语义得分</h4>
+            <ol class="score-bars">
+{% for score in detail.top_scores %}
+              <li>
+                <div class="score-label"><strong>幻灯片 {{ score.slide_id }}</strong><span>{{ score.score }}</span></div>
+                <div class="bar-track"><span style="width: {{ score.width }}%"></span></div>
+                <p>{{ score.text }}</p>
+              </li>
+{% endfor %}
+            </ol>
+          </section>
+        </div>
+
+        <section class="nearby">
+          <h4>推断位置附近的幻灯片（±3）</h4>
+          <div class="slide-strip">
+{% for slide in detail.nearby_slides %}
+            <article class="slide-card{% if slide.inferred %} inferred{% endif %}{% if slide.visual %} visual{% endif %}">
+              <header>
+                <strong>幻灯片 {{ slide.id }}</strong>
+{% if slide.inferred %}<span>推断</span>{% endif %}
+{% if slide.visual %}<span>视觉</span>{% endif %}
+              </header>
+              <p>{{ slide.text }}</p>
+            </article>
+{% endfor %}
+          </div>
+        </section>
+      </article>
+{% endfor %}
+    </section>
+  </main>
+  <script>
+{% include "alignment_visualize.js" %}
+  </script>
+</body>
+</html>

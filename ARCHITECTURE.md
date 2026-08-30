@@ -474,6 +474,21 @@ Model output is untrusted input. Rust code validates its schema, score ranges,
 IDs, owned-region partition, and evidence requirements before accepting it.
 Invalid output may be retried with the validation errors; persistent failure is
 recorded explicitly rather than silently patched into a plausible result.
+Each model response has the following shape:
+
+```rust
+struct TranscriptWindowAnalysis {
+    passages: Vec<LecturePassage>,
+}
+```
+
+Responses are supplied in transcript-window order. Assembly rebuilds the
+deterministic window assignments from the recorded `WindowingConfig`, requires
+exactly one response per window, and requires the response's lecture passages
+to partition exactly that window's owned region. A response cannot claim
+sentences from its left or right context. Only after these window-local checks
+pass are all passages joined and subjected to lecture-wide source, related-slide,
+and coverage validation.
 `ValidatedAnalysis` combines already-validated sources with the accepted
 lecture passages, so source validation is not repeated after annotation.
 

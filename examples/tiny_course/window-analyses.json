@@ -1,0 +1,69 @@
+[
+  {
+    "passages": [
+      {
+        "start": 0,
+        "end": 2,
+        "novelty": 0,
+        "connection_strength": 0,
+        "importance": 2,
+        "related_slides": [0],
+        "comparison_note": "这段话直接复述了幻灯片 1 中的二分查找过程。"
+      }
+    ]
+  },
+  {
+    "passages": [
+      {
+        "start": 3,
+        "end": 5,
+        "novelty": 3,
+        "connection_strength": 2,
+        "importance": 5,
+        "related_slides": [0, 3],
+        "summary": "每次二分查找的比较，都可以理解为获得一比特信息。",
+        "comparison_note": "幻灯片提到了反复减半和对数复杂度，但没有给出将二者联系起来的信息论直觉。"
+      }
+    ]
+  },
+  {
+    "passages": [
+      {
+        "start": 6,
+        "end": 8,
+        "novelty": 2,
+        "connection_strength": 5,
+        "importance": 4,
+        "related_slides": [1, 2],
+        "summary": "保持循环不变式，是每次边界更新的依据。",
+        "comparison_note": "循环不变式和伪代码分别出现在幻灯片 2 和 3 中；这段讲解明确建立了二者的联系。"
+      }
+    ]
+  },
+  {
+    "passages": [
+      {
+        "start": 9,
+        "end": 11,
+        "novelty": 5,
+        "connection_strength": 0,
+        "importance": 1,
+        "related_slides": [0]
+      }
+    ]
+  },
+  {
+    "passages": [
+      {
+        "start": 12,
+        "end": 14,
+        "novelty": 3,
+        "connection_strength": 3,
+        "importance": 4,
+        "related_slides": [2, 4],
+        "summary": "选定并始终遵守一种区间约定，可以避免边界错误。",
+        "comparison_note": "幻灯片展示了左闭右开区间并列出了 off-by-one 错误，但将二者联系起来的实践原则来自口头讲解。"
+      }
+    ]
+  }
+]

@@ -1,3 +1,5 @@
+mod tools;
+
 use std::{error::Error, fmt};
 
 use serde::{Deserialize, Serialize};
@@ -7,6 +9,8 @@ use crate::{
     TranscriptWindow, ValidatedAnalysis, ValidatedSources, ValidationError, WindowingConfig,
     build_windows,
 };
+
+pub use tools::{AnnotationToolError, AnnotationToolSession, SlideEvidence};
 
 const SLIDE_NEIGHBORHOOD_RADIUS: usize = 3;
 

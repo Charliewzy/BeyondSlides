@@ -482,9 +482,20 @@ inspect_slide(slide_id)
 search_slides(query, max_results)
 ```
 
-Search covers the entire deck so the agent can try to falsify an apparent
-novelty judgment. Tool rounds and calls are bounded. Independent windows may be
-processed concurrently after alignment.
+Each transcript-window conversation owns an `AnnotationToolSession` seeded with
+the task's local slide neighborhood. `inspect_slide` rejects unknown canonical
+slide IDs. `search_slides` covers the entire deck so the agent can try to
+falsify an apparent novelty judgment. It requires one finite score per slide in
+presentation order, omits non-positive evidence, ranks the remaining results,
+and returns at most `max_results` slides. Retrieval scores remain internal
+because their scales depend on the scorer.
+
+The first tool result that exposes a slide returns its ID and complete text.
+Later inspection or search results for the same slide return its ID with
+`already_visible` instead of repeating the text. Visibility state is local to
+one transcript window; independent windows have independent model contexts.
+Retrieval failure is reported as failure rather than an empty result. Tool
+rounds and calls are bounded.
 
 ### 7.7 Validation and assembly
 

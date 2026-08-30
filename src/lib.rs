@@ -11,8 +11,9 @@ mod windowing;
 
 pub use alignment::{SlideAlignmentError, infer_slide_positions};
 pub use annotation::{
-    AnalysisAssemblyError, AnnotationMessage, AnnotationTaskError, TranscriptWindowAnalysis,
-    TranscriptWindowTask, assemble_window_analyses, build_annotation_tasks,
+    AnalysisAssemblyError, AnnotationMessage, AnnotationTaskError, AnnotationToolError,
+    AnnotationToolSession, SlideEvidence, TranscriptWindowAnalysis, TranscriptWindowTask,
+    assemble_window_analyses, build_annotation_tasks,
 };
 pub use domain::{
     LecturePassage, LecturePassages, Score5, ScoreOutOfRange, SentenceId, Slide, SlideDeck,

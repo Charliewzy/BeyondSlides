@@ -7,6 +7,7 @@
 - passages 必须按顺序、无重叠、无遗漏地完整划分 owned_region；start 和 end 都是包含端点的零基 SentenceId。
 - slide_position 只是按授课时间推断出的幻灯片位置，不等于 Related slide，也不能单独证明内容写在幻灯片中。
 - nearby_slides 只是初始证据。必要时使用 inspect_slide 和 search_slides 检查整套幻灯片，再判断 novelty 和 related_slides。
+- 工具第一次展示某张幻灯片时返回 status=content 和完整文本；如果返回 status=already_visible，说明该文本已经出现在当前任务或先前的工具结果中，不需要再次读取。
 - related_slides 只填写真正支持比较判断的零基 SlideId，不得重复。
 - summary 是可选的用户可读摘要；comparison_note 是可选的内部证据记录。没有有用内容时可以省略二者。
 

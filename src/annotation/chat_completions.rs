@@ -1,0 +1,633 @@
+use std::{error::Error, fmt};
+
+use genai::{
+    Client, ModelIden, ServiceTarget,
+    adapter::AdapterKind,
+    chat::{
+        ChatOptions, ChatRequest, ChatResponse, ChatResponseFormat, StopReason, Tool, ToolCall,
+        ToolChoice, ToolResponse,
+    },
+    resolver::{AuthData, Endpoint},
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use url::Url;
+
+use super::{
+    AnalysisAssemblyError, AnnotationToolError, AnnotationToolSession, TranscriptWindowAnalysis,
+    TranscriptWindowTask, validate_window_analysis,
+};
+use crate::{SlideId, SlideScorer, ValidatedSources};
+
+const DEFAULT_MAX_TOOL_ROUNDS: usize = 4;
+const DEFAULT_MAX_SEARCH_RESULTS: usize = 5;
+const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 4096;
+const MAX_PROVIDER_ERROR_CHARACTERS: usize = 2_000;
+
+/// Configuration for one OpenAI-compatible Chat Completions endpoint.
+///
+/// BeyondSlides always selects the OpenAI-compatible protocol explicitly. The
+/// model name is sent to the configured endpoint without using genai's
+/// model-to-provider inference.
+pub struct ChatCompletionsConfig {
+    base_url: Url,
+    api_key: String,
+    model: String,
+    max_tool_rounds: usize,
+    max_search_results: usize,
+    max_output_tokens: u32,
+}
+
+impl ChatCompletionsConfig {
+    pub fn new(
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Result<Self, ChatCompletionsConfigError> {
+        let mut base_url = base_url.into();
+        if !base_url.ends_with('/') {
+            base_url.push('/');
+        }
+        let base_url = Url::parse(&base_url)
+            .map_err(|error| ChatCompletionsConfigError::InvalidBaseUrl(error.to_string()))?;
+        if base_url.cannot_be_a_base()
+            || base_url.query().is_some()
+            || base_url.fragment().is_some()
+        {
+            return Err(ChatCompletionsConfigError::InvalidBaseUrl(
+                "the base URL must be hierarchical and contain no query or fragment".into(),
+            ));
+        }
+
+        let api_key = api_key.into();
+        if api_key.is_empty() {
+            return Err(ChatCompletionsConfigError::EmptyApiKey);
+        }
+        let model = model.into();
+        if model.trim().is_empty() {
+            return Err(ChatCompletionsConfigError::EmptyModel);
+        }
+
+        Ok(Self {
+            base_url,
+            api_key,
+            model,
+            max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
+            max_search_results: DEFAULT_MAX_SEARCH_RESULTS,
+            max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+        })
+    }
+
+    pub fn with_max_tool_rounds(
+        mut self,
+        max_tool_rounds: usize,
+    ) -> Result<Self, ChatCompletionsConfigError> {
+        if max_tool_rounds == 0 {
+            return Err(ChatCompletionsConfigError::ZeroLimit("max_tool_rounds"));
+        }
+        self.max_tool_rounds = max_tool_rounds;
+        Ok(self)
+    }
+
+    pub fn with_max_search_results(
+        mut self,
+        max_search_results: usize,
+    ) -> Result<Self, ChatCompletionsConfigError> {
+        if max_search_results == 0 {
+            return Err(ChatCompletionsConfigError::ZeroLimit("max_search_results"));
+        }
+        self.max_search_results = max_search_results;
+        Ok(self)
+    }
+
+    pub fn with_max_output_tokens(
+        mut self,
+        max_output_tokens: u32,
+    ) -> Result<Self, ChatCompletionsConfigError> {
+        if max_output_tokens == 0 {
+            return Err(ChatCompletionsConfigError::ZeroLimit("max_output_tokens"));
+        }
+        self.max_output_tokens = max_output_tokens;
+        Ok(self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChatCompletionsConfigError {
+    InvalidBaseUrl(String),
+    EmptyApiKey,
+    EmptyModel,
+    ZeroLimit(&'static str),
+}
+
+impl fmt::Display for ChatCompletionsConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidBaseUrl(error) => {
+                write!(formatter, "invalid Chat Completions base URL: {error}")
+            }
+            Self::EmptyApiKey => {
+                formatter.write_str("the Chat Completions API key cannot be empty")
+            }
+            Self::EmptyModel => {
+                formatter.write_str("the Chat Completions model name cannot be empty")
+            }
+            Self::ZeroLimit(name) => {
+                write!(
+                    formatter,
+                    "Chat Completions {name} must be greater than zero"
+                )
+            }
+        }
+    }
+}
+
+impl Error for ChatCompletionsConfigError {}
+
+/// A client for one explicitly configured OpenAI-compatible endpoint.
+///
+/// Construction performs no network discovery. The first real transcript
+/// window is the canary for endpoint access, model availability, tool calling,
+/// and JSON output.
+pub struct ChatCompletionsClient {
+    transport: Client,
+    target: ServiceTarget,
+    options: ChatOptions,
+    max_tool_rounds: usize,
+    max_search_results: usize,
+}
+
+impl ChatCompletionsClient {
+    pub fn new(config: ChatCompletionsConfig) -> Self {
+        let target = ServiceTarget {
+            endpoint: Endpoint::from_owned(config.base_url.to_string()),
+            auth: AuthData::from_single(config.api_key),
+            model: ModelIden::new(AdapterKind::OpenAI, config.model),
+        };
+        let options = ChatOptions::default()
+            .with_temperature(0.0)
+            .with_max_tokens(config.max_output_tokens)
+            .with_response_format(ChatResponseFormat::JsonMode)
+            .with_tool_choice(ToolChoice::Auto)
+            .with_capture_raw_body(true);
+
+        Self {
+            transport: Client::default(),
+            target,
+            options,
+            max_tool_rounds: config.max_tool_rounds,
+            max_search_results: config.max_search_results,
+        }
+    }
+
+    /// Runs the complete tool-calling conversation for one transcript window.
+    pub async fn annotate_window(
+        &self,
+        sources: &ValidatedSources,
+        scorer: &dyn SlideScorer,
+        task: &TranscriptWindowTask<'_>,
+    ) -> Result<AnnotationResult, ChatCompletionsError> {
+        let message = task
+            .message()
+            .map_err(ChatCompletionsError::SerializeTask)?;
+        let instructions = format!(
+            "{}\n\n工具调用预算：最多可以进行 {} 轮工具调用。一轮可以同时调用多个工具。收到最后一轮的工具结果后，必须直接返回最终 JSON，不得继续调用工具。",
+            message.instructions, self.max_tool_rounds
+        );
+        let mut request = ChatRequest::from_user(message.input)
+            .with_system(instructions)
+            .with_tools(tool_definitions(self.max_search_results));
+        let mut session = AnnotationToolSession::for_task(sources, scorer, task);
+        let mut diagnostics = AnnotationDiagnostics::default();
+
+        loop {
+            let response = self.chat(request.clone()).await?;
+            ensure_one_choice(&response)?;
+            diagnostics.record(&response);
+            let tool_calls: Vec<_> = response.tool_calls().into_iter().cloned().collect();
+
+            if !tool_calls.is_empty() {
+                if !matches!(response.stop_reason.as_ref(), Some(StopReason::ToolCall(_))) {
+                    return Err(unexpected_finish_reason(&response, true));
+                }
+                if diagnostics.tool_rounds == self.max_tool_rounds {
+                    return Err(ChatCompletionsError::ToolRoundLimit {
+                        limit: self.max_tool_rounds,
+                    });
+                }
+                diagnostics.tool_rounds += 1;
+
+                let tool_responses = tool_calls
+                    .iter()
+                    .map(|tool_call| {
+                        self.execute_tool_call(&mut session, tool_call)
+                            .map(|content| ToolResponse::from_tool_call(tool_call, content))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                request = request
+                    .append_message(tool_calls)
+                    .append_message(tool_responses);
+                continue;
+            }
+
+            match response.stop_reason.as_ref() {
+                Some(StopReason::Completed(_)) => {}
+                Some(StopReason::MaxTokens(_)) => {
+                    return Err(ChatCompletionsError::OutputTruncated);
+                }
+                _ => return Err(unexpected_finish_reason(&response, false)),
+            }
+            let content = response
+                .first_text()
+                .filter(|content| !content.trim().is_empty())
+                .ok_or(ChatCompletionsError::MissingAssistantContent)?;
+            let (analysis, accepted_json_fence) = parse_analysis(content)?;
+            diagnostics.accepted_json_fence = accepted_json_fence;
+            validate_window_analysis(sources, task, &analysis)
+                .map_err(ChatCompletionsError::InvalidWindowAnalysis)?;
+            return Ok(AnnotationResult {
+                analysis,
+                diagnostics,
+            });
+        }
+    }
+
+    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ChatCompletionsError> {
+        self.transport
+            .exec_chat(self.target.clone(), request, Some(&self.options))
+            .await
+            .map_err(provider_error)
+    }
+
+    fn execute_tool_call(
+        &self,
+        session: &mut AnnotationToolSession<'_>,
+        tool_call: &ToolCall,
+    ) -> Result<String, ChatCompletionsError> {
+        match tool_call.fn_name.as_str() {
+            "inspect_slide" => {
+                let arguments = match serde_json::from_value::<InspectSlideArguments>(
+                    tool_call.fn_arguments.clone(),
+                ) {
+                    Ok(arguments) => arguments,
+                    Err(error) => return invalid_arguments("inspect_slide", error),
+                };
+                match session.inspect_slide(arguments.slide_id) {
+                    Ok(evidence) => serde_json::to_string(&evidence)
+                        .map_err(ChatCompletionsError::SerializeTool),
+                    Err(AnnotationToolError::UnknownSlide { slide }) => {
+                        tool_error("unknown_slide", format!("slide {} does not exist", slide.0))
+                    }
+                    Err(error) => Err(ChatCompletionsError::Tool(error)),
+                }
+            }
+            "search_slides" => {
+                let arguments = match serde_json::from_value::<SearchSlidesArguments>(
+                    tool_call.fn_arguments.clone(),
+                ) {
+                    Ok(arguments) => arguments,
+                    Err(error) => return invalid_arguments("search_slides", error),
+                };
+                if arguments.query.trim().is_empty() {
+                    return tool_error("invalid_arguments", "search query cannot be empty");
+                }
+                if arguments.max_results == 0 || arguments.max_results > self.max_search_results {
+                    return tool_error(
+                        "invalid_arguments",
+                        format!(
+                            "max_results must be between 1 and {}",
+                            self.max_search_results
+                        ),
+                    );
+                }
+                let evidence = session
+                    .search_slides(&arguments.query, arguments.max_results)
+                    .map_err(ChatCompletionsError::Tool)?;
+                serde_json::to_string(&evidence).map_err(ChatCompletionsError::SerializeTool)
+            }
+            name => tool_error(
+                "unknown_tool",
+                format!("unknown tool {name:?}; expected inspect_slide or search_slides"),
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnnotationResult {
+    pub analysis: TranscriptWindowAnalysis,
+    pub diagnostics: AnnotationDiagnostics,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnnotationDiagnostics {
+    pub tool_rounds: usize,
+    /// Sum across every response, or `None` if any prompt-token count was absent or invalid.
+    pub prompt_tokens: Option<u64>,
+    /// Sum across every response, or `None` if any completion-token count was absent or invalid.
+    pub completion_tokens: Option<u64>,
+    /// True when a whole-response `json` code fence had to be removed.
+    pub accepted_json_fence: bool,
+}
+
+impl Default for AnnotationDiagnostics {
+    fn default() -> Self {
+        Self {
+            tool_rounds: 0,
+            prompt_tokens: Some(0),
+            completion_tokens: Some(0),
+            accepted_json_fence: false,
+        }
+    }
+}
+
+impl AnnotationDiagnostics {
+    fn record(&mut self, response: &ChatResponse) {
+        self.prompt_tokens = add_token_count(self.prompt_tokens, response.usage.prompt_tokens);
+        self.completion_tokens =
+            add_token_count(self.completion_tokens, response.usage.completion_tokens);
+    }
+}
+
+fn add_token_count(total: Option<u64>, count: Option<i32>) -> Option<u64> {
+    total?.checked_add(u64::try_from(count?).ok()?)
+}
+
+#[derive(Debug)]
+pub enum ChatCompletionsError {
+    Provider(String),
+    SerializeTask(serde_json::Error),
+    UnexpectedChoiceCount {
+        actual: usize,
+    },
+    UnexpectedFinishReason {
+        reason: String,
+        has_tool_calls: bool,
+    },
+    MissingAssistantContent,
+    OutputTruncated,
+    ToolRoundLimit {
+        limit: usize,
+    },
+    Tool(AnnotationToolError),
+    SerializeTool(serde_json::Error),
+    InvalidAnalysisJson(serde_json::Error),
+    InvalidWindowAnalysis(AnalysisAssemblyError),
+}
+
+impl fmt::Display for ChatCompletionsError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Provider(error) => {
+                write!(formatter, "the model endpoint request failed: {error}")
+            }
+            Self::SerializeTask(error) => write!(
+                formatter,
+                "could not serialize the transcript-window task: {error}"
+            ),
+            Self::UnexpectedChoiceCount { actual } => {
+                write!(
+                    formatter,
+                    "the model endpoint returned {actual} choices instead of exactly one"
+                )
+            }
+            Self::UnexpectedFinishReason {
+                reason,
+                has_tool_calls,
+            } => write!(
+                formatter,
+                "the model finished with reason {reason:?} (tool calls present: {has_tool_calls})"
+            ),
+            Self::MissingAssistantContent => formatter
+                .write_str("the model returned neither tool calls nor final assistant content"),
+            Self::OutputTruncated => formatter.write_str(
+                "the model exhausted the output-token limit before returning a complete analysis",
+            ),
+            Self::ToolRoundLimit { limit } => write!(
+                formatter,
+                "the model requested more than the configured {limit} tool-call rounds"
+            ),
+            Self::Tool(error) => write!(formatter, "annotation tool failed: {error}"),
+            Self::SerializeTool(error) => {
+                write!(
+                    formatter,
+                    "could not serialize an annotation tool result: {error}"
+                )
+            }
+            Self::InvalidAnalysisJson(error) => {
+                write!(
+                    formatter,
+                    "the model's final content is not a TranscriptWindowAnalysis JSON object: {error}"
+                )
+            }
+            Self::InvalidWindowAnalysis(error) => {
+                write!(
+                    formatter,
+                    "the model returned an invalid transcript-window analysis: {error}"
+                )
+            }
+        }
+    }
+}
+
+impl Error for ChatCompletionsError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::SerializeTask(error)
+            | Self::SerializeTool(error)
+            | Self::InvalidAnalysisJson(error) => Some(error),
+            Self::Tool(error) => Some(error),
+            Self::InvalidWindowAnalysis(error) => Some(error),
+            Self::Provider(_)
+            | Self::UnexpectedChoiceCount { .. }
+            | Self::UnexpectedFinishReason { .. }
+            | Self::MissingAssistantContent
+            | Self::OutputTruncated
+            | Self::ToolRoundLimit { .. } => None,
+        }
+    }
+}
+
+fn provider_error(error: genai::Error) -> ChatCompletionsError {
+    let message = match error {
+        genai::Error::ChatResponseGeneration { cause, .. } => {
+            format!("the response could not be decoded: {cause}")
+        }
+        error => error.to_string(),
+    };
+    ChatCompletionsError::Provider(
+        message
+            .chars()
+            .take(MAX_PROVIDER_ERROR_CHARACTERS)
+            .collect(),
+    )
+}
+
+fn ensure_one_choice(response: &ChatResponse) -> Result<(), ChatCompletionsError> {
+    let actual = response
+        .captured_raw_body
+        .as_ref()
+        .and_then(|body| body.get("choices"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    if actual == 1 {
+        Ok(())
+    } else {
+        Err(ChatCompletionsError::UnexpectedChoiceCount { actual })
+    }
+}
+
+fn unexpected_finish_reason(response: &ChatResponse, has_tool_calls: bool) -> ChatCompletionsError {
+    ChatCompletionsError::UnexpectedFinishReason {
+        reason: response
+            .stop_reason
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "<missing>".into()),
+        has_tool_calls,
+    }
+}
+
+fn parse_analysis(content: &str) -> Result<(TranscriptWindowAnalysis, bool), ChatCompletionsError> {
+    let content = content.trim();
+    match serde_json::from_str(content) {
+        Ok(analysis) => Ok((analysis, false)),
+        Err(direct_error) => {
+            let Some(payload) = strip_json_fence(content) else {
+                return Err(ChatCompletionsError::InvalidAnalysisJson(direct_error));
+            };
+            serde_json::from_str(payload)
+                .map(|analysis| (analysis, true))
+                .map_err(ChatCompletionsError::InvalidAnalysisJson)
+        }
+    }
+}
+
+fn strip_json_fence(content: &str) -> Option<&str> {
+    let content = content.strip_prefix("```json")?;
+    let content = content
+        .strip_prefix("\r\n")
+        .or_else(|| content.strip_prefix('\n'))?;
+    let content = content.strip_suffix("```")?;
+    Some(content.trim())
+}
+
+fn invalid_arguments(
+    tool: &'static str,
+    error: serde_json::Error,
+) -> Result<String, ChatCompletionsError> {
+    tool_error(
+        "invalid_arguments",
+        format!("invalid {tool} arguments: {error}"),
+    )
+}
+
+fn tool_error(
+    code: &'static str,
+    message: impl Into<String>,
+) -> Result<String, ChatCompletionsError> {
+    serde_json::to_string(&ToolErrorMessage {
+        status: "error",
+        code,
+        message: message.into(),
+    })
+    .map_err(ChatCompletionsError::SerializeTool)
+}
+
+fn tool_definitions(max_search_results: usize) -> [Tool; 2] {
+    [
+        Tool::new("inspect_slide")
+            .with_description("读取指定幻灯片；同一会话中已经可见的幻灯片不会重复返回正文。")
+            .with_schema(json!({
+                "type": "object",
+                "properties": {
+                    "slide_id": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "从零开始的幻灯片 ID"
+                    }
+                },
+                "required": ["slide_id"],
+                "additionalProperties": false
+            })),
+        Tool::new("search_slides")
+            .with_description(
+                "在整套幻灯片中检索与查询相关的页面；不会重复返回会话中已经可见的正文。",
+            )
+            .with_schema(json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "用于检索幻灯片的中文查询"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": max_search_results
+                    }
+                },
+                "required": ["query", "max_results"],
+                "additionalProperties": false
+            })),
+    ]
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InspectSlideArguments {
+    slide_id: SlideId,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SearchSlidesArguments {
+    query: String,
+    max_results: usize,
+}
+
+#[derive(Serialize)]
+struct ToolErrorMessage {
+    status: &'static str,
+    code: &'static str,
+    message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ANALYSIS: &str = r#"{
+        "passages": [{
+            "start": 0,
+            "end": 0,
+            "novelty": 1,
+            "connection_strength": 2,
+            "importance": 3,
+            "related_slides": []
+        }]
+    }"#;
+
+    #[test]
+    fn final_analysis_accepts_direct_json_or_one_whole_json_fence() {
+        let (_, direct_fence) = parse_analysis(ANALYSIS).expect("direct analysis JSON");
+        let (_, wrapped_fence) = parse_analysis(&format!("```json\n{ANALYSIS}\n```"))
+            .expect("whole-response JSON fence");
+
+        assert!(!direct_fence);
+        assert!(wrapped_fence);
+    }
+
+    #[test]
+    fn final_analysis_does_not_extract_json_from_prose() {
+        let error = parse_analysis(&format!("Here is the analysis:\n{ANALYSIS}"))
+            .expect_err("JSON surrounded by prose must be rejected");
+
+        assert!(matches!(
+            error,
+            ChatCompletionsError::InvalidAnalysisJson(_)
+        ));
+    }
+}

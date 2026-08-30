@@ -1,6 +1,7 @@
+mod chat_completions;
 mod tools;
 
-use std::{error::Error, fmt};
+use std::{collections::HashSet, error::Error, fmt};
 
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +11,10 @@ use crate::{
     build_windows,
 };
 
+pub use chat_completions::{
+    AnnotationDiagnostics, AnnotationResult, ChatCompletionsClient, ChatCompletionsConfig,
+    ChatCompletionsConfigError, ChatCompletionsError,
+};
 pub use tools::{AnnotationToolError, AnnotationToolSession, SlideEvidence};
 
 const SLIDE_NEIGHBORHOOD_RADIUS: usize = 3;
@@ -125,6 +130,18 @@ pub struct TranscriptWindowAnalysis {
     pub passages: Vec<LecturePassage>,
 }
 
+/// Checks one model response against the ownership contract of its task.
+///
+/// This catches a bad response before other transcript windows are sent. The
+/// complete run is still validated again when all window responses are assembled.
+pub fn validate_window_analysis(
+    sources: &ValidatedSources,
+    task: &TranscriptWindowTask<'_>,
+    analysis: &TranscriptWindowAnalysis,
+) -> Result<(), AnalysisAssemblyError> {
+    validate_owned_region(sources, task.window_number, task.owned_region, analysis)
+}
+
 /// Assembles one response per transcript window into a validated lecture analysis.
 ///
 /// Responses must be supplied in transcript-window order using the same windowing
@@ -147,60 +164,8 @@ pub fn assemble_window_analyses(
 
         let mut passages = Vec::new();
         for (window_index, (window, analysis)) in windows.iter().zip(window_analyses).enumerate() {
-            let owned_region = window.owned_region();
-            let owned_start = owned_region
-                .first()
-                .expect("transcript windows have non-empty owned regions")
-                .id;
-            let owned_end = owned_region
-                .last()
-                .expect("transcript windows have non-empty owned regions")
-                .id;
-            let owned_start_position = owned_start.index();
-            let owned_end_position = owned_end.index();
-            let mut next_uncovered = 0;
-            for passage in analysis.passages {
-                let start_position = passage.start.index();
-                let end_position = passage.end.index();
-                if end_position < start_position {
-                    return Err(AnalysisAssemblyError::InvalidAnalysis(
-                        ValidationError::PassageEndBeforeStart {
-                            start: passage.start,
-                            end: passage.end,
-                        },
-                    ));
-                }
-                if start_position < owned_start_position || end_position > owned_end_position {
-                    return Err(AnalysisAssemblyError::PassageOutsideOwnedRegion {
-                        window: window_index + 1,
-                        owned_start,
-                        owned_end,
-                        passage_start: passage.start,
-                        passage_end: passage.end,
-                    });
-                }
-                let Some(expected) = owned_region.get(next_uncovered) else {
-                    return Err(AnalysisAssemblyError::UnexpectedWindowPassage {
-                        window: window_index + 1,
-                        actual: passage.start,
-                    });
-                };
-                if passage.start != expected.id {
-                    return Err(AnalysisAssemblyError::WindowCoverageMismatch {
-                        window: window_index + 1,
-                        expected: expected.id,
-                        actual: passage.start,
-                    });
-                }
-                next_uncovered = end_position - owned_start_position + 1;
-                passages.push(passage);
-            }
-            if next_uncovered != owned_region.len() {
-                return Err(AnalysisAssemblyError::UncoveredWindowTail {
-                    window: window_index + 1,
-                    expected: owned_region[next_uncovered].id,
-                });
-            }
+            validate_owned_region(&sources, window_index + 1, window.owned_region(), &analysis)?;
+            passages.extend(analysis.passages);
         }
 
         passages
@@ -209,11 +174,98 @@ pub fn assemble_window_analyses(
         .map_err(AnalysisAssemblyError::InvalidAnalysis)
 }
 
+fn validate_owned_region(
+    sources: &ValidatedSources,
+    window: usize,
+    owned_region: &[TranscriptSentence],
+    analysis: &TranscriptWindowAnalysis,
+) -> Result<(), AnalysisAssemblyError> {
+    let Some((owned_start, owned_end)) = owned_region
+        .first()
+        .zip(owned_region.last())
+        .map(|(first, last)| (first.id, last.id))
+    else {
+        return Err(AnalysisAssemblyError::EmptyOwnedRegion { window });
+    };
+    let owned_start_position = owned_start.index();
+    let owned_end_position = owned_end.index();
+    let mut next_uncovered = 0;
+
+    for passage in &analysis.passages {
+        let start_position = passage.start.index();
+        let end_position = passage.end.index();
+        if end_position < start_position {
+            return Err(AnalysisAssemblyError::InvalidAnalysis(
+                ValidationError::PassageEndBeforeStart {
+                    start: passage.start,
+                    end: passage.end,
+                },
+            ));
+        }
+        if start_position < owned_start_position || end_position > owned_end_position {
+            return Err(AnalysisAssemblyError::PassageOutsideOwnedRegion {
+                window,
+                owned_start,
+                owned_end,
+                passage_start: passage.start,
+                passage_end: passage.end,
+            });
+        }
+        let Some(expected) = owned_region.get(next_uncovered) else {
+            return Err(AnalysisAssemblyError::UnexpectedWindowPassage {
+                window,
+                actual: passage.start,
+            });
+        };
+        if passage.start != expected.id {
+            return Err(AnalysisAssemblyError::WindowCoverageMismatch {
+                window,
+                expected: expected.id,
+                actual: passage.start,
+            });
+        }
+
+        let mut related_slides = HashSet::new();
+        for slide in &passage.related_slides {
+            if !related_slides.insert(*slide) {
+                return Err(AnalysisAssemblyError::InvalidAnalysis(
+                    ValidationError::DuplicateRelatedSlide {
+                        passage_start: passage.start,
+                        slide: *slide,
+                    },
+                ));
+            }
+            if sources.slide_deck().find(*slide).is_none() {
+                return Err(AnalysisAssemblyError::InvalidAnalysis(
+                    ValidationError::UnknownRelatedSlide {
+                        passage_start: passage.start,
+                        slide: *slide,
+                    },
+                ));
+            }
+        }
+
+        next_uncovered = end_position - owned_start_position + 1;
+    }
+
+    if let Some(expected) = owned_region.get(next_uncovered) {
+        return Err(AnalysisAssemblyError::UncoveredWindowTail {
+            window,
+            expected: expected.id,
+        });
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnalysisAssemblyError {
     WindowCountMismatch {
         expected: usize,
         actual: usize,
+    },
+    EmptyOwnedRegion {
+        window: usize,
     },
     PassageOutsideOwnedRegion {
         window: usize,
@@ -245,6 +297,12 @@ impl fmt::Display for AnalysisAssemblyError {
                 formatter,
                 "analysis expected {expected} transcript window responses but received {actual}"
             ),
+            Self::EmptyOwnedRegion { window } => {
+                write!(
+                    formatter,
+                    "transcript window {window} has an empty owned region"
+                )
+            }
             Self::PassageOutsideOwnedRegion {
                 window,
                 owned_start,
@@ -285,6 +343,7 @@ impl Error for AnalysisAssemblyError {
         match self {
             Self::InvalidAnalysis(error) => Some(error),
             Self::WindowCountMismatch { .. }
+            | Self::EmptyOwnedRegion { .. }
             | Self::PassageOutsideOwnedRegion { .. }
             | Self::WindowCoverageMismatch { .. }
             | Self::UnexpectedWindowPassage { .. }

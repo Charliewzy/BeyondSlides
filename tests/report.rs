@@ -9,7 +9,7 @@ fn report_presents_oral_additions_in_ranked_order() {
     let ranked = rank_oral_additions(&analysis);
 
     let report = render_report(&analysis, &ranked);
-    let ranked_starts: Vec<_> = [40, 130, 70]
+    let ranked_starts: Vec<_> = [3, 12, 6]
         .map(|start| {
             report
                 .find(&format!("data-ranked-passage-start=\"{start}\""))
@@ -51,7 +51,7 @@ fn report_preserves_every_passage_in_transcript_order() {
     let ranked = rank_oral_additions(&analysis);
 
     let report = render_report(&analysis, &ranked);
-    let transcript_starts: Vec<_> = [10, 40, 70, 100, 130]
+    let transcript_starts: Vec<_> = [0, 3, 6, 9, 12]
         .map(|start| {
             report
                 .find(&format!("data-transcript-passage-start=\"{start}\""))
@@ -81,7 +81,7 @@ fn report_packages_its_presentation_in_the_html_document() {
 fn transcript_evidence_becomes_the_title_when_summary_is_absent() {
     let transcript = Transcript {
         sentences: vec![TranscriptSentence {
-            id: SentenceId(10),
+            id: SentenceId(0),
             start_ms: 0,
             end_ms: 1_000,
             text: "<二分 & 查找>".to_owned(),
@@ -89,18 +89,18 @@ fn transcript_evidence_becomes_the_title_when_summary_is_absent() {
     };
     let slide_deck = SlideDeck {
         slides: vec![Slide {
-            id: SlideId(1),
+            id: SlideId(0),
             text: "二分查找".to_owned(),
         }],
     };
     let passages = LecturePassages {
         passages: vec![LecturePassage {
-            start: SentenceId(10),
-            end: SentenceId(10),
+            start: SentenceId(0),
+            end: SentenceId(0),
             novelty: Score5::try_from(3).expect("test score should be valid"),
             connection_strength: Score5::try_from(0).expect("test score should be valid"),
             importance: Score5::try_from(3).expect("test score should be valid"),
-            related_slides: vec![SlideId(1)],
+            related_slides: vec![SlideId(0)],
             summary: None,
             comparison_note: None,
         }],

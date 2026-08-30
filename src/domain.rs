@@ -6,9 +6,21 @@ use serde::{Deserialize, Serialize};
 #[serde(transparent)]
 pub struct SentenceId(pub u32);
 
+impl SentenceId {
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct SlideId(pub u32);
+
+impl SlideId {
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "u8")]
@@ -69,7 +81,7 @@ pub struct SlideDeck {
 
 impl SlideDeck {
     pub fn find(&self, id: SlideId) -> Option<&Slide> {
-        self.slides.iter().find(|slide| slide.id == id)
+        self.slides.get(id.index()).filter(|slide| slide.id == id)
     }
 }
 

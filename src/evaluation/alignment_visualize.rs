@@ -1,4 +1,4 @@
-use std::{collections::HashMap, error::Error, fmt};
+use std::{error::Error, fmt};
 
 use askama::Template;
 
@@ -32,14 +32,17 @@ pub fn render_alignment_visualization(
     if windows.is_empty() {
         return Err(AlignmentVisualizationError::NoWindows);
     }
-
-    let slide_positions: HashMap<_, _> = slide_deck
+    if let Some((position, slide)) = slide_deck
         .slides
         .iter()
         .enumerate()
-        .map(|(position, slide)| (slide.id, position))
-        .collect();
-    let expected_ids: Vec<_> = slide_deck.slides.iter().map(|slide| slide.id).collect();
+        .find(|(position, slide)| slide.id.index() != *position)
+    {
+        return Err(AlignmentVisualizationError::NonCanonicalSlideId {
+            position,
+            actual: slide.id,
+        });
+    }
     let mut cells = Vec::with_capacity(windows.len() * slide_deck.slides.len());
     let mut dp_points = Vec::with_capacity(windows.len());
     let mut visual_points = Vec::new();
@@ -51,7 +54,7 @@ pub fn render_alignment_visualization(
     let mut visual_window_count = 0;
 
     for (window_position, window) in windows.iter().enumerate() {
-        validate_window(window, &expected_ids, &slide_positions)?;
+        validate_window(window, slide_deck.slides.len())?;
         let x = CHART_LEFT + window_position * CELL_WIDTH;
         let normalized = normalize(window.slide_scores);
         for (slide_position, (score, strength)) in
@@ -62,17 +65,18 @@ pub fn render_alignment_visualization(
                 y: CHART_TOP + slide_position * CELL_HEIGHT,
                 fill: heat_color(*strength),
                 window_number: window.number,
-                slide_id: score.slide_id.0,
+                slide_number: slide_number(score.slide_id),
                 score: format!("{:.6}", score.score),
             });
         }
 
-        let inferred_position = slide_positions[&window.slide_position];
+        let inferred_position = window.slide_position.index();
         dp_points.push(point(x, inferred_position));
-        let visual_slide = visual_alignment
-            .and_then(|alignment| visual_slide_for_window(window, alignment, &slide_positions));
+        let visual_slide = visual_alignment.and_then(|alignment| {
+            visual_slide_for_window(window, alignment, slide_deck.slides.len())
+        });
         if let Some(visual_slide) = visual_slide {
-            let visual_position = slide_positions[&visual_slide];
+            let visual_position = visual_slide.index();
             visual_points.push(point(x, visual_position));
             visual_window_count += 1;
             if visual_slide == window.slide_position {
@@ -99,7 +103,7 @@ pub fn render_alignment_visualization(
                 "窗口 {}，{}，推断幻灯片 {}",
                 window.number,
                 format_range(window.start_ms, window.end_ms),
-                window.slide_position.0
+                slide_number(window.slide_position)
             ),
         });
         details.push(build_detail(
@@ -152,19 +156,19 @@ pub fn render_alignment_visualization(
 
 fn validate_window(
     window: &AlignmentVisualizationWindow<'_>,
-    expected_ids: &[SlideId],
-    slide_positions: &HashMap<SlideId, usize>,
+    slide_count: usize,
 ) -> Result<(), AlignmentVisualizationError> {
     if window.start_ms > window.end_ms {
         return Err(AlignmentVisualizationError::ReversedWindow {
             window: window.number,
         });
     }
-    if window
-        .slide_scores
-        .iter()
-        .map(|score| score.slide_id)
-        .ne(expected_ids.iter().copied())
+    if window.slide_scores.len() != slide_count
+        || window
+            .slide_scores
+            .iter()
+            .enumerate()
+            .any(|(position, score)| score.slide_id.index() != position)
     {
         return Err(AlignmentVisualizationError::InconsistentSlideScores {
             window: window.number,
@@ -180,7 +184,7 @@ fn validate_window(
             slide_id: score.slide_id,
         });
     }
-    if !slide_positions.contains_key(&window.slide_position) {
+    if window.slide_position.index() >= slide_count {
         return Err(AlignmentVisualizationError::UnknownSlidePosition {
             window: window.number,
             slide_id: window.slide_position,
@@ -225,7 +229,7 @@ fn chart_y(slide_position: usize) -> usize {
 fn visual_slide_for_window(
     window: &AlignmentVisualizationWindow<'_>,
     alignment: &VisualAlignment,
-    slide_positions: &HashMap<SlideId, usize>,
+    slide_count: usize,
 ) -> Option<SlideId> {
     let frames: Vec<_> = alignment
         .frame_matches
@@ -246,20 +250,23 @@ fn visual_slide_for_window(
         frames
     };
 
-    let mut counts = HashMap::new();
+    let mut counts = vec![0_usize; slide_count];
     for frame in frames {
-        if slide_positions.contains_key(&frame.best.slide_id) {
-            *counts.entry(frame.best.slide_id).or_insert(0_usize) += 1;
+        if let Some(count) = counts.get_mut(frame.best.slide_id.index()) {
+            *count += 1;
         }
     }
-    counts
-        .into_iter()
-        .max_by(|(left_id, left_count), (right_id, right_count)| {
+    let (position, count) = counts.into_iter().enumerate().max_by(
+        |(left_position, left_count), (right_position, right_count)| {
             left_count
                 .cmp(right_count)
-                .then_with(|| slide_positions[right_id].cmp(&slide_positions[left_id]))
-        })
-        .map(|(slide_id, _)| slide_id)
+                .then_with(|| right_position.cmp(left_position))
+        },
+    )?;
+    (count > 0)
+        .then_some(position)
+        .and_then(|position| u32::try_from(position).ok())
+        .map(SlideId)
 }
 
 fn build_detail<'a>(
@@ -275,7 +282,7 @@ fn build_detail<'a>(
     let nearby_slides = slide_deck.slides[nearby_start..nearby_end]
         .iter()
         .map(|slide| NearbySlide {
-            id: slide.id.0,
+            number: slide_number(slide.id),
             text: slide.text.as_str(),
             inferred: slide.id == window.slide_position,
             visual: visual_slide == Some(slide.id),
@@ -293,7 +300,7 @@ fn build_detail<'a>(
         .into_iter()
         .take(5)
         .map(|(position, (score, strength))| ScoreBar {
-            slide_id: score.slide_id.0,
+            slide_number: slide_number(score.slide_id),
             text: slide_deck.slides[position].text.as_str(),
             score: format!("{:.6}", score.score),
             width: (strength * 100.0).round() as u8,
@@ -305,9 +312,9 @@ fn build_detail<'a>(
         hidden: !selected,
         timestamp: format_range(window.start_ms, window.end_ms),
         transcript: window.transcript,
-        inferred_slide: window.slide_position.0,
+        inferred_slide_number: slide_number(window.slide_position),
         has_visual_slide: visual_slide.is_some(),
-        visual_slide: visual_slide.map_or(0, |slide| slide.0),
+        visual_slide_number: visual_slide.map_or(0, slide_number),
         mismatch: visual_slide.is_some_and(|slide| slide != window.slide_position),
         nearby_slides,
         top_scores,
@@ -338,9 +345,13 @@ fn slide_ticks(slide_deck: &SlideDeck) -> Vec<AxisTick> {
         .map(|(position, slide)| AxisTick {
             x: CHART_LEFT - 8,
             y: CHART_TOP + position * CELL_HEIGHT + CELL_HEIGHT / 2 + 3,
-            label: slide.id.0.to_string(),
+            label: slide_number(slide.id).to_string(),
         })
         .collect()
+}
+
+fn slide_number(id: SlideId) -> u64 {
+    u64::from(id.0) + 1
 }
 
 fn format_range(start_ms: u64, end_ms: u64) -> String {
@@ -385,7 +396,7 @@ struct HeatmapCell {
     y: usize,
     fill: String,
     window_number: usize,
-    slide_id: u32,
+    slide_number: u64,
     score: String,
 }
 
@@ -419,23 +430,23 @@ struct WindowDetail<'a> {
     hidden: bool,
     timestamp: String,
     transcript: &'a str,
-    inferred_slide: u32,
+    inferred_slide_number: u64,
     has_visual_slide: bool,
-    visual_slide: u32,
+    visual_slide_number: u64,
     mismatch: bool,
     nearby_slides: Vec<NearbySlide<'a>>,
     top_scores: Vec<ScoreBar<'a>>,
 }
 
 struct NearbySlide<'a> {
-    id: u32,
+    number: u64,
     text: &'a str,
     inferred: bool,
     visual: bool,
 }
 
 struct ScoreBar<'a> {
-    slide_id: u32,
+    slide_number: u64,
     text: &'a str,
     score: String,
     width: u8,
@@ -445,6 +456,7 @@ struct ScoreBar<'a> {
 pub enum AlignmentVisualizationError {
     EmptySlideDeck,
     NoWindows,
+    NonCanonicalSlideId { position: usize, actual: SlideId },
     ReversedWindow { window: usize },
     InconsistentSlideScores { window: usize },
     NonFiniteScore { window: usize, slide_id: SlideId },
@@ -457,6 +469,11 @@ impl fmt::Display for AlignmentVisualizationError {
         match self {
             Self::EmptySlideDeck => write!(formatter, "cannot render alignment without slides"),
             Self::NoWindows => write!(formatter, "cannot render alignment without windows"),
+            Self::NonCanonicalSlideId { position, actual } => write!(
+                formatter,
+                "slide at position {position} must have ID {position}, found {}",
+                actual.0
+            ),
             Self::ReversedWindow { window } => {
                 write!(formatter, "alignment window {window} ends before it starts")
             }

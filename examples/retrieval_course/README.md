@@ -8,7 +8,8 @@ queries split evenly between:
 - exact technical terms, identifiers, and formulas;
 - mixed Chinese and English technical language.
 
-Each query names one or more human-selected relevant slide IDs. Run the
+Each query names one or more human-selected relevant slide IDs. As normalized
+source references, those IDs are canonical zero-based slide positions. Run the
 comparison with:
 
 ```sh

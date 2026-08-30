@@ -65,7 +65,6 @@ pub fn import_tsv(input: &str) -> Result<Transcript, ImportError> {
 
         let id = u32::try_from(sentences.len())
             .ok()
-            .and_then(|id| id.checked_add(1))
             .map(SentenceId)
             .ok_or(ImportError::TooManyRows)?;
         sentences.push(TranscriptSentence {

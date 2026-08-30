@@ -1,51 +1,51 @@
 {
   "slides": [
     {
-      "id": 101,
+      "id": 0,
       "text": "梯度消失：深层神经网络的反向传播信号逐层减弱。残差连接提供恒等捷径，帮助梯度传播。"
     },
     {
-      "id": 102,
+      "id": 1,
       "text": "学习率调度：训练初期使用 warmup，随后采用 cosine decay，兼顾稳定性与收敛速度。"
     },
     {
-      "id": 103,
+      "id": 2,
       "text": "过拟合与正则化：Dropout 随机屏蔽神经元，L2 weight decay 限制参数规模。"
     },
     {
-      "id": 104,
+      "id": 3,
       "text": "自注意力使用 Q、K、V 计算 scaled dot-product attention，缩放因子为 sqrt(d_k)，复杂度为 O(n²)。"
     },
     {
-      "id": 105,
+      "id": 4,
       "text": "BatchNorm：训练阶段使用 mini-batch 均值和方差；推理阶段使用 moving mean 与 moving variance。"
     },
     {
-      "id": 106,
+      "id": 5,
       "text": "AdamW 将 weight decay 与梯度更新解耦；Adam 的 L2 正则项会与自适应学习率发生耦合。"
     },
     {
-      "id": 107,
+      "id": 6,
       "text": "二分查找维护闭区间 [left, right] 的循环不变式，时间复杂度 O(log n)，注意 off-by-one 错误。"
     },
     {
-      "id": 108,
+      "id": 7,
       "text": "CPU 缓存利用空间局部性：连续访问同一 cache line，减少主存访问和 cache miss。"
     },
     {
-      "id": 109,
+      "id": 8,
       "text": "FP16 混合精度训练使用 loss scaling，避免微小梯度 underflow，并检测数值 overflow。"
     },
     {
-      "id": 110,
+      "id": 9,
       "text": "类别不平衡时不能只看 accuracy。precision 衡量预测为正的可靠性，recall 衡量正例覆盖率，F1 是二者的调和平均。"
     },
     {
-      "id": 111,
+      "id": 10,
       "text": "多分类交叉熵建立在 softmax 概率之上；实现时使用 log-sum-exp 技巧避免指数运算溢出。"
     },
     {
-      "id": 112,
+      "id": 11,
       "text": "数据增强通过裁剪、翻转和颜色扰动注入合理不变性，提高训练样本多样性与模型泛化能力。"
     }
   ]

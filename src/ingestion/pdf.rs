@@ -80,10 +80,9 @@ fn normalize_pages(extracted: &str) -> Result<ImportedDeck, ImportError> {
         }
 
         let id = u32::try_from(position)
-            .ok()
-            .and_then(|id| id.checked_add(1))
             .map(SlideId)
-            .ok_or(ImportError::TooManyPages)?;
+            .map_err(|_| ImportError::TooManyPages)?;
+        let page = id.0.checked_add(1).ok_or(ImportError::TooManyPages)?;
         let text = lines.join("\n");
         let non_whitespace_characters = text
             .chars()
@@ -91,7 +90,7 @@ fn normalize_pages(extracted: &str) -> Result<ImportedDeck, ImportError> {
             .count();
         if non_whitespace_characters < SPARSE_TEXT_THRESHOLD {
             warnings.push(ImportWarning::SparseText {
-                page: id.0,
+                page,
                 non_whitespace_characters,
             });
         }
@@ -102,7 +101,7 @@ fn normalize_pages(extracted: &str) -> Result<ImportedDeck, ImportError> {
             .into_iter()
             .collect();
         if !glyphs.is_empty() {
-            warnings.push(ImportWarning::SuspiciousGlyphs { page: id.0, glyphs });
+            warnings.push(ImportWarning::SuspiciousGlyphs { page, glyphs });
         }
         slides.push(Slide { id, text });
     }

@@ -1,8 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    error::Error,
-    fmt,
-};
+use std::{collections::HashSet, error::Error, fmt};
 
 use crate::{LecturePassage, LecturePassages, SentenceId, SlideDeck, SlideId, Transcript};
 
@@ -10,16 +6,16 @@ use crate::{LecturePassage, LecturePassages, SentenceId, SlideDeck, SlideId, Tra
 pub struct ValidatedSources {
     transcript: Transcript,
     slide_deck: SlideDeck,
-    sentence_positions: HashMap<SentenceId, usize>,
-    slide_ids: HashSet<SlideId>,
 }
 
 impl ValidatedSources {
     pub fn new(transcript: Transcript, slide_deck: SlideDeck) -> Result<Self, ValidationError> {
-        let mut sentence_positions = HashMap::new();
         for (position, sentence) in transcript.sentences.iter().enumerate() {
-            if sentence_positions.insert(sentence.id, position).is_some() {
-                return Err(ValidationError::DuplicateSentenceId { id: sentence.id });
+            if sentence.id.index() != position {
+                return Err(ValidationError::NonCanonicalSentenceId {
+                    position,
+                    actual: sentence.id,
+                });
             }
             if sentence.text.trim().is_empty() {
                 return Err(ValidationError::EmptyTranscriptSentence { id: sentence.id });
@@ -43,18 +39,18 @@ impl ValidatedSources {
             }
         }
 
-        let mut slide_ids = HashSet::new();
-        for slide in &slide_deck.slides {
-            if !slide_ids.insert(slide.id) {
-                return Err(ValidationError::DuplicateSlideId { id: slide.id });
+        for (position, slide) in slide_deck.slides.iter().enumerate() {
+            if slide.id.index() != position {
+                return Err(ValidationError::NonCanonicalSlideId {
+                    position,
+                    actual: slide.id,
+                });
             }
         }
 
         Ok(Self {
             transcript,
             slide_deck,
-            sentence_positions,
-            slide_ids,
         })
     }
 
@@ -78,19 +74,20 @@ impl ValidatedAnalysis {
         sources: ValidatedSources,
         passages: LecturePassages,
     ) -> Result<Self, ValidationError> {
+        let mut next_uncovered = 0;
         for passage in &passages.passages {
-            let Some(&start_position) = sources.sentence_positions.get(&passage.start) else {
+            let Some(_) = sources.transcript.sentences.get(passage.start.index()) else {
                 return Err(ValidationError::UnknownPassageStart {
                     start: passage.start,
                 });
             };
-            let Some(&end_position) = sources.sentence_positions.get(&passage.end) else {
+            let Some(_) = sources.transcript.sentences.get(passage.end.index()) else {
                 return Err(ValidationError::UnknownPassageEnd {
                     passage_start: passage.start,
                     end: passage.end,
                 });
             };
-            if end_position < start_position {
+            if passage.end.index() < passage.start.index() {
                 return Err(ValidationError::PassageEndBeforeStart {
                     start: passage.start,
                     end: passage.end,
@@ -104,40 +101,25 @@ impl ValidatedAnalysis {
                         slide: *slide,
                     });
                 }
-                if !sources.slide_ids.contains(slide) {
+                if sources.slide_deck.find(*slide).is_none() {
                     return Err(ValidationError::UnknownRelatedSlide {
                         passage_start: passage.start,
                         slide: *slide,
                     });
                 }
             }
-        }
-
-        let mut next_uncovered = 0;
-        for passage in &passages.passages {
-            let Some(&start_position) = sources.sentence_positions.get(&passage.start) else {
-                return Err(ValidationError::UnknownPassageStart {
-                    start: passage.start,
-                });
-            };
-            let Some(&end_position) = sources.sentence_positions.get(&passage.end) else {
-                return Err(ValidationError::UnknownPassageEnd {
-                    passage_start: passage.start,
-                    end: passage.end,
-                });
-            };
             let Some(expected) = sources.transcript.sentences.get(next_uncovered) else {
                 return Err(ValidationError::UnexpectedPassage {
                     actual: passage.start,
                 });
             };
-            if start_position != next_uncovered {
+            if passage.start != expected.id {
                 return Err(ValidationError::PassageCoverageMismatch {
                     expected: expected.id,
                     actual: passage.start,
                 });
             }
-            next_uncovered = end_position + 1;
+            next_uncovered = passage.end.index() + 1;
         }
         if let Some(expected) = sources.transcript.sentences.get(next_uncovered) {
             return Err(ValidationError::UncoveredTranscriptTail {
@@ -163,8 +145,9 @@ impl ValidatedAnalysis {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
-    DuplicateSentenceId {
-        id: SentenceId,
+    NonCanonicalSentenceId {
+        position: usize,
+        actual: SentenceId,
     },
     EmptyTranscriptSentence {
         id: SentenceId,
@@ -178,8 +161,9 @@ pub enum ValidationError {
         previous: SentenceId,
         current: SentenceId,
     },
-    DuplicateSlideId {
-        id: SlideId,
+    NonCanonicalSlideId {
+        position: usize,
+        actual: SlideId,
     },
     UnknownRelatedSlide {
         passage_start: SentenceId,
@@ -215,9 +199,11 @@ pub enum ValidationError {
 impl fmt::Display for ValidationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::DuplicateSentenceId { id } => {
-                write!(formatter, "duplicate transcript sentence ID: {}", id.0)
-            }
+            Self::NonCanonicalSentenceId { position, actual } => write!(
+                formatter,
+                "transcript sentence at position {position} must have ID {position}, found {}",
+                actual.0
+            ),
             Self::EmptyTranscriptSentence { id } => {
                 write!(formatter, "transcript sentence {} has empty text", id.0)
             }
@@ -235,9 +221,11 @@ impl fmt::Display for ValidationError {
                 "transcript sentence {} appears before sentence {} in time",
                 current.0, previous.0
             ),
-            Self::DuplicateSlideId { id } => {
-                write!(formatter, "duplicate slide ID: {}", id.0)
-            }
+            Self::NonCanonicalSlideId { position, actual } => write!(
+                formatter,
+                "slide at position {position} must have ID {position}, found {}",
+                actual.0
+            ),
             Self::UnknownRelatedSlide {
                 passage_start,
                 slide,

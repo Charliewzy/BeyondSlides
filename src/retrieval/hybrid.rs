@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use super::{SearchError, SlideScore, SlideScorer};
 
 const RRF_K: f64 = 60.0;
@@ -28,30 +26,33 @@ impl SlideScorer for HybridSlideScorer<'_> {
             return Err(SearchError::IncompatibleSlideScores);
         }
 
-        let mut fused_scores = HashMap::new();
+        let mut fused_scores = vec![0.0; lexical_scores.len()];
         for scores in [&lexical_scores, &dense_scores] {
-            let mut ranked: Vec<_> = scores.iter().filter(|score| score.score > 0.0).collect();
-            ranked.sort_by(|left, right| right.score.total_cmp(&left.score));
+            let mut ranked: Vec<_> = scores
+                .iter()
+                .enumerate()
+                .filter(|(_, score)| score.score > 0.0)
+                .collect();
+            ranked.sort_by(|left, right| right.1.score.total_cmp(&left.1.score));
+
+            let mut previous_score = None;
             let mut rank = 0;
-            for position in 0..ranked.len() {
-                if position == 0
-                    || ranked[position]
-                        .score
-                        .total_cmp(&ranked[position - 1].score)
-                        .is_ne()
-                {
-                    rank = position + 1;
+            for (ranked_position, (slide_position, score)) in ranked.into_iter().enumerate() {
+                if previous_score.is_none_or(|previous| previous != score.score) {
+                    rank = ranked_position + 1;
+                    previous_score = Some(score.score);
                 }
-                *fused_scores.entry(ranked[position].slide_id).or_insert(0.0) +=
-                    1.0 / (RRF_K + rank as f64);
+
+                fused_scores[slide_position] += 1.0 / (RRF_K + rank as f64);
             }
         }
 
         Ok(lexical_scores
             .into_iter()
-            .map(|score| SlideScore {
+            .zip(fused_scores)
+            .map(|(score, fused_score)| SlideScore {
                 slide_id: score.slide_id,
-                score: fused_scores.get(&score.slide_id).copied().unwrap_or(0.0),
+                score: fused_score,
             })
             .collect())
     }

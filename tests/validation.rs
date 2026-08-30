@@ -4,16 +4,19 @@ use beyond_slides::{
 };
 
 #[test]
-fn duplicate_transcript_sentence_id_is_rejected() {
+fn noncanonical_transcript_sentence_id_is_rejected() {
     let (mut transcript, slide_deck, _passages) = valid_analysis_parts();
     transcript.sentences[1].id = SentenceId(10);
 
     let error = ValidatedSources::new(transcript, slide_deck)
-        .expect_err("duplicate sentence IDs must be rejected");
+        .expect_err("a sentence ID must equal its zero-based position");
 
     assert_eq!(
         error,
-        ValidationError::DuplicateSentenceId { id: SentenceId(10) }
+        ValidationError::NonCanonicalSentenceId {
+            position: 1,
+            actual: SentenceId(10),
+        }
     );
 }
 
@@ -27,7 +30,7 @@ fn empty_transcript_sentence_text_is_rejected() {
 
     assert_eq!(
         error,
-        ValidationError::EmptyTranscriptSentence { id: SentenceId(20) }
+        ValidationError::EmptyTranscriptSentence { id: SentenceId(1) }
     );
 }
 
@@ -42,7 +45,7 @@ fn transcript_sentence_ending_before_it_starts_is_rejected() {
     assert_eq!(
         error,
         ValidationError::InvalidTranscriptSentenceTimeRange {
-            id: SentenceId(20),
+            id: SentenceId(1),
             start_ms: 2_001,
             end_ms: 2_000,
         }
@@ -61,21 +64,27 @@ fn transcript_sentence_times_must_follow_presentation_order() {
     assert_eq!(
         error,
         ValidationError::TranscriptSentenceOutOfOrder {
-            previous: SentenceId(10),
-            current: SentenceId(20),
+            previous: SentenceId(0),
+            current: SentenceId(1),
         }
     );
 }
 
 #[test]
-fn duplicate_slide_id_is_rejected() {
+fn noncanonical_slide_id_is_rejected() {
     let (transcript, mut slide_deck, _passages) = valid_analysis_parts();
-    slide_deck.slides[1].id = SlideId(1);
+    slide_deck.slides[1].id = SlideId(0);
 
     let error = ValidatedSources::new(transcript, slide_deck)
-        .expect_err("duplicate slide IDs must be rejected");
+        .expect_err("a slide ID must equal its zero-based position");
 
-    assert_eq!(error, ValidationError::DuplicateSlideId { id: SlideId(1) });
+    assert_eq!(
+        error,
+        ValidationError::NonCanonicalSlideId {
+            position: 1,
+            actual: SlideId(0),
+        }
+    );
 }
 
 #[test]
@@ -89,7 +98,7 @@ fn passage_related_slide_must_exist() {
     assert_eq!(
         error,
         ValidationError::UnknownRelatedSlide {
-            passage_start: SentenceId(20),
+            passage_start: SentenceId(1),
             slide: SlideId(99),
         }
     );
@@ -98,7 +107,7 @@ fn passage_related_slide_must_exist() {
 #[test]
 fn passage_related_slides_cannot_repeat() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
-    passages.passages[1].related_slides.push(SlideId(1));
+    passages.passages[1].related_slides.push(SlideId(0));
 
     let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("duplicate related slides must be rejected");
@@ -106,8 +115,8 @@ fn passage_related_slides_cannot_repeat() {
     assert_eq!(
         error,
         ValidationError::DuplicateRelatedSlide {
-            passage_start: SentenceId(20),
-            slide: SlideId(1),
+            passage_start: SentenceId(1),
+            slide: SlideId(0),
         }
     );
 }
@@ -135,7 +144,7 @@ fn oral_addition_may_omit_a_summary() {
 #[test]
 fn passage_start_must_reference_a_transcript_sentence() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
-    passages.passages[0].start = SentenceId(11);
+    passages.passages[0].start = SentenceId(3);
 
     let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("unknown passage starts must be rejected");
@@ -143,7 +152,7 @@ fn passage_start_must_reference_a_transcript_sentence() {
     assert_eq!(
         error,
         ValidationError::UnknownPassageStart {
-            start: SentenceId(11),
+            start: SentenceId(3),
         }
     );
 }
@@ -151,7 +160,7 @@ fn passage_start_must_reference_a_transcript_sentence() {
 #[test]
 fn passage_end_must_reference_a_transcript_sentence() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
-    passages.passages[1].end = SentenceId(31);
+    passages.passages[1].end = SentenceId(3);
 
     let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("unknown passage ends must be rejected");
@@ -159,8 +168,8 @@ fn passage_end_must_reference_a_transcript_sentence() {
     assert_eq!(
         error,
         ValidationError::UnknownPassageEnd {
-            passage_start: SentenceId(20),
-            end: SentenceId(31),
+            passage_start: SentenceId(1),
+            end: SentenceId(3),
         }
     );
 }
@@ -168,8 +177,8 @@ fn passage_end_must_reference_a_transcript_sentence() {
 #[test]
 fn passage_cannot_end_before_it_starts() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
-    passages.passages[0].start = SentenceId(20);
-    passages.passages[0].end = SentenceId(10);
+    passages.passages[0].start = SentenceId(1);
+    passages.passages[0].end = SentenceId(0);
 
     let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("reversed passage ranges must be rejected");
@@ -177,8 +186,8 @@ fn passage_cannot_end_before_it_starts() {
     assert_eq!(
         error,
         ValidationError::PassageEndBeforeStart {
-            start: SentenceId(20),
-            end: SentenceId(10),
+            start: SentenceId(1),
+            end: SentenceId(0),
         }
     );
 }
@@ -186,8 +195,8 @@ fn passage_cannot_end_before_it_starts() {
 #[test]
 fn first_passage_must_start_at_the_first_transcript_sentence() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
-    passages.passages[0].start = SentenceId(20);
-    passages.passages[0].end = SentenceId(20);
+    passages.passages[0].start = SentenceId(1);
+    passages.passages[0].end = SentenceId(1);
 
     let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("an uncovered transcript beginning must be rejected");
@@ -195,8 +204,8 @@ fn first_passage_must_start_at_the_first_transcript_sentence() {
     assert_eq!(
         error,
         ValidationError::PassageCoverageMismatch {
-            expected: SentenceId(10),
-            actual: SentenceId(20),
+            expected: SentenceId(0),
+            actual: SentenceId(1),
         }
     );
 }
@@ -204,7 +213,7 @@ fn first_passage_must_start_at_the_first_transcript_sentence() {
 #[test]
 fn consecutive_passages_cannot_leave_a_gap() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
-    passages.passages[1].start = SentenceId(30);
+    passages.passages[1].start = SentenceId(2);
 
     let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("a gap between lecture passages must be rejected");
@@ -212,8 +221,8 @@ fn consecutive_passages_cannot_leave_a_gap() {
     assert_eq!(
         error,
         ValidationError::PassageCoverageMismatch {
-            expected: SentenceId(20),
-            actual: SentenceId(30),
+            expected: SentenceId(1),
+            actual: SentenceId(2),
         }
     );
 }
@@ -221,7 +230,7 @@ fn consecutive_passages_cannot_leave_a_gap() {
 #[test]
 fn final_passage_must_reach_the_end_of_the_transcript() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
-    passages.passages[1].end = SentenceId(20);
+    passages.passages[1].end = SentenceId(1);
 
     let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("an uncovered transcript ending must be rejected");
@@ -229,7 +238,7 @@ fn final_passage_must_reach_the_end_of_the_transcript() {
     assert_eq!(
         error,
         ValidationError::UncoveredTranscriptTail {
-            expected: SentenceId(30),
+            expected: SentenceId(2),
         }
     );
 }
@@ -245,7 +254,7 @@ fn nonempty_transcript_requires_at_least_one_passage() {
     assert_eq!(
         error,
         ValidationError::UncoveredTranscriptTail {
-            expected: SentenceId(10),
+            expected: SentenceId(0),
         }
     );
 }
@@ -253,7 +262,7 @@ fn nonempty_transcript_requires_at_least_one_passage() {
 #[test]
 fn passage_after_the_transcript_is_already_covered_is_rejected() {
     let (transcript, slide_deck, mut passages) = valid_analysis_parts();
-    passages.passages[0].end = SentenceId(30);
+    passages.passages[0].end = SentenceId(2);
 
     let error = validate_analysis(transcript, slide_deck, passages)
         .expect_err("an extra overlapping passage must be rejected");
@@ -261,7 +270,7 @@ fn passage_after_the_transcript_is_already_covered_is_rejected() {
     assert_eq!(
         error,
         ValidationError::UnexpectedPassage {
-            actual: SentenceId(20),
+            actual: SentenceId(1),
         }
     );
 }
@@ -279,27 +288,27 @@ fn validate_analysis(
 fn valid_analysis_parts() -> (Transcript, SlideDeck, LecturePassages) {
     let transcript = Transcript {
         sentences: vec![
-            sentence(10, 0, 1_000, "The slide states the search procedure."),
-            sentence(20, 1_000, 2_000, "The lecturer adds an intuition."),
-            sentence(30, 2_000, 3_000, "The lecturer gives practical advice."),
+            sentence(0, 0, 1_000, "The slide states the search procedure."),
+            sentence(1, 1_000, 2_000, "The lecturer adds an intuition."),
+            sentence(2, 2_000, 3_000, "The lecturer gives practical advice."),
         ],
     };
     let slide_deck = SlideDeck {
         slides: vec![
             Slide {
-                id: SlideId(1),
+                id: SlideId(0),
                 text: "Search procedure".to_owned(),
             },
             Slide {
-                id: SlideId(2),
+                id: SlideId(1),
                 text: "Complexity".to_owned(),
             },
         ],
     };
     let passages = LecturePassages {
         passages: vec![
-            passage(10, 10, 0, 0, 1, vec![1], None),
-            passage(20, 30, 3, 2, 5, vec![1, 2], Some("A useful oral addition")),
+            passage(0, 0, 0, 0, 1, vec![0], None),
+            passage(1, 2, 3, 2, 5, vec![0, 1], Some("A useful oral addition")),
         ],
     };
 

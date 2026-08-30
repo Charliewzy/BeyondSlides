@@ -13,13 +13,13 @@ fn funasr_rows_become_individually_referenced_transcript_sentences() -> Result<(
         transcript.sentences,
         vec![
             TranscriptSentence {
-                id: SentenceId(1),
+                id: SentenceId(0),
                 start_ms: 8_800,
                 end_ms: 8_860,
                 text: "好".to_owned(),
             },
             TranscriptSentence {
-                id: SentenceId(2),
+                id: SentenceId(1),
                 start_ms: 31_640,
                 end_ms: 31_700,
                 text: "我们继续上课".to_owned(),
@@ -34,7 +34,7 @@ fn blank_lines_do_not_create_transcript_sentences() -> Result<(), Box<dyn Error>
     let transcript = import_tsv("start\tend\ttext\n\n0\t0.060\t好\n   \n0.500\t1\t下一句\n")?;
 
     assert_eq!(transcript.sentences.len(), 2);
-    assert_eq!(transcript.sentences[1].id, SentenceId(2));
+    assert_eq!(transcript.sentences[1].id, SentenceId(1));
     Ok(())
 }
 

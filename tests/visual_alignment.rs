@@ -19,9 +19,9 @@ fn video_frames_are_matched_to_rendered_pdf_pages() -> Result<(), Box<dyn Error>
     assert_eq!(alignment.sample_period_ms, 1_000);
     assert_eq!(alignment.frame_matches.len(), 2);
     assert_eq!(alignment.frame_matches[0].timestamp_ms, 0);
-    assert_eq!(alignment.frame_matches[0].best.slide_id, SlideId(1));
+    assert_eq!(alignment.frame_matches[0].best.slide_id, SlideId(0));
     assert_eq!(alignment.frame_matches[1].timestamp_ms, 1_000);
-    assert_eq!(alignment.frame_matches[1].best.slide_id, SlideId(2));
+    assert_eq!(alignment.frame_matches[1].best.slide_id, SlideId(1));
     for frame_match in alignment.frame_matches {
         let runner_up = frame_match
             .runner_up

@@ -13,19 +13,19 @@ fn pdf_pages_become_slides_without_a_repeated_footer() -> Result<(), Box<dyn Err
         imported.slide_deck.slides,
         vec![
             Slide {
-                id: SlideId(1),
+                id: SlideId(0),
                 text: "First slide".to_owned(),
             },
             Slide {
-                id: SlideId(2),
+                id: SlideId(1),
                 text: "Second slide".to_owned(),
             },
             Slide {
-                id: SlideId(3),
+                id: SlideId(2),
                 text: String::new(),
             },
             Slide {
-                id: SlideId(4),
+                id: SlideId(3),
                 text: "Last slide".to_owned(),
             },
         ]

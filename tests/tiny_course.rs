@@ -26,8 +26,8 @@ fn score_outside_zero_to_five_is_rejected_at_the_json_seam() {
         r#"
         {
           "passages": [{
-            "start": 10,
-            "end": 20,
+            "start": 0,
+            "end": 1,
             "novelty": 6,
             "connection_strength": 0,
             "importance": 0,

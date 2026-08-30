@@ -47,7 +47,7 @@
           <rect class="plot-background" x="{{ 54 }}" y="{{ 22 }}" width="{{ heatmap_width }}" height="{{ heatmap_height }}" />
 {% for cell in cells %}
           <rect class="heat-cell" x="{{ cell.x }}" y="{{ cell.y }}" width="8" height="7" fill="{{ cell.fill }}">
-            <title>窗口 {{ cell.window_number }} · 幻灯片 {{ cell.slide_id }} · 得分 {{ cell.score }}</title>
+            <title>窗口 {{ cell.window_number }} · 幻灯片 {{ cell.slide_number }} · 得分 {{ cell.score }}</title>
           </rect>
 {% endfor %}
 {% for connector in mismatch_connectors %}
@@ -89,9 +89,9 @@
             <h3>{{ detail.timestamp }}</h3>
           </div>
           <div class="position-pills">
-            <span class="position inferred">推断位置 · 幻灯片 {{ detail.inferred_slide }}</span>
+            <span class="position inferred">推断位置 · 幻灯片 {{ detail.inferred_slide_number }}</span>
 {% if detail.has_visual_slide %}
-            <span class="position visual{% if detail.mismatch %} mismatch{% endif %}">视觉参考 · 幻灯片 {{ detail.visual_slide }}</span>
+            <span class="position visual{% if detail.mismatch %} mismatch{% endif %}">视觉参考 · 幻灯片 {{ detail.visual_slide_number }}</span>
 {% endif %}
           </div>
         </header>
@@ -106,7 +106,7 @@
             <ol class="score-bars">
 {% for score in detail.top_scores %}
               <li>
-                <div class="score-label"><strong>幻灯片 {{ score.slide_id }}</strong><span>{{ score.score }}</span></div>
+                <div class="score-label"><strong>幻灯片 {{ score.slide_number }}</strong><span>{{ score.score }}</span></div>
                 <div class="bar-track"><span style="width: {{ score.width }}%"></span></div>
                 <p>{{ score.text }}</p>
               </li>
@@ -121,7 +121,7 @@
 {% for slide in detail.nearby_slides %}
             <article class="slide-card{% if slide.inferred %} inferred{% endif %}{% if slide.visual %} visual{% endif %}">
               <header>
-                <strong>幻灯片 {{ slide.id }}</strong>
+                <strong>幻灯片 {{ slide.number }}</strong>
 {% if slide.inferred %}<span>推断</span>{% endif %}
 {% if slide.visual %}<span>视觉</span>{% endif %}
               </header>

@@ -7,7 +7,7 @@ use beyond_slides::{
 fn normalized_sources_can_be_validated_before_analysis() {
     let transcript = Transcript {
         sentences: vec![TranscriptSentence {
-            id: SentenceId(10),
+            id: SentenceId(0),
             start_ms: 0,
             end_ms: 1_000,
             text: "A valid transcript sentence.".to_owned(),
@@ -15,7 +15,7 @@ fn normalized_sources_can_be_validated_before_analysis() {
     };
     let slide_deck = SlideDeck {
         slides: vec![Slide {
-            id: SlideId(20),
+            id: SlideId(0),
             text: "A valid slide.".to_owned(),
         }],
     };
@@ -28,7 +28,7 @@ fn normalized_sources_can_be_validated_before_analysis() {
             sources.transcript().sentences[0].id,
             sources.slide_deck().slides[0].id,
         ),
-        (SentenceId(10), SlideId(20))
+        (SentenceId(0), SlideId(0))
     );
 }
 
@@ -37,7 +37,7 @@ fn validated_sources_can_be_completed_with_lecture_passages() {
     let sources = ValidatedSources::new(
         Transcript {
             sentences: vec![TranscriptSentence {
-                id: SentenceId(10),
+                id: SentenceId(0),
                 start_ms: 0,
                 end_ms: 1_000,
                 text: "A valid transcript sentence.".to_owned(),
@@ -45,7 +45,7 @@ fn validated_sources_can_be_completed_with_lecture_passages() {
         },
         SlideDeck {
             slides: vec![Slide {
-                id: SlideId(20),
+                id: SlideId(0),
                 text: "A valid slide.".to_owned(),
             }],
         },
@@ -53,12 +53,12 @@ fn validated_sources_can_be_completed_with_lecture_passages() {
     .expect("the normalized sources should be valid");
     let passages = LecturePassages {
         passages: vec![LecturePassage {
-            start: SentenceId(10),
-            end: SentenceId(10),
+            start: SentenceId(0),
+            end: SentenceId(0),
             novelty: score(3),
             connection_strength: score(0),
             importance: score(4),
-            related_slides: vec![SlideId(20)],
+            related_slides: vec![SlideId(0)],
             summary: None,
             comparison_note: None,
         }],

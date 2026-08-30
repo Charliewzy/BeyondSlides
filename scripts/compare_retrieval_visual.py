@@ -242,11 +242,10 @@ def print_semantic_alignment_metrics(
     slide_ids = tuple(
         score["slide_id"] for score in windows[0]["slide_scores"]
     )
-    if len(slide_ids) != len(set(slide_ids)):
-        raise ValueError("semantic alignment slide scores contain duplicate slide IDs")
-    slide_positions = {
-        slide_id: position for position, slide_id in enumerate(slide_ids)
-    }
+    if slide_ids != tuple(range(len(slide_ids))):
+        raise ValueError(
+            "semantic alignment slide scores must use canonical zero-based IDs"
+        )
     for window in windows:
         window_slide_ids = tuple(
             score["slide_id"] for score in window["slide_scores"]
@@ -255,10 +254,22 @@ def print_semantic_alignment_metrics(
             raise ValueError(
                 "semantic alignment windows do not share one slide presentation order"
             )
+        if not 0 <= window["slide_position"] < len(slide_ids):
+            raise ValueError("semantic alignment selected an unknown slide ID")
+
+    observed_slide_ids = {
+        slide_id
+        for comparison in comparisons
+        for slide_id in (
+            comparison.dominant_slide,
+            *comparison.observed_slides,
+        )
+    }
+    if any(not 0 <= slide_id < len(slide_ids) for slide_id in observed_slide_ids):
+        raise ValueError("visual alignment contains an unknown slide ID")
 
     positions_by_window = {
-        window["number"]: slide_positions[window["slide_position"]]
-        for window in windows
+        window["number"]: window["slide_position"] for window in windows
     }
     evaluated = [
         (comparison, positions_by_window[comparison.number])
@@ -276,18 +287,18 @@ def print_semantic_alignment_metrics(
     print("                  all windows   stable windows   frame-weighted")
     for distance in (0, 1, 3):
         all_hits = sum(
-            abs(position - slide_positions[comparison.dominant_slide]) <= distance
+            abs(position - comparison.dominant_slide) <= distance
             for comparison, position in evaluated
         )
         stable_hits = sum(
-            abs(position - slide_positions[comparison.dominant_slide]) <= distance
+            abs(position - comparison.dominant_slide) <= distance
             for comparison, position in stable
         )
         frame_hits = sum(
             count
             for comparison, position in evaluated
             for slide_id, count in comparison.observed_slide_counts
-            if abs(position - slide_positions[slide_id]) <= distance
+            if abs(position - slide_id) <= distance
         )
         compared_frames = sum(comparison.frame_count for comparison, _ in evaluated)
         label = "exact" if distance == 0 else f"within {distance}"

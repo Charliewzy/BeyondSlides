@@ -1,4 +1,4 @@
-use std::{collections::HashSet, error::Error, fmt};
+use std::{error::Error, fmt};
 
 use crate::{SlideId, SlideScore};
 
@@ -19,18 +19,18 @@ pub fn infer_slide_positions(
     };
     validate_score_rows(score_rows)?;
 
-    let slide_ids: Vec<_> = first_row.iter().map(|score| score.slide_id).collect();
+    let slide_count = first_row.len();
     let first_emissions = normalize(first_row);
-    let mut totals = vec![f64::NEG_INFINITY; slide_ids.len()];
+    let mut totals = vec![f64::NEG_INFINITY; slide_count];
     totals[0] = first_emissions[0];
-    let mut backpointers = vec![vec![0; slide_ids.len()]];
+    let mut backpointers = vec![vec![0; slide_count]];
 
     for row in &score_rows[1..] {
         let emissions = normalize(row);
-        let mut next_totals = vec![0.0; slide_ids.len()];
-        let mut row_backpointers = vec![0; slide_ids.len()];
+        let mut next_totals = vec![0.0; slide_count];
+        let mut row_backpointers = vec![0; slide_count];
 
-        for current in 0..slide_ids.len() {
+        for current in 0..slide_count {
             let (best_previous, best_total) = totals
                 .iter()
                 .copied()
@@ -64,7 +64,7 @@ pub fn infer_slide_positions(
 
     Ok(positions
         .into_iter()
-        .map(|position| slide_ids[position])
+        .map(|position| first_row[position].slide_id)
         .collect())
 }
 
@@ -73,26 +73,18 @@ fn validate_score_rows(score_rows: &[Vec<SlideScore>]) -> Result<(), SlideAlignm
     if first_row.is_empty() {
         return Err(SlideAlignmentError::EmptyScoreRow { row: 1 });
     }
-    let expected_ids: Vec<_> = first_row.iter().map(|score| score.slide_id).collect();
-    let mut unique_ids = HashSet::new();
-    for score in first_row {
-        if !unique_ids.insert(score.slide_id) {
-            return Err(SlideAlignmentError::DuplicateSlide {
-                row: 1,
-                slide_id: score.slide_id,
-            });
-        }
-    }
+    let slide_count = first_row.len();
 
     for (position, row) in score_rows.iter().enumerate() {
         let row_number = position + 1;
         if row.is_empty() {
             return Err(SlideAlignmentError::EmptyScoreRow { row: row_number });
         }
-        if row
-            .iter()
-            .map(|score| score.slide_id)
-            .ne(expected_ids.iter().copied())
+        if row.len() != slide_count
+            || row
+                .iter()
+                .enumerate()
+                .any(|(position, score)| score.slide_id.index() != position)
         {
             return Err(SlideAlignmentError::InconsistentSlides { row: row_number });
         }
@@ -139,7 +131,6 @@ fn transition_penalty(previous: usize, current: usize) -> f64 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlideAlignmentError {
     EmptyScoreRow { row: usize },
-    DuplicateSlide { row: usize, slide_id: SlideId },
     InconsistentSlides { row: usize },
     NonFiniteScore { row: usize, slide_id: SlideId },
 }
@@ -148,14 +139,9 @@ impl fmt::Display for SlideAlignmentError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyScoreRow { row } => write!(formatter, "slide-score row {row} is empty"),
-            Self::DuplicateSlide { row, slide_id } => write!(
-                formatter,
-                "slide-score row {row} repeats slide {}",
-                slide_id.0
-            ),
             Self::InconsistentSlides { row } => write!(
                 formatter,
-                "slide-score row {row} does not contain the same slides in presentation order"
+                "slide-score row {row} does not contain canonical slide IDs in presentation order"
             ),
             Self::NonFiniteScore { row, slide_id } => write!(
                 formatter,

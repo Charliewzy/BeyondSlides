@@ -93,7 +93,7 @@ product experience before adding expensive or uncertain machinery.
 ### Preserve sources
 
 Transcript and slide content are immutable source records. Later stages refer
-to stable IDs rather than copying or rewriting source text.
+to canonical typed IDs rather than copying or rewriting source text.
 
 ### Evidence-backed analysis
 
@@ -134,17 +134,21 @@ workspace, distributed service, or plugin system without a demonstrated need.
 
 The examples below describe the intended model, not a frozen Rust API.
 
-### Stable identifiers
+### Canonical source identifiers
 
 ```rust
 struct SentenceId(u32);
 struct SlideId(u32);
-struct WindowId(u32);
 ```
 
-IDs are stable within one run. Timestamps are integer milliseconds. Transcript
-and slide collections are stored in presentation order, but code should not use
-collection indices as implicit IDs.
+Sentence and slide IDs are typed, zero-based collection positions. For every
+normalized source, `sentences[i].id == SentenceId(i)` and
+`slides[i].id == SlideId(i)`. They remain stable within that normalized source
+snapshot; changing normalization invalidates downstream artifacts. If later
+ingestion requires identity across normalization runs, it must add a separate
+source reference rather than weakening this invariant. Human-facing sentence,
+slide, and PDF page numbers may remain one-based and are not IDs. Timestamps are
+integer milliseconds.
 
 ### Transcript
 
@@ -163,7 +167,7 @@ struct Transcript {
 
 Required invariants:
 
-- IDs are unique;
+- each ID equals the sentence's zero-based collection position;
 - text is non-empty;
 - `start_ms <= end_ms`;
 - sentence times are nondecreasing;
@@ -184,7 +188,7 @@ struct SlideDeck {
 
 Required invariants:
 
-- IDs are unique;
+- each ID equals the slide's zero-based collection position;
 - slide order is stable;
 - empty extracted text is allowed because image-only slides may exist later.
 
@@ -336,18 +340,20 @@ and other pre-annotation stages to operate on trusted sources.
 
 The FunASR TSV adapter preserves evidence rather than inventing grammatical
 boundaries: every nonblank `start`, `end`, `text` row becomes one transcript
-sentence with a sequential one-based ID. It converts decimal seconds exactly to
+sentence with a sequential zero-based ID. It converts decimal seconds exactly to
 milliseconds, trims surrounding text whitespace, and rejects malformed,
 reversed, or overlapping rows. Punctuation restoration or sentence merging, if
-added later, must remain a separate transformation with traceable source IDs.
+added later, must remain a separate transformation with traceable source
+evidence.
 
 The first PDF adapter uses Poppler's `pdftotext` in raw reading order. Every PDF
-page becomes one slide with its one-based page number as a stable ID, including
-pages whose extracted text is empty. The adapter removes only a trailing line
-whose page-counter-normalized form occurs on a strict majority and at least
-three pages. It reports sparse text and aggregates suspicious glyphs per page;
-these warnings do not trigger OCR or silently drop source evidence. Plain-text
-sufficiency remains an evaluation decision outside the adapter.
+page becomes one slide with a canonical zero-based ID, including pages whose
+extracted text is empty. Human-facing page numbers in warnings remain one-based.
+The adapter removes only a trailing line whose page-counter-normalized form
+occurs on a strict majority and at least three pages. It reports sparse text and
+aggregates suspicious glyphs per page; these warnings do not trigger OCR or
+silently drop source evidence. Plain-text sufficiency remains an evaluation
+decision outside the adapter.
 
 ### 7.2 Windowing
 

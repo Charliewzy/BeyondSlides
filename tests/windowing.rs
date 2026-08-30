@@ -21,7 +21,7 @@ fn owned_regions_respect_character_budget_without_splitting_sentences() {
         .map(|window| sentence_ids(window.owned_region()))
         .collect();
 
-    assert_eq!(owned_regions, vec![vec![1, 2], vec![3], vec![4]]);
+    assert_eq!(owned_regions, vec![vec![0, 1], vec![2], vec![3]]);
 }
 
 #[test]
@@ -40,7 +40,7 @@ fn owned_regions_stop_before_exceeding_the_duration_budget() {
         .map(|window| sentence_ids(window.owned_region()))
         .collect();
 
-    assert_eq!(owned_regions, vec![vec![1, 2], vec![3, 4]]);
+    assert_eq!(owned_regions, vec![vec![0, 1], vec![2, 3]]);
 }
 
 #[test]
@@ -70,9 +70,9 @@ fn context_uses_nearest_complete_sentences_within_its_character_budget() {
     assert_eq!(
         visible_regions,
         vec![
-            (vec![], vec![1, 2], vec![3]),
-            (vec![2], vec![3, 4], vec![5]),
-            (vec![4], vec![5, 6], vec![]),
+            (vec![], vec![0, 1], vec![2]),
+            (vec![1], vec![2, 3], vec![4]),
+            (vec![3], vec![4, 5], vec![]),
         ]
     );
 }
@@ -86,9 +86,7 @@ fn sources(sentences: &[(&str, u64, u64)]) -> ValidatedSources {
         .iter()
         .enumerate()
         .map(|(position, &(text, start_ms, end_ms))| TranscriptSentence {
-            id: SentenceId(
-                u32::try_from(position + 1).expect("the test fixture should fit in a u32"),
-            ),
+            id: SentenceId(u32::try_from(position).expect("the test fixture should fit in a u32")),
             start_ms,
             end_ms,
             text: text.to_owned(),

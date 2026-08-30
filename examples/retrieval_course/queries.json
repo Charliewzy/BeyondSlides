@@ -4,109 +4,109 @@
       "id": "semantic-01",
       "kind": "semantic",
       "query": "误差信号往前传很多层以后几乎没有了，可以加一条旁路让信息直接通过。",
-      "relevant_slides": [101]
+      "relevant_slides": [0]
     },
     {
       "id": "semantic-02",
       "kind": "semantic",
       "query": "刚开始训练时不要一下迈太大步，先慢慢把步子放大，后面再逐渐收小。",
-      "relevant_slides": [102]
+      "relevant_slides": [1]
     },
     {
       "id": "semantic-03",
       "kind": "semantic",
       "query": "网络把见过的样本答案背得很熟，但换一批没见过的数据就表现很差。",
-      "relevant_slides": [103]
+      "relevant_slides": [2]
     },
     {
       "id": "semantic-04",
       "kind": "semantic",
       "query": "序列里的每个词都要根据其他位置的信息，动态决定自己应该关注谁。",
-      "relevant_slides": [104]
+      "relevant_slides": [3]
     },
     {
       "id": "semantic-05",
       "kind": "semantic",
       "query": "部署预测时输入可能只有一条，不能继续依赖眼前这一小批数据的统计量。",
-      "relevant_slides": [105]
+      "relevant_slides": [4]
     },
     {
       "id": "semantic-06",
       "kind": "semantic",
       "query": "疾病筛查最怕漏掉真正患病的人，所以要重点看所有患者中找回了多少。",
-      "relevant_slides": [110]
+      "relevant_slides": [9]
     },
     {
       "id": "exact-01",
       "kind": "exact",
       "query": "AdamW decoupled weight decay",
-      "relevant_slides": [106]
+      "relevant_slides": [5]
     },
     {
       "id": "exact-02",
       "kind": "exact",
       "query": "O(log n) off-by-one left right",
-      "relevant_slides": [107]
+      "relevant_slides": [6]
     },
     {
       "id": "exact-03",
       "kind": "exact",
       "query": "FP16 loss scaling underflow overflow",
-      "relevant_slides": [109]
+      "relevant_slides": [8]
     },
     {
       "id": "exact-04",
       "kind": "exact",
       "query": "softmax log-sum-exp",
-      "relevant_slides": [111]
+      "relevant_slides": [10]
     },
     {
       "id": "exact-05",
       "kind": "exact",
       "query": "Dropout L2 正则化",
-      "relevant_slides": [103]
+      "relevant_slides": [2]
     },
     {
       "id": "exact-06",
       "kind": "exact",
       "query": "BatchNorm moving mean moving variance",
-      "relevant_slides": [105]
+      "relevant_slides": [4]
     },
     {
       "id": "mixed-01",
       "kind": "mixed",
       "query": "Q K V 做缩放点积时为什么要除以 sqrt(d_k)？",
-      "relevant_slides": [104]
+      "relevant_slides": [3]
     },
     {
       "id": "mixed-02",
       "kind": "mixed",
       "query": "按连续地址读取数组可以复用 cache line，降低访问内存的等待时间。",
-      "relevant_slides": [108]
+      "relevant_slides": [7]
     },
     {
       "id": "mixed-03",
       "kind": "mixed",
       "query": "warmup 之后接 cosine decay 的学习率策略",
-      "relevant_slides": [102]
+      "relevant_slides": [1]
     },
     {
       "id": "mixed-04",
       "kind": "mixed",
       "query": "样本类别很不均衡时，结合 precision 和 recall 看 F1。",
-      "relevant_slides": [110]
+      "relevant_slides": [9]
     },
     {
       "id": "mixed-05",
       "kind": "mixed",
       "query": "随机裁剪和颜色扰动让模型学会忽略不重要的图像变化。",
-      "relevant_slides": [112]
+      "relevant_slides": [11]
     },
     {
       "id": "mixed-06",
       "kind": "mixed",
       "query": "residual connection 的 identity shortcut 能让深层网络更容易优化。",
-      "relevant_slides": [101]
+      "relevant_slides": [0]
     }
   ]
 }

@@ -158,10 +158,8 @@ fn render_slides(
         .enumerate()
         .map(|(position, path)| {
             let id = u32::try_from(position)
-                .ok()
-                .and_then(|position| position.checked_add(1))
                 .map(SlideId)
-                .ok_or(VisualAlignmentError::TooManySlides)?;
+                .map_err(|_| VisualAlignmentError::TooManySlides)?;
             let image = image::open(&path)
                 .map_err(|source| VisualAlignmentError::ReadRenderedPage { path, source })?
                 .into_luma8();
@@ -375,7 +373,7 @@ impl fmt::Display for VisualAlignmentError {
             } => write!(
                 formatter,
                 "rendered slide {} is {width}x{height}, expected {FRAME_WIDTH}x{FRAME_HEIGHT}",
-                slide_id.0
+                u64::from(slide_id.0) + 1
             ),
             Self::MissingFfmpegOutput => write!(formatter, "ffmpeg did not expose frame output"),
             Self::ReadFrame(error) => write!(formatter, "could not read an ffmpeg frame: {error}"),

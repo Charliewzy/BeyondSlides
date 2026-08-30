@@ -35,7 +35,7 @@
           <h4>相关幻灯片</h4>
 {% for slide in passage.related_slides %}
           <figure>
-            <figcaption>幻灯片 {{ slide.id }}</figcaption>
+            <figcaption>幻灯片 {{ slide.number }}</figcaption>
             <p>{{ slide.text }}</p>
           </figure>
 {% endfor %}

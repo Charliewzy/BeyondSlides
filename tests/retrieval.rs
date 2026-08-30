@@ -74,11 +74,11 @@ fn lexical_search_matches_chinese_words_across_different_sentences() -> Result<(
         SlideDeck {
             slides: vec![
                 Slide {
-                    id: SlideId(1),
+                    id: SlideId(0),
                     text: "学习率控制每次参数更新的步长。".to_owned(),
                 },
                 Slide {
-                    id: SlideId(2),
+                    id: SlideId(1),
                     text: "正则化可以缓解模型过拟合。".to_owned(),
                 },
             ],
@@ -88,7 +88,7 @@ fn lexical_search_matches_chinese_words_across_different_sentences() -> Result<(
 
     let hits = top_scores(&scorer, "参数的更新步长由学习率决定", 2)?;
 
-    assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(1)));
+    assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(0)));
     Ok(())
 }
 
@@ -99,7 +99,7 @@ fn lexical_search_ranks_strongest_term_evidence_first() -> Result<(), Box<dyn Er
 
     let hits = top_scores(&scorer, "循环不变式 目标值 当前搜索区间", 3)?;
 
-    assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(2)));
+    assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(1)));
     assert!(hits.windows(2).all(|pair| pair[0].score >= pair[1].score));
     Ok(())
 }
@@ -111,7 +111,7 @@ fn lexical_search_normalizes_case_and_punctuation() -> Result<(), Box<dyn Error>
 
     let hits = top_scores(&scorer, "中点 overflow & OFF-BY-ONE!", 2)?;
 
-    assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(5)));
+    assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(4)));
     Ok(())
 }
 
@@ -122,7 +122,7 @@ fn lexical_search_normalizes_full_width_technical_terms() -> Result<(), Box<dyn 
 
     let hits = top_scores(&scorer, "Ｏ（ｌｏｇ ｎ）", 2)?;
 
-    assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(4)));
+    assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(3)));
     Ok(())
 }
 
@@ -153,11 +153,11 @@ fn lexical_search_preserves_english_terms() -> Result<(), Box<dyn Error>> {
         SlideDeck {
             slides: vec![
                 Slide {
-                    id: SlideId(1),
+                    id: SlideId(0),
                     text: "Gradient descent updates model parameters.".to_owned(),
                 },
                 Slide {
-                    id: SlideId(2),
+                    id: SlideId(1),
                     text: "Regularization reduces overfitting.".to_owned(),
                 },
             ],
@@ -167,7 +167,7 @@ fn lexical_search_preserves_english_terms() -> Result<(), Box<dyn Error>> {
 
     let hits = top_scores(&scorer, "GRADIENT descent", 2)?;
 
-    assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(1)));
+    assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(0)));
     Ok(())
 }
 
@@ -178,11 +178,11 @@ fn equally_relevant_slides_remain_in_presentation_order() -> Result<(), Box<dyn 
         SlideDeck {
             slides: vec![
                 Slide {
-                    id: SlideId(20),
+                    id: SlideId(0),
                     text: "alpha".to_owned(),
                 },
                 Slide {
-                    id: SlideId(10),
+                    id: SlideId(1),
                     text: "alpha".to_owned(),
                 },
             ],
@@ -196,7 +196,7 @@ fn equally_relevant_slides_remain_in_presentation_order() -> Result<(), Box<dyn 
         .map(|hit| hit.slide_id)
         .collect();
 
-    assert_eq!(hit_ids, vec![SlideId(20), SlideId(10)]);
+    assert_eq!(hit_ids, vec![SlideId(0), SlideId(1)]);
     Ok(())
 }
 
@@ -204,29 +204,29 @@ fn equally_relevant_slides_remain_in_presentation_order() -> Result<(), Box<dyn 
 fn hybrid_search_rewards_agreement_between_retrieval_modes() -> Result<(), Box<dyn Error>> {
     let lexical = FixedScorer(vec![
         SlideScore {
-            slide_id: SlideId(1),
+            slide_id: SlideId(0),
             score: 3.0,
         },
         SlideScore {
-            slide_id: SlideId(2),
+            slide_id: SlideId(1),
             score: 8.0,
         },
         SlideScore {
-            slide_id: SlideId(3),
+            slide_id: SlideId(2),
             score: 0.0,
         },
     ]);
     let dense = FixedScorer(vec![
         SlideScore {
-            slide_id: SlideId(1),
+            slide_id: SlideId(0),
             score: 0.88,
         },
         SlideScore {
-            slide_id: SlideId(2),
+            slide_id: SlideId(1),
             score: 0.0,
         },
         SlideScore {
-            slide_id: SlideId(3),
+            slide_id: SlideId(2),
             score: 0.92,
         },
     ]);
@@ -238,17 +238,17 @@ fn hybrid_search_rewards_agreement_between_retrieval_modes() -> Result<(), Box<d
             .iter()
             .map(|score| score.slide_id)
             .collect::<Vec<_>>(),
-        vec![SlideId(1), SlideId(2), SlideId(3)]
+        vec![SlideId(0), SlideId(1), SlideId(2)]
     );
     let hit_ids: Vec<_> = top_scores(&scorer, "共同证据", 3)?
         .into_iter()
         .map(|hit| hit.slide_id)
         .collect();
 
-    assert_eq!(hit_ids.first(), Some(&SlideId(1)));
+    assert_eq!(hit_ids.first(), Some(&SlideId(0)));
     assert_eq!(hit_ids.len(), 3);
+    assert!(hit_ids.contains(&SlideId(1)));
     assert!(hit_ids.contains(&SlideId(2)));
-    assert!(hit_ids.contains(&SlideId(3)));
     Ok(())
 }
 
@@ -260,11 +260,11 @@ fn dense_search_matches_a_chinese_semantic_paraphrase() -> Result<(), Box<dyn Er
         SlideDeck {
             slides: vec![
                 Slide {
-                    id: SlideId(1),
+                    id: SlideId(0),
                     text: "梯度在深层网络中逐层传播时可能变得极小。".to_owned(),
                 },
                 Slide {
-                    id: SlideId(2),
+                    id: SlideId(1),
                     text: "数据增强能够提高训练样本的多样性。".to_owned(),
                 },
             ],
@@ -274,7 +274,7 @@ fn dense_search_matches_a_chinese_semantic_paraphrase() -> Result<(), Box<dyn Er
 
     let hits = top_scores(&scorer, "信号穿过很多层以后几乎衰减没了", 2)?;
 
-    assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(1)));
+    assert_eq!(hits.first().map(|hit| hit.slide_id), Some(SlideId(0)));
     Ok(())
 }
 

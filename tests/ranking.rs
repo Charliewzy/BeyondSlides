@@ -14,7 +14,7 @@ fn tiny_course_oral_additions_are_filtered_and_ranked() {
 
     assert_eq!(
         ranked_starts,
-        vec![SentenceId(40), SentenceId(130), SentenceId(70)]
+        vec![SentenceId(3), SentenceId(12), SentenceId(6)]
     );
 }
 

@@ -451,11 +451,29 @@ retrieval.
 
 ### 7.6 Agent annotation
 
-For each window, the agent initially receives:
+The core builds one provider-neutral `TranscriptWindowTask` per window after
+semantic alignment. A task preserves the window's left, owned, and right
+transcript regions, its inferred slide position, and a slide neighborhood of up
+to three positions in either direction. Neighborhoods are clamped at the ends
+of the deck. Task construction consumes the transcript windows already used for
+scoring and alignment rather than applying the windowing policy again.
+
+Rendering a task produces an `AnnotationMessage` with trusted instructions kept
+separate from the JSON source input. A future provider adapter maps those two
+parts to the model's appropriate instruction and user-input channels; provider
+SDK types do not enter the core annotation interface. The version-controlled
+instructions live in `prompts/annotation.md` and are embedded at compile time;
+they are product logic rather than runtime configuration.
+
+For each window, the message contains:
 
 - left, owned, and right transcript regions;
-- the locally aligned slide neighborhood;
+- the inferred slide position and locally aligned slide neighborhood;
 - the score definitions and output schema.
+
+The instructions explicitly distinguish the inferred slide position from a
+semantically Related slide and require the response passages to partition only
+the owned region. `summary` and `comparison_note` remain optional.
 
 It may use a deliberately small tool set:
 

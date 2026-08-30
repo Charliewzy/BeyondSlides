@@ -1,11 +1,119 @@
 use std::{error::Error, fmt};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    LecturePassage, LecturePassages, SentenceId, ValidatedAnalysis, ValidatedSources,
-    ValidationError, WindowingConfig, build_windows,
+    LecturePassage, LecturePassages, SentenceId, Slide, SlideId, TranscriptSentence,
+    TranscriptWindow, ValidatedAnalysis, ValidatedSources, ValidationError, WindowingConfig,
+    build_windows,
 };
+
+const SLIDE_NEIGHBORHOOD_RADIUS: usize = 3;
+
+const ANNOTATION_INSTRUCTIONS: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/prompts/annotation.md"
+));
+
+/// The evidence and ownership contract for one agent annotation task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct TranscriptWindowTask<'a> {
+    pub window_number: usize,
+    pub left_context: &'a [TranscriptSentence],
+    pub owned_region: &'a [TranscriptSentence],
+    pub right_context: &'a [TranscriptSentence],
+    pub slide_position: SlideId,
+    pub nearby_slides: &'a [Slide],
+}
+
+impl TranscriptWindowTask<'_> {
+    /// Separates trusted instructions from the serialized, untrusted source input.
+    pub fn message(&self) -> Result<AnnotationMessage, serde_json::Error> {
+        Ok(AnnotationMessage {
+            instructions: ANNOTATION_INSTRUCTIONS,
+            input: serde_json::to_string(self)?,
+        })
+    }
+}
+
+/// Provider-neutral content for one model request.
+///
+/// An adapter should place `instructions` at its highest available instruction
+/// priority and supply `input` as user data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnnotationMessage {
+    pub instructions: &'static str,
+    pub input: String,
+}
+
+/// Builds one annotation task per transcript window in presentation order.
+pub fn build_annotation_tasks<'a>(
+    sources: &'a ValidatedSources,
+    windows: &[TranscriptWindow<'a>],
+    slide_positions: &[SlideId],
+) -> Result<Vec<TranscriptWindowTask<'a>>, AnnotationTaskError> {
+    if slide_positions.len() != windows.len() {
+        return Err(AnnotationTaskError::SlidePositionCountMismatch {
+            expected: windows.len(),
+            actual: slide_positions.len(),
+        });
+    }
+
+    let slide_deck = sources.slide_deck();
+    let slides = &slide_deck.slides;
+    windows
+        .iter()
+        .zip(slide_positions.iter().copied())
+        .enumerate()
+        .map(|(window_index, (window, slide_position))| {
+            if slide_deck.find(slide_position).is_none() {
+                return Err(AnnotationTaskError::UnknownSlidePosition {
+                    window: window_index + 1,
+                    slide: slide_position,
+                });
+            }
+
+            let position = slide_position.index();
+            let neighborhood_start = position.saturating_sub(SLIDE_NEIGHBORHOOD_RADIUS);
+            let neighborhood_end = position
+                .saturating_add(SLIDE_NEIGHBORHOOD_RADIUS + 1)
+                .min(slides.len());
+
+            Ok(TranscriptWindowTask {
+                window_number: window_index + 1,
+                left_context: window.left_context(),
+                owned_region: window.owned_region(),
+                right_context: window.right_context(),
+                slide_position,
+                nearby_slides: &slides[neighborhood_start..neighborhood_end],
+            })
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationTaskError {
+    SlidePositionCountMismatch { expected: usize, actual: usize },
+    UnknownSlidePosition { window: usize, slide: SlideId },
+}
+
+impl fmt::Display for AnnotationTaskError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SlidePositionCountMismatch { expected, actual } => write!(
+                formatter,
+                "annotation expected {expected} inferred slide positions but received {actual}"
+            ),
+            Self::UnknownSlidePosition { window, slide } => write!(
+                formatter,
+                "transcript window {window} has unknown inferred slide position {}",
+                slide.0
+            ),
+        }
+    }
+}
+
+impl Error for AnnotationTaskError {}
 
 /// The untrusted structured response produced for one transcript window.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

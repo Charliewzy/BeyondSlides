@@ -10,7 +10,10 @@ mod validation;
 mod windowing;
 
 pub use alignment::{SlideAlignmentError, infer_slide_positions};
-pub use annotation::{AnalysisAssemblyError, TranscriptWindowAnalysis, assemble_window_analyses};
+pub use annotation::{
+    AnalysisAssemblyError, AnnotationMessage, AnnotationTaskError, TranscriptWindowAnalysis,
+    TranscriptWindowTask, assemble_window_analyses, build_annotation_tasks,
+};
 pub use domain::{
     LecturePassage, LecturePassages, Score5, ScoreOutOfRange, SentenceId, Slide, SlideDeck,
     SlideId, Transcript, TranscriptSentence,

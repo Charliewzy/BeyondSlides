@@ -45,9 +45,10 @@ connection provides meaningful learning value beyond the written source.
 _Avoid_: BTW, delta, annotation
 
 **Slide position**:
-The approximate chronological point in the slide deck being presented during a
-lecture passage. It provides local context without claiming semantic relevance.
-_Avoid_: Corresponding slide
+An approximate chronological location in the slide deck inferred for a lecture
+passage. It provides local context but neither observes which slide was visible
+nor establishes semantic relevance.
+_Avoid_: Current slide, Corresponding slide
 
 **Related slide**:
 A slide whose content is semantically relevant to a lecture passage, regardless

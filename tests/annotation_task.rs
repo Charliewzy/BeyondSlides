@@ -50,6 +50,10 @@ fn annotation_message_keeps_instructions_separate_from_structured_input()
     assert!(message.instructions.contains("只为 owned_region"));
     assert!(message.instructions.contains("无重叠、无遗漏"));
     assert!(message.instructions.contains("slide_position 只是"));
+    assert!(message.instructions.contains("并非对课堂屏幕的观察"));
+    assert!(message.instructions.contains("不得将它称为“当前幻灯片”"));
+    assert!(message.instructions.contains("nearby_slides 只是"));
+    assert!(message.instructions.contains("不代表这些页面当时正在展示"));
     assert!(message.instructions.contains("inspect_slide"));
     assert!(message.instructions.contains("search_slides"));
     assert!(message.instructions.contains("novelty"));

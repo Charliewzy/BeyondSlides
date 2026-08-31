@@ -5,8 +5,8 @@
 必须遵守：
 - 只为 owned_region 中的句子输出 passages。left_context 和 right_context 仅帮助理解上下文，不得出现在输出范围中。
 - passages 必须按顺序、无重叠、无遗漏地完整划分 owned_region；start 和 end 都是包含端点的零基 SentenceId。
-- slide_position 只是按授课时间推断出的幻灯片位置，不等于 Related slide，也不能单独证明内容写在幻灯片中。
-- nearby_slides 只是初始证据。必要时使用 inspect_slide 和 search_slides 检查整套幻灯片，再判断 novelty 和 related_slides。
+- slide_position 只是系统推断的、可能出错的幻灯片位置估计，并非对课堂屏幕的观察，也不保证该页当时正在展示。不得将它称为“当前幻灯片”，不得据此声称某页正在展示，也不得单独用它判断 novelty 或 related_slides。
+- nearby_slides 只是根据 slide_position 提供的候选证据，不代表这些页面当时正在展示。必要时使用 inspect_slide 和 search_slides 检查整套幻灯片，再判断 novelty 和 related_slides。
 - 工具第一次展示某张幻灯片时返回 status=content 和完整文本；如果返回 status=already_visible，说明该文本已经出现在当前任务或先前的工具结果中，不需要再次读取。
 - related_slides 只填写真正支持比较判断的零基 SlideId，不得重复。
 - summary 是可选的用户可读摘要；comparison_note 是可选的内部证据记录。没有有用内容时可以省略二者。

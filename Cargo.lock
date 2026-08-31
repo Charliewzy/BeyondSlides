@@ -196,6 +196,7 @@ dependencies = [
  "askama",
  "colorous",
  "fastembed",
+ "futures",
  "genai",
  "image",
  "image-compare",

@@ -7,6 +7,7 @@ edition = "2024"
 askama = "0.16"
 colorous = "1"
 fastembed = { version = "6.0.2", default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries-rustls-tls"] }
+futures = "0.3"
 image = { version = "0.25", default-features = false, features = ["png"] }
 image-compare = "0.5"
 genai = "0.6.5"

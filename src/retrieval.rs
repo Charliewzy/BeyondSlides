@@ -13,7 +13,7 @@ pub use hybrid::HybridSlideScorer;
 pub use lexical::LexicalSlideScorer;
 
 /// Scores every slide for semantic relevance without exposing the retrieval algorithm.
-pub trait SlideScorer {
+pub trait SlideScorer: Sync {
     /// Returns exactly one score per indexed slide in presentation order.
     fn score_slides(&self, query: &str) -> Result<Vec<SlideScore>, SearchError>;
 }

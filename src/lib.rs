@@ -3,6 +3,7 @@ mod annotation;
 mod domain;
 pub mod evaluation;
 pub mod ingestion;
+mod orchestration;
 mod ranking;
 mod report;
 mod retrieval;
@@ -20,6 +21,10 @@ pub use annotation::{
 pub use domain::{
     LecturePassage, LecturePassages, Score5, ScoreOutOfRange, SentenceId, Slide, SlideDeck,
     SlideId, Transcript, TranscriptSentence,
+};
+pub use orchestration::{
+    LectureAnalysisConfig, LectureAnalysisConfigError, LectureAnalysisError, LectureAnalysisResult,
+    LectureAnalysisSession,
 };
 pub use ranking::rank_oral_additions;
 pub use report::render_report;

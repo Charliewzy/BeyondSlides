@@ -125,7 +125,7 @@ impl fmt::Display for AnnotationTaskError {
 impl Error for AnnotationTaskError {}
 
 /// The untrusted structured response produced for one transcript window.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TranscriptWindowAnalysis {
     pub passages: Vec<LecturePassage>,
 }

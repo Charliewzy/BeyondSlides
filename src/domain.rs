@@ -22,7 +22,7 @@ impl SlideId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(try_from = "u8")]
 pub struct Score5(u8);
 
@@ -85,7 +85,7 @@ impl SlideDeck {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct LecturePassage {
     pub start: SentenceId,
     pub end: SentenceId,
@@ -97,7 +97,7 @@ pub struct LecturePassage {
     pub comparison_note: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct LecturePassages {
     pub passages: Vec<LecturePassage>,
 }

@@ -313,13 +313,13 @@ impl ChatCompletionsClient {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AnnotationResult {
     pub analysis: TranscriptWindowAnalysis,
     pub diagnostics: AnnotationDiagnostics,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AnnotationDiagnostics {
     pub tool_rounds: usize,
     /// Sum across every response, or `None` if any prompt-token count was absent or invalid.

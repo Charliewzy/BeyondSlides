@@ -1,4 +1,4 @@
-use std::{fs, process::Command};
+use std::{fs, path::PathBuf, process::Command};
 
 #[test]
 fn tiny_course_can_be_rendered_from_the_command_line() {
@@ -7,7 +7,7 @@ fn tiny_course_can_be_rendered_from_the_command_line() {
         std::process::id()
     ));
 
-    let output = Command::new(env!("CARGO_BIN_EXE_beyond-slides"))
+    let output = Command::new(beyond_slides_binary())
         .args([
             "examples/tiny_course/transcript.json",
             "examples/tiny_course/slides.json",
@@ -26,4 +26,11 @@ fn tiny_course_can_be_rendered_from_the_command_line() {
             && report.contains("按价值排序的口头补充")
             && report.contains("完整讲稿")
     );
+}
+
+fn beyond_slides_binary() -> PathBuf {
+    option_env!("CARGO_BIN_EXE_beyond-slides")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("CARGO_BIN_EXE_beyond-slides").map(PathBuf::from))
+        .expect("Cargo should provide the BeyondSlides binary path")
 }

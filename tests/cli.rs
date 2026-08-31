@@ -28,6 +28,29 @@ fn tiny_course_can_be_rendered_from_the_command_line() {
     );
 }
 
+#[test]
+fn complete_analysis_requires_explicit_provider_configuration() {
+    let output = Command::new(beyond_slides_binary())
+        .args([
+            "analyze",
+            "missing-transcript.json",
+            "missing-slides.json",
+            "missing-run-directory",
+        ])
+        .env_remove("BEYOND_SLIDES_API_BASE_URL")
+        .env_remove("BEYOND_SLIDES_API_KEY")
+        .env_remove("BEYOND_SLIDES_MODEL")
+        .output()
+        .expect("the BeyondSlides binary should run");
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("BEYOND_SLIDES_API_BASE_URL"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn beyond_slides_binary() -> PathBuf {
     option_env!("CARGO_BIN_EXE_beyond-slides")
         .map(PathBuf::from)

@@ -23,7 +23,8 @@ pub use domain::{
     SlideId, Transcript, TranscriptSentence,
 };
 pub use orchestration::{
-    LectureAnalysisConfig, LectureAnalysisConfigError, LectureAnalysisError, LectureAnalysisResult,
+    LectureAnalysisConfig, LectureAnalysisConfigError, LectureAnalysisError,
+    LectureAnalysisProgress, LectureAnalysisProgressError, LectureAnalysisResult,
     LectureAnalysisSession,
 };
 pub use ranking::rank_oral_additions;

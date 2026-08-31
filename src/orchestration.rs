@@ -7,8 +7,10 @@ use crate::{
     ChatCompletionsClient, ChatCompletionsError, SearchError, SlideAlignmentError, SlideId,
     SlideScorer, TranscriptWindow, TranscriptWindowAnalysis, ValidatedAnalysis, ValidatedSources,
     WindowingConfig, assemble_window_analyses, build_annotation_tasks, build_windows,
-    infer_slide_positions,
+    infer_slide_positions, validate_window_analysis,
 };
+
+pub type LectureAnalysisProgressError = Box<dyn Error + Send + Sync>;
 
 /// Runtime policy for analyzing one complete lecture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +66,14 @@ pub struct LectureAnalysisResult {
     window_diagnostics: Vec<AnnotationDiagnostics>,
 }
 
+/// One newly completed transcript window and the overall run progress.
+pub struct LectureAnalysisProgress<'a> {
+    pub window_number: usize,
+    pub completed_windows: usize,
+    pub total_windows: usize,
+    pub result: &'a AnnotationResult,
+}
+
 impl LectureAnalysisResult {
     pub fn analysis(&self) -> &ValidatedAnalysis {
         &self.analysis
@@ -94,7 +104,7 @@ pub struct LectureAnalysisSession<'a> {
     sources: ValidatedSources,
     config: LectureAnalysisConfig,
     slide_positions: Vec<SlideId>,
-    canary_result: Option<AnnotationResult>,
+    window_results: Vec<Option<AnnotationResult>>,
 }
 
 impl<'a> LectureAnalysisSession<'a> {
@@ -120,8 +130,9 @@ impl<'a> LectureAnalysisSession<'a> {
             .collect::<Result<Vec<_>, _>>()?;
         let slide_positions =
             infer_slide_positions(&score_rows).map_err(LectureAnalysisError::Alignment)?;
-        build_annotation_tasks(&sources, &windows, &slide_positions)
+        let tasks = build_annotation_tasks(&sources, &windows, &slide_positions)
             .map_err(LectureAnalysisError::TaskConstruction)?;
+        let window_results = vec![None; tasks.len()];
 
         Ok(Self {
             client,
@@ -129,8 +140,49 @@ impl<'a> LectureAnalysisSession<'a> {
             sources,
             config,
             slide_positions,
-            canary_result: None,
+            window_results,
         })
+    }
+
+    pub fn window_count(&self) -> usize {
+        self.window_results.len()
+    }
+
+    pub fn completed_window_count(&self) -> usize {
+        self.window_results.iter().flatten().count()
+    }
+
+    /// Restores one persisted result after validating it against its transcript window.
+    ///
+    /// `window_index` is the zero-based position used by this prepared session.
+    pub fn restore_window_result(
+        &mut self,
+        window_index: usize,
+        result: AnnotationResult,
+    ) -> Result<(), LectureAnalysisError> {
+        let Some(stored_result) = self.window_results.get(window_index) else {
+            return Err(LectureAnalysisError::UnknownWindowIndex {
+                index: window_index,
+                count: self.window_results.len(),
+            });
+        };
+        if stored_result.is_some() {
+            return Err(LectureAnalysisError::WindowAlreadyCompleted {
+                index: window_index,
+            });
+        }
+
+        let windows = build_windows(&self.sources, self.config.windowing);
+        let tasks = build_annotation_tasks(&self.sources, &windows, &self.slide_positions)
+            .map_err(LectureAnalysisError::TaskConstruction)?;
+        validate_window_analysis(&self.sources, &tasks[window_index], &result.analysis).map_err(
+            |source| LectureAnalysisError::InvalidRestoredWindow {
+                index: window_index,
+                source,
+            },
+        )?;
+        self.window_results[window_index] = Some(result);
+        Ok(())
     }
 
     /// Analyzes the first transcript window without launching later windows.
@@ -140,7 +192,10 @@ impl<'a> LectureAnalysisSession<'a> {
     pub async fn analyze_canary(
         &mut self,
     ) -> Result<Option<&AnnotationResult>, LectureAnalysisError> {
-        if self.canary_result.is_none() {
+        let Some(canary_result) = self.window_results.first() else {
+            return Ok(None);
+        };
+        if canary_result.is_none() {
             let result = {
                 let windows = build_windows(&self.sources, self.config.windowing);
                 let tasks = build_annotation_tasks(&self.sources, &windows, &self.slide_positions)
@@ -157,33 +212,54 @@ impl<'a> LectureAnalysisSession<'a> {
                         source,
                     })?
             };
-            self.canary_result = Some(result);
+            self.window_results[0] = Some(result);
         }
 
-        Ok(self.canary_result.as_ref())
+        Ok(self.window_results[0].as_ref())
     }
 
     /// Completes a canary-validated lecture analysis with bounded concurrency.
     pub async fn complete_analysis(self) -> Result<LectureAnalysisResult, LectureAnalysisError> {
+        self.complete_analysis_with_progress(|_| Ok(())).await
+    }
+
+    /// Completes an analysis while reporting each newly finished transcript window.
+    ///
+    /// Restored results count toward overall progress but are not reported again.
+    pub async fn complete_analysis_with_progress(
+        self,
+        mut report_progress: impl FnMut(
+            LectureAnalysisProgress<'_>,
+        ) -> Result<(), LectureAnalysisProgressError>,
+    ) -> Result<LectureAnalysisResult, LectureAnalysisError> {
         let Self {
             client,
             scorer,
             sources,
             config,
             slide_positions,
-            canary_result,
+            window_results: stored_results,
         } = self;
         let windows = build_windows(&sources, config.windowing);
         let tasks = build_annotation_tasks(&sources, &windows, &slide_positions)
             .map_err(LectureAnalysisError::TaskConstruction)?;
 
         let mut window_results = Vec::with_capacity(tasks.len());
-        if let Some((canary, remaining)) = tasks.split_first() {
-            let result = canary_result.ok_or(LectureAnalysisError::CanaryNotAnalyzed)?;
-            window_results.push((canary.window_number, result));
+        let mut pending_tasks = Vec::new();
+        let mut completed_windows = stored_results.iter().flatten().count();
+        for (task, result) in tasks.iter().copied().zip(stored_results) {
+            if let Some(result) = result {
+                window_results.push((task.window_number, result));
+            } else if task.window_number == 1 {
+                return Err(LectureAnalysisError::CanaryNotAnalyzed);
+            } else {
+                pending_tasks.push(task);
+            }
+        }
 
+        if !pending_tasks.is_empty() {
             let sources_ref = &sources;
-            let remaining_results = stream::iter(remaining.iter().copied())
+            let remaining_results = stream::iter(pending_tasks)
                 .map(move |task| async move {
                     client
                         .annotate_window(sources_ref, scorer, &task)
@@ -194,10 +270,19 @@ impl<'a> LectureAnalysisSession<'a> {
                             source,
                         })
                 })
-                .buffer_unordered(config.max_concurrent_windows.get())
-                .try_collect::<Vec<_>>()
-                .await?;
-            window_results.extend(remaining_results);
+                .buffer_unordered(config.max_concurrent_windows.get());
+            futures::pin_mut!(remaining_results);
+            while let Some((window_number, result)) = remaining_results.try_next().await? {
+                completed_windows += 1;
+                report_progress(LectureAnalysisProgress {
+                    window_number,
+                    completed_windows,
+                    total_windows: tasks.len(),
+                    result: &result,
+                })
+                .map_err(LectureAnalysisError::Progress)?;
+                window_results.push((window_number, result));
+            }
         }
 
         window_results.sort_unstable_by_key(|(window, _)| *window);
@@ -240,7 +325,19 @@ pub enum LectureAnalysisError {
         window: usize,
         source: ChatCompletionsError,
     },
+    UnknownWindowIndex {
+        index: usize,
+        count: usize,
+    },
+    WindowAlreadyCompleted {
+        index: usize,
+    },
+    InvalidRestoredWindow {
+        index: usize,
+        source: AnalysisAssemblyError,
+    },
     CanaryNotAnalyzed,
+    Progress(LectureAnalysisProgressError),
     Assembly(AnalysisAssemblyError),
 }
 
@@ -263,8 +360,32 @@ impl fmt::Display for LectureAnalysisError {
                     "could not annotate transcript window {window}: {source}"
                 )
             }
+            Self::UnknownWindowIndex { index, count } => {
+                write!(
+                    formatter,
+                    "transcript window index {index} does not exist; the lecture has {count} windows"
+                )
+            }
+            Self::WindowAlreadyCompleted { index } => {
+                write!(
+                    formatter,
+                    "transcript window index {index} already has a result"
+                )
+            }
+            Self::InvalidRestoredWindow { index, source } => {
+                write!(
+                    formatter,
+                    "persisted result for transcript window index {index} is invalid: {source}"
+                )
+            }
             Self::CanaryNotAnalyzed => {
                 formatter.write_str("the canary must succeed before completing lecture analysis")
+            }
+            Self::Progress(error) => {
+                write!(
+                    formatter,
+                    "could not record lecture analysis progress: {error}"
+                )
             }
             Self::Assembly(error) => {
                 write!(
@@ -283,7 +404,10 @@ impl Error for LectureAnalysisError {
             Self::Alignment(error) => Some(error),
             Self::TaskConstruction(error) => Some(error),
             Self::WindowAnnotation { source, .. } => Some(source),
+            Self::UnknownWindowIndex { .. } | Self::WindowAlreadyCompleted { .. } => None,
+            Self::InvalidRestoredWindow { source, .. } => Some(source),
             Self::CanaryNotAnalyzed => None,
+            Self::Progress(error) => Some(error.as_ref()),
             Self::Assembly(error) => Some(error),
         }
     }

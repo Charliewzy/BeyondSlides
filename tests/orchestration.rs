@@ -111,8 +111,8 @@ async fn an_invalid_canary_prevents_later_window_requests() -> Result<(), Box<dy
         .received_requests()
         .await
         .expect("mock request recording is enabled");
-    assert_eq!(requests.len(), 1);
-    assert_eq!(window_number(&requests[0]), 1);
+    assert_eq!(requests.len(), 3);
+    assert!(requests.iter().all(|request| window_number(request) == 1));
     Ok(())
 }
 
@@ -136,6 +136,86 @@ async fn lecture_analysis_cannot_complete_before_the_canary() -> Result<(), Box<
         .await
         .expect("mock request recording is enabled");
     assert!(requests.is_empty());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lecture_analysis_reports_new_windows_in_completion_order() -> Result<(), Box<dyn Error>> {
+    let api = mock_api(WindowAnalysisResponder {
+        reject_canary: false,
+    })
+    .await;
+    let client = client(&api)?;
+    let mut session =
+        LectureAnalysisSession::prepare(&client, sources()?, &FixedScorer, config(2)?)?;
+    session.analyze_canary().await?;
+
+    let mut progress = Vec::new();
+    session
+        .complete_analysis_with_progress(|event| {
+            progress.push((
+                event.window_number,
+                event.completed_windows,
+                event.total_windows,
+                event.result.analysis.passages[0].start,
+            ));
+            Ok(())
+        })
+        .await?;
+
+    assert_eq!(
+        progress,
+        vec![(3, 2, 3, SentenceId(2)), (2, 3, 3, SentenceId(1)),]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restored_canary_is_validated_and_not_sent_again() -> Result<(), Box<dyn Error>> {
+    let api = mock_api(WindowAnalysisResponder {
+        reject_canary: false,
+    })
+    .await;
+    let client = client(&api)?;
+    let mut initial =
+        LectureAnalysisSession::prepare(&client, sources()?, &FixedScorer, config(2)?)?;
+    let canary = initial
+        .analyze_canary()
+        .await?
+        .expect("the nonempty transcript has a canary")
+        .clone();
+
+    let mut invalid = canary.clone();
+    invalid.analysis.passages[0].start = SentenceId(1);
+    let mut invalid_resume =
+        LectureAnalysisSession::prepare(&client, sources()?, &FixedScorer, config(2)?)?;
+    let error = invalid_resume
+        .restore_window_result(0, invalid)
+        .expect_err("a checkpoint must still partition its original owned region");
+    assert!(matches!(
+        error,
+        LectureAnalysisError::InvalidRestoredWindow { index: 0, .. }
+    ));
+
+    let mut resumed =
+        LectureAnalysisSession::prepare(&client, sources()?, &FixedScorer, config(2)?)?;
+    assert_eq!(resumed.window_count(), 3);
+    assert_eq!(resumed.completed_window_count(), 0);
+    resumed.restore_window_result(0, canary)?;
+    assert_eq!(resumed.completed_window_count(), 1);
+    assert!(resumed.analyze_canary().await?.is_some());
+    let result = resumed.complete_analysis().await?;
+
+    assert_eq!(result.window_diagnostics().len(), 3);
+    let requests = api
+        .received_requests()
+        .await
+        .expect("mock request recording is enabled");
+    assert_eq!(requests.len(), 3);
+    assert_eq!(window_number(&requests[0]), 1);
+    let mut resumed_windows = requests[1..].iter().map(window_number).collect::<Vec<_>>();
+    resumed_windows.sort_unstable();
+    assert_eq!(resumed_windows, vec![2, 3]);
     Ok(())
 }
 

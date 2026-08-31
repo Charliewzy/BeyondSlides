@@ -538,24 +538,26 @@ one portable file.
 Each real analysis run will use a directory such as:
 
 ```text
-run/
+run/real-course-analysis/
 |-- manifest.json
-|-- transcript.json
-|-- slides.json
-|-- windows.json
-|-- retrieval-index/
-|-- alignment.json
-|-- annotations.json
-`-- result.html
+|-- window-0001.json
+|-- window-0002.json
+|-- ...
+`-- analysis.json
 ```
 
-`manifest.json` records input identities, schema versions, configuration, stage
-status, and the model/provider identifiers needed to understand how the result
-was produced. Secrets must never be written to the run directory.
+`manifest.json` records SHA-256 identities for the normalized transcript,
+slides, and annotation prompt together with the run-format version, windowing,
+retrieval, model endpoint, model name, and model limits. Secrets are never
+written to the run directory. A run directory is reused only when its manifest
+exactly matches the requested run.
 
-An artifact is reused only when its schema version and relevant upstream inputs
-match. The exact cache-key scheme is deferred until a second expensive stage is
-implemented.
+Every accepted transcript-window response is validated and atomically written
+before it counts as completed. Restarting the same command validates and
+restores matching window checkpoints, then sends only missing windows. The
+final `analysis.json` is written atomically only after all window results have
+been assembled into a complete `ValidatedAnalysis`; it also retains inferred
+slide positions and per-window model diagnostics.
 
 ## 9. Error and uncertainty policy
 

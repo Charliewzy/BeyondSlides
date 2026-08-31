@@ -4,8 +4,8 @@ use genai::{
     Client, ModelIden, ServiceTarget,
     adapter::AdapterKind,
     chat::{
-        ChatOptions, ChatRequest, ChatResponse, ChatResponseFormat, StopReason, Tool, ToolCall,
-        ToolChoice, ToolResponse,
+        ChatMessage, ChatOptions, ChatRequest, ChatResponse, ChatResponseFormat, StopReason, Tool,
+        ToolCall, ToolChoice, ToolResponse,
     },
     resolver::{AuthData, Endpoint},
 };
@@ -20,6 +20,7 @@ use super::{
 use crate::{SlideId, SlideScorer, ValidatedSources};
 
 const DEFAULT_MAX_TOOL_ROUNDS: usize = 4;
+const DEFAULT_MAX_FINAL_ANSWER_REPAIRS: usize = 2;
 const DEFAULT_MAX_SEARCH_RESULTS: usize = 5;
 const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 4096;
 const MAX_PROVIDER_ERROR_CHARACTERS: usize = 2_000;
@@ -34,6 +35,7 @@ pub struct ChatCompletionsConfig {
     api_key: String,
     model: String,
     max_tool_rounds: usize,
+    max_final_answer_repairs: usize,
     max_search_results: usize,
     max_output_tokens: u32,
 }
@@ -73,9 +75,23 @@ impl ChatCompletionsConfig {
             api_key,
             model,
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
+            max_final_answer_repairs: DEFAULT_MAX_FINAL_ANSWER_REPAIRS,
             max_search_results: DEFAULT_MAX_SEARCH_RESULTS,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
         })
+    }
+
+    pub fn with_max_final_answer_repairs(
+        mut self,
+        max_final_answer_repairs: usize,
+    ) -> Result<Self, ChatCompletionsConfigError> {
+        if max_final_answer_repairs == 0 {
+            return Err(ChatCompletionsConfigError::ZeroLimit(
+                "max_final_answer_repairs",
+            ));
+        }
+        self.max_final_answer_repairs = max_final_answer_repairs;
+        Ok(self)
     }
 
     pub fn with_max_tool_rounds(
@@ -154,6 +170,7 @@ pub struct ChatCompletionsClient {
     target: ServiceTarget,
     options: ChatOptions,
     max_tool_rounds: usize,
+    max_final_answer_repairs: usize,
     max_search_results: usize,
 }
 
@@ -176,6 +193,7 @@ impl ChatCompletionsClient {
             target,
             options,
             max_tool_rounds: config.max_tool_rounds,
+            max_final_answer_repairs: config.max_final_answer_repairs,
             max_search_results: config.max_search_results,
         }
     }
@@ -241,14 +259,32 @@ impl ChatCompletionsClient {
                 .first_text()
                 .filter(|content| !content.trim().is_empty())
                 .ok_or(ChatCompletionsError::MissingAssistantContent)?;
-            let (analysis, accepted_json_fence) = parse_analysis(content)?;
-            diagnostics.accepted_json_fence = accepted_json_fence;
-            validate_window_analysis(sources, task, &analysis)
-                .map_err(ChatCompletionsError::InvalidWindowAnalysis)?;
-            return Ok(AnnotationResult {
-                analysis,
-                diagnostics,
+            let candidate = parse_analysis(content).and_then(|(analysis, accepted_json_fence)| {
+                validate_window_analysis(sources, task, &analysis)
+                    .map_err(ChatCompletionsError::InvalidWindowAnalysis)?;
+                Ok((analysis, accepted_json_fence))
             });
+            match candidate {
+                Ok((analysis, accepted_json_fence)) => {
+                    diagnostics.accepted_json_fence = accepted_json_fence;
+                    return Ok(AnnotationResult {
+                        analysis,
+                        diagnostics,
+                    });
+                }
+                Err(error) => {
+                    if diagnostics.final_answer_repairs == self.max_final_answer_repairs {
+                        return Err(ChatCompletionsError::FinalAnswerRepairLimit {
+                            limit: self.max_final_answer_repairs,
+                            source: Box::new(error),
+                        });
+                    }
+                    diagnostics.final_answer_repairs += 1;
+                    request = request
+                        .append_message(ChatMessage::assistant(content.to_owned()))
+                        .append_message(ChatMessage::user(repair_instruction(&error)));
+                }
+            }
         }
     }
 
@@ -313,15 +349,17 @@ impl ChatCompletionsClient {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct AnnotationResult {
     pub analysis: TranscriptWindowAnalysis,
     pub diagnostics: AnnotationDiagnostics,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct AnnotationDiagnostics {
     pub tool_rounds: usize,
+    /// Number of schema or window-validation failures returned to the model for correction.
+    pub final_answer_repairs: usize,
     /// Sum across every response, or `None` if any prompt-token count was absent or invalid.
     pub prompt_tokens: Option<u64>,
     /// Sum across every response, or `None` if any completion-token count was absent or invalid.
@@ -334,6 +372,7 @@ impl Default for AnnotationDiagnostics {
     fn default() -> Self {
         Self {
             tool_rounds: 0,
+            final_answer_repairs: 0,
             prompt_tokens: Some(0),
             completion_tokens: Some(0),
             accepted_json_fence: false,
@@ -368,6 +407,10 @@ pub enum ChatCompletionsError {
     OutputTruncated,
     ToolRoundLimit {
         limit: usize,
+    },
+    FinalAnswerRepairLimit {
+        limit: usize,
+        source: Box<ChatCompletionsError>,
     },
     Tool(AnnotationToolError),
     SerializeTool(serde_json::Error),
@@ -407,6 +450,10 @@ impl fmt::Display for ChatCompletionsError {
                 formatter,
                 "the model requested more than the configured {limit} tool-call rounds"
             ),
+            Self::FinalAnswerRepairLimit { limit, source } => write!(
+                formatter,
+                "the model still returned an invalid final analysis after {limit} repair attempts: {source}"
+            ),
             Self::Tool(error) => write!(formatter, "annotation tool failed: {error}"),
             Self::SerializeTool(error) => {
                 write!(
@@ -438,6 +485,7 @@ impl Error for ChatCompletionsError {
             | Self::InvalidAnalysisJson(error) => Some(error),
             Self::Tool(error) => Some(error),
             Self::InvalidWindowAnalysis(error) => Some(error),
+            Self::FinalAnswerRepairLimit { source, .. } => Some(source.as_ref()),
             Self::Provider(_)
             | Self::UnexpectedChoiceCount { .. }
             | Self::UnexpectedFinishReason { .. }
@@ -502,6 +550,12 @@ fn parse_analysis(content: &str) -> Result<(TranscriptWindowAnalysis, bool), Cha
                 .map_err(ChatCompletionsError::InvalidAnalysisJson)
         }
     }
+}
+
+fn repair_instruction(error: &ChatCompletionsError) -> String {
+    format!(
+        "你上一条最终答案未通过验证：{error}\n请返回修正后的完整 TranscriptWindowAnalysis JSON 对象，不要只返回局部修改，也不要调用工具。每个 passage 都必须包含全部必需字段；如果没有相关幻灯片，related_slides 使用空数组 []。"
+    )
 }
 
 fn strip_json_fence(content: &str) -> Option<&str> {

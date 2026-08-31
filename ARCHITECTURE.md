@@ -501,8 +501,10 @@ rounds and calls are bounded.
 
 Model output is untrusted input. Rust code validates its schema, score ranges,
 IDs, owned-region partition, and evidence requirements before accepting it.
-Invalid output may be retried with the validation errors; persistent failure is
-recorded explicitly rather than silently patched into a plausible result.
+Invalid output is returned to the model with the validation error for at most
+two final-answer repair attempts. Repair attempts reuse the same conversation
+and are independent of the tool-call budget. Persistent failure is recorded
+explicitly rather than silently patched into a plausible result.
 Each model response has the following shape:
 
 ```rust

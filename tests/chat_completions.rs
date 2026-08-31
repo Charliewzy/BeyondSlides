@@ -227,7 +227,58 @@ async fn incomplete_or_invalid_usage_makes_token_totals_unknown() -> Result<(), 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn final_analysis_is_validated_against_its_transcript_window() -> Result<(), Box<dyn Error>> {
+async fn invalid_final_json_is_returned_to_the_model_for_repair() -> Result<(), Box<dyn Error>> {
+    let incomplete_analysis = json!({
+        "passages": [{
+            "start": 0,
+            "end": 0,
+            "novelty": 1,
+            "connection_strength": 2,
+            "importance": 3
+        }]
+    })
+    .to_string();
+    let api = mock_api(vec![
+        final_response("chat-1", incomplete_analysis.clone()),
+        final_response("chat-2", analysis_json()),
+    ])
+    .await;
+    let client = beyond_slides::ChatCompletionsClient::new(ChatCompletionsConfig::new(
+        base_url(&api),
+        "test-key",
+        "test-model",
+    )?);
+    let sources = sources()?;
+    let task = task(&sources)?;
+    let scorer = FixedScorer(scores([0.0; 6]));
+
+    let result = client.annotate_window(&sources, &scorer, &task).await?;
+
+    assert_eq!(result.diagnostics.final_answer_repairs, 1);
+    assert_eq!(result.diagnostics.prompt_tokens, Some(40));
+    assert_eq!(result.diagnostics.completion_tokens, Some(20));
+    let requests = api
+        .received_requests()
+        .await
+        .expect("mock request recording is enabled");
+    assert_eq!(requests.len(), 2);
+    let repair_request: Value = requests[1].body_json()?;
+    assert_eq!(repair_request["messages"][2]["role"], "assistant");
+    assert_eq!(
+        repair_request["messages"][2]["content"],
+        incomplete_analysis
+    );
+    assert_eq!(repair_request["messages"][3]["role"], "user");
+    let repair_instruction = repair_request["messages"][3]["content"]
+        .as_str()
+        .expect("repair instruction is text");
+    assert!(repair_instruction.contains("missing field `related_slides`"));
+    assert!(repair_instruction.contains("完整"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn invalid_window_analysis_fails_after_the_repair_limit() -> Result<(), Box<dyn Error>> {
     let invalid_analysis = json!({
         "passages": [{
             "start": 0,
@@ -239,12 +290,14 @@ async fn final_analysis_is_validated_against_its_transcript_window() -> Result<(
         }]
     })
     .to_string();
-    let api = mock_api(vec![final_response("chat-1", invalid_analysis)]).await;
-    let client = beyond_slides::ChatCompletionsClient::new(ChatCompletionsConfig::new(
-        base_url(&api),
-        "test-key",
-        "test-model",
-    )?);
+    let api = mock_api(vec![
+        final_response("chat-1", invalid_analysis.clone()),
+        final_response("chat-2", invalid_analysis),
+    ])
+    .await;
+    let config = ChatCompletionsConfig::new(base_url(&api), "test-key", "test-model")?
+        .with_max_final_answer_repairs(1)?;
+    let client = beyond_slides::ChatCompletionsClient::new(config);
     let sources = sources()?;
     let task = task(&sources)?;
     let scorer = FixedScorer(scores([0.0; 6]));
@@ -252,10 +305,14 @@ async fn final_analysis_is_validated_against_its_transcript_window() -> Result<(
     let error = client
         .annotate_window(&sources, &scorer, &task)
         .await
-        .expect_err("an unknown related slide must fail this window immediately");
+        .expect_err("an unknown related slide must fail after one repair");
 
+    let ChatCompletionsError::FinalAnswerRepairLimit { limit, source } = error else {
+        panic!("expected repair-limit error");
+    };
+    assert_eq!(limit, 1);
     assert!(matches!(
-        error,
+        *source,
         ChatCompletionsError::InvalidWindowAnalysis(AnalysisAssemblyError::InvalidAnalysis(
             ValidationError::UnknownRelatedSlide {
                 passage_start: SentenceId(0),
@@ -263,6 +320,13 @@ async fn final_analysis_is_validated_against_its_transcript_window() -> Result<(
             }
         ))
     ));
+    assert_eq!(
+        api.received_requests()
+            .await
+            .expect("mock request recording is enabled")
+            .len(),
+        2
+    );
     Ok(())
 }
 

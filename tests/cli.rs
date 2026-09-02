@@ -1,5 +1,9 @@
 use std::{fs, path::PathBuf, process::Command};
 
+use beyond_slides::{
+    MODEL_TRACE_FORMAT_VERSION, ModelRequestKind, ModelTraceEvent, ModelTraceRecord, ModelWorkflow,
+};
+
 #[test]
 fn tiny_course_can_be_rendered_from_the_command_line() {
     let report_path = std::env::temp_dir().join(format!(
@@ -49,6 +53,49 @@ fn complete_analysis_requires_explicit_provider_configuration() {
         "unexpected stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn model_trace_can_be_summarized_without_provider_configuration() {
+    let directory = tempfile::tempdir().expect("temporary trace directory");
+    let trace_path = directory.path().join("model-trace.jsonl");
+    let record = ModelTraceRecord {
+        format_version: MODEL_TRACE_FORMAT_VERSION,
+        event_index: 0,
+        timestamp_unix_ms: 1,
+        exchange_id: 0,
+        workflow: ModelWorkflow::Restoration,
+        window_index: 12,
+        conversation_turn: 0,
+        request_kind: ModelRequestKind::Initial,
+        event: ModelTraceEvent::Validation {
+            accepted: false,
+            category: Some("outside_owned_region".into()),
+            error: Some("claimed context".into()),
+        },
+    };
+    fs::write(
+        &trace_path,
+        format!(
+            "{}\n",
+            serde_json::to_string(&record).expect("serialize trace record")
+        ),
+    )
+    .expect("write model trace");
+
+    let output = Command::new(beyond_slides_binary())
+        .args(["summarize-trace"])
+        .arg(&trace_path)
+        .env_remove("BEYOND_SLIDES_API_BASE_URL")
+        .env_remove("BEYOND_SLIDES_API_KEY")
+        .env_remove("BEYOND_SLIDES_MODEL")
+        .output()
+        .expect("the BeyondSlides binary should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("outside_owned_region: 1"));
+    assert!(stdout.contains("restoration window 12"));
 }
 
 fn beyond_slides_binary() -> PathBuf {

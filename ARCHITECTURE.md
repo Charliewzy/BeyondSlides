@@ -413,6 +413,9 @@ authorization headers, and it remains excluded from version control with the
 rest of `run/`. A trace-write failure fails the model operation rather than
 silently claiming a complete audit trail. A final partial line left by a process
 crash is preserved and separated before valid events are appended on resume.
+The offline `summarize-trace` command tolerates malformed records, reports them
+by line number, and aggregates provider, validation, and response-contract
+failures by category and zero-based transcript-window index.
 
 ### 7.5 Retrieval
 

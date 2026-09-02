@@ -1,6 +1,7 @@
 mod analysis_run;
 mod restoration_run;
 mod run_support;
+mod trace_summary_run;
 
 use std::{
     env,
@@ -30,6 +31,9 @@ async fn main() -> ExitCode {
 
 async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
     match arguments.as_slice() {
+        [command, trace_path] if command == OsStr::new("summarize-trace") => {
+            trace_summary_run::run(trace_path)
+        }
         [command, transcript_path, run_directory]
             if command == OsStr::new("restore-canary") =>
         {
@@ -57,6 +61,7 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "usage: beyond-slides <transcript.json> <slides.json> <annotations.json> <result.html>\n\
+             or:    beyond-slides summarize-trace <model-trace.jsonl>\n\
              or:    beyond-slides canary <transcript.json> <slides.json> <canary.json>\n\
              or:    beyond-slides analyze <transcript.json> <slides.json> <run-directory>\n\
              or:    beyond-slides restore-canary <transcript.json> <run-directory>\n\

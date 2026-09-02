@@ -9,6 +9,7 @@ use crate::{
     LecturePassage, LecturePassages, Slide, SlideId, TranscriptSegment, TranscriptSegmentId,
     TranscriptWindow, ValidatedAnalysis, ValidatedSources, ValidationError, WindowingConfig,
     build_windows,
+    windowing::{OwnedRegionPartitionError, validate_owned_region_partition},
 };
 
 pub use chat_completions::{
@@ -180,51 +181,16 @@ fn validate_owned_region(
     owned_region: &[TranscriptSegment],
     analysis: &TranscriptWindowAnalysis,
 ) -> Result<(), AnalysisAssemblyError> {
-    let Some((owned_start, owned_end)) = owned_region
-        .first()
-        .zip(owned_region.last())
-        .map(|(first, last)| (first.id, last.id))
-    else {
-        return Err(AnalysisAssemblyError::EmptyOwnedRegion { window });
-    };
-    let owned_start_position = owned_start.index();
-    let owned_end_position = owned_end.index();
-    let mut next_uncovered = 0;
+    validate_owned_region_partition(
+        owned_region,
+        analysis
+            .passages
+            .iter()
+            .map(|passage| (passage.start, passage.end)),
+    )
+    .map_err(|error| analysis_partition_error(window, error))?;
 
     for passage in &analysis.passages {
-        let start_position = passage.start.index();
-        let end_position = passage.end.index();
-        if end_position < start_position {
-            return Err(AnalysisAssemblyError::InvalidAnalysis(
-                ValidationError::PassageEndBeforeStart {
-                    start: passage.start,
-                    end: passage.end,
-                },
-            ));
-        }
-        if start_position < owned_start_position || end_position > owned_end_position {
-            return Err(AnalysisAssemblyError::PassageOutsideOwnedRegion {
-                window,
-                owned_start,
-                owned_end,
-                passage_start: passage.start,
-                passage_end: passage.end,
-            });
-        }
-        let Some(expected) = owned_region.get(next_uncovered) else {
-            return Err(AnalysisAssemblyError::UnexpectedWindowPassage {
-                window,
-                actual: passage.start,
-            });
-        };
-        if passage.start != expected.id {
-            return Err(AnalysisAssemblyError::WindowCoverageMismatch {
-                window,
-                expected: expected.id,
-                actual: passage.start,
-            });
-        }
-
         let mut related_slides = HashSet::new();
         for slide in &passage.related_slides {
             if !related_slides.insert(*slide) {
@@ -244,18 +210,51 @@ fn validate_owned_region(
                 ));
             }
         }
-
-        next_uncovered = end_position - owned_start_position + 1;
-    }
-
-    if let Some(expected) = owned_region.get(next_uncovered) {
-        return Err(AnalysisAssemblyError::UncoveredWindowTail {
-            window,
-            expected: expected.id,
-        });
     }
 
     Ok(())
+}
+
+fn analysis_partition_error(
+    window: usize,
+    error: OwnedRegionPartitionError,
+) -> AnalysisAssemblyError {
+    match error {
+        OwnedRegionPartitionError::EmptyOwnedRegion => {
+            AnalysisAssemblyError::EmptyOwnedRegion { window }
+        }
+        OwnedRegionPartitionError::EndBeforeStart { start, end } => {
+            AnalysisAssemblyError::InvalidAnalysis(ValidationError::PassageEndBeforeStart {
+                start,
+                end,
+            })
+        }
+        OwnedRegionPartitionError::OutsideOwnedRegion {
+            owned_start,
+            owned_end,
+            start,
+            end,
+        } => AnalysisAssemblyError::PassageOutsideOwnedRegion {
+            window,
+            owned_start,
+            owned_end,
+            passage_start: start,
+            passage_end: end,
+        },
+        OwnedRegionPartitionError::CoverageMismatch { expected, actual } => {
+            AnalysisAssemblyError::WindowCoverageMismatch {
+                window,
+                expected,
+                actual,
+            }
+        }
+        OwnedRegionPartitionError::UnexpectedRange { actual } => {
+            AnalysisAssemblyError::UnexpectedWindowPassage { window, actual }
+        }
+        OwnedRegionPartitionError::UncoveredTail { expected } => {
+            AnalysisAssemblyError::UncoveredWindowTail { window, expected }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

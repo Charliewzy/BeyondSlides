@@ -6,6 +6,7 @@ pub mod ingestion;
 mod orchestration;
 mod ranking;
 mod report;
+mod restoration;
 mod retrieval;
 mod validation;
 mod windowing;
@@ -19,8 +20,8 @@ pub use annotation::{
     build_annotation_tasks, validate_window_analysis,
 };
 pub use domain::{
-    LecturePassage, LecturePassages, Score5, ScoreOutOfRange, Slide, SlideDeck, SlideId,
-    Transcript, TranscriptSegment, TranscriptSegmentId,
+    LecturePassage, LecturePassages, RestoredTranscript, RestoredTranscriptSpan, Score5,
+    ScoreOutOfRange, Slide, SlideDeck, SlideId, Transcript, TranscriptSegment, TranscriptSegmentId,
 };
 pub use orchestration::{
     LectureAnalysisConfig, LectureAnalysisConfigError, LectureAnalysisError,
@@ -29,6 +30,10 @@ pub use orchestration::{
 };
 pub use ranking::rank_oral_additions;
 pub use report::render_report;
+pub use restoration::{
+    RestorationError, RestorationMessage, TranscriptRestorationTask, TranscriptWindowRestoration,
+    assemble_restored_transcript, build_restoration_tasks, validate_window_restoration,
+};
 pub use retrieval::{
     DenseSlideScorer, HybridSlideScorer, LexicalSlideScorer, SearchError, SlideScore, SlideScorer,
 };

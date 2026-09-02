@@ -70,6 +70,55 @@ pub struct Transcript {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct RestoredTranscript {
+    pub spans: Vec<RestoredTranscriptSpan>,
+}
+
+impl RestoredTranscript {
+    pub fn text(&self) -> String {
+        self.spans
+            .iter()
+            .filter_map(|span| match span {
+                RestoredTranscriptSpan::Text { text, .. } => Some(text.as_str()),
+                RestoredTranscriptSpan::OmittedDisfluency { .. } => None,
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RestoredTranscriptSpan {
+    Text {
+        source_start: TranscriptSegmentId,
+        source_end: TranscriptSegmentId,
+        text: String,
+    },
+    OmittedDisfluency {
+        source_start: TranscriptSegmentId,
+        source_end: TranscriptSegmentId,
+    },
+}
+
+impl RestoredTranscriptSpan {
+    pub const fn source_start(&self) -> TranscriptSegmentId {
+        match self {
+            Self::Text { source_start, .. } | Self::OmittedDisfluency { source_start, .. } => {
+                *source_start
+            }
+        }
+    }
+
+    pub const fn source_end(&self) -> TranscriptSegmentId {
+        match self {
+            Self::Text { source_end, .. } | Self::OmittedDisfluency { source_end, .. } => {
+                *source_end
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Slide {
     pub id: SlideId,
     pub text: String,

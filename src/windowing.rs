@@ -1,6 +1,6 @@
 use std::{error::Error, fmt, num::NonZeroUsize, time::Duration};
 
-use crate::{TranscriptSegment, ValidatedSources};
+use crate::{TranscriptSegment, TranscriptSegmentId, ValidatedSources};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowingConfig {
@@ -72,6 +72,82 @@ impl<'a> TranscriptWindow<'a> {
     pub fn right_context(&self) -> &'a [TranscriptSegment] {
         self.right_context
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OwnedRegionPartitionError {
+    EmptyOwnedRegion,
+    EndBeforeStart {
+        start: TranscriptSegmentId,
+        end: TranscriptSegmentId,
+    },
+    OutsideOwnedRegion {
+        owned_start: TranscriptSegmentId,
+        owned_end: TranscriptSegmentId,
+        start: TranscriptSegmentId,
+        end: TranscriptSegmentId,
+    },
+    CoverageMismatch {
+        expected: TranscriptSegmentId,
+        actual: TranscriptSegmentId,
+    },
+    UnexpectedRange {
+        actual: TranscriptSegmentId,
+    },
+    UncoveredTail {
+        expected: TranscriptSegmentId,
+    },
+}
+
+pub(crate) fn validate_owned_region_partition(
+    owned_region: &[TranscriptSegment],
+    ranges: impl IntoIterator<Item = (TranscriptSegmentId, TranscriptSegmentId)>,
+) -> Result<(), OwnedRegionPartitionError> {
+    let Some((owned_start, owned_end)) = owned_region
+        .first()
+        .zip(owned_region.last())
+        .map(|(first, last)| (first.id, last.id))
+    else {
+        return Err(OwnedRegionPartitionError::EmptyOwnedRegion);
+    };
+    let owned_start_position = owned_start.index();
+    let owned_end_position = owned_end.index();
+    let mut next_uncovered = 0;
+
+    for (start, end) in ranges {
+        let start_position = start.index();
+        let end_position = end.index();
+        if end_position < start_position {
+            return Err(OwnedRegionPartitionError::EndBeforeStart { start, end });
+        }
+        if start_position < owned_start_position || end_position > owned_end_position {
+            return Err(OwnedRegionPartitionError::OutsideOwnedRegion {
+                owned_start,
+                owned_end,
+                start,
+                end,
+            });
+        }
+        let Some(expected) = owned_region.get(next_uncovered) else {
+            return Err(OwnedRegionPartitionError::UnexpectedRange { actual: start });
+        };
+        if start != expected.id {
+            return Err(OwnedRegionPartitionError::CoverageMismatch {
+                expected: expected.id,
+                actual: start,
+            });
+        }
+
+        next_uncovered = end_position - owned_start_position + 1;
+    }
+
+    if let Some(expected) = owned_region.get(next_uncovered) {
+        return Err(OwnedRegionPartitionError::UncoveredTail {
+            expected: expected.id,
+        });
+    }
+
+    Ok(())
 }
 
 pub fn build_windows(

@@ -20,6 +20,17 @@ _Avoid_: Notes, lecture summary
 The smallest individually timestamped and referenced part of a transcript.
 _Avoid_: Transcript sentence, ASR segment, utterance
 
+**Restored transcript**:
+Readable lecture text derived from a transcript while retaining references to
+the transcript segments that support it.
+_Avoid_: Clean transcript, corrected transcript
+
+**Restored transcript span**:
+A contiguous range of transcript segments represented as readable text or
+explicitly omitted as disfluency. Its text may contain part of one grammatical
+sentence or several grammatical sentences.
+_Avoid_: Restored sentence, paraphrase
+
 **Lecture passage**:
 A contiguous part of the transcript evaluated as one meaningful unit. Every
 transcript segment belongs to exactly one lecture passage after analysis.

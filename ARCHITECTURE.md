@@ -313,6 +313,9 @@ transcription         text extraction
                        v
               transcript windowing
                        |
+                       v
+              transcript restoration
+                       |
           +------------+-------------+
           |                          |
           v                          v
@@ -342,9 +345,8 @@ The FunASR TSV adapter preserves evidence rather than inventing grammatical
 boundaries: every nonblank `start`, `end`, `text` row becomes one transcript
 segment with a sequential zero-based ID. It converts decimal seconds exactly to
 milliseconds, trims surrounding text whitespace, and rejects malformed,
-reversed, or overlapping rows. Punctuation restoration or segment merging, if
-added later, must remain a separate transformation with traceable source
-evidence.
+reversed, or overlapping rows. Transcript restoration remains a separate
+transformation so the normalized source evidence is never silently replaced.
 
 The first PDF adapter uses Poppler's `pdftotext` in raw reading order. Every PDF
 page becomes one slide with a canonical zero-based ID, including pages whose
@@ -366,7 +368,22 @@ character budget. A later agent adapter may translate its model-specific token
 budget into these model-independent source-window limits; the correctness
 contract remains based on segment ownership rather than token counts.
 
-### 7.3 Retrieval
+### 7.3 Transcript restoration
+
+Each transcript window produces a `TranscriptWindowRestoration`. The model may
+add punctuation, merge speech fragments, minimally regularize spoken wording,
+and explicitly omit pure disfluencies, but it may neither summarize nor add
+meaning. Left and right context are read-only evidence. A window edge is not a
+grammatical boundary, so its first or last restored span may remain a sentence
+fragment whose text joins directly with the neighboring window's result.
+
+Every `RestoredTranscriptSpan` references a contiguous, inclusive source range.
+The spans from one response must partition only that window's owned region with
+no gaps or overlap. Assembly consumes the existing windows rather than
+rebuilding them, validates each response, and concatenates accepted spans in
+source order. Pure disfluencies remain traceable as explicit omitted spans.
+
+### 7.4 Retrieval
 
 Slides are indexed once behind one interface:
 
@@ -401,7 +418,7 @@ operation. Model files are downloaded into FastEmbed's local cache on first use
 and reused afterward. The model identifier and scoring mode must eventually be
 recorded in the run manifest.
 
-### 7.4 Semantic alignment
+### 7.5 Semantic alignment
 
 Every transcript window is scored against every slide. Each row is normalized
 independently to `0..1`, preventing BM25, cosine, or reciprocal-rank-fusion
@@ -427,7 +444,7 @@ slide neighborhood. When optional visual reference evidence exists, the report
 adds a separate dotted path and mismatch markers; the production alignment does
 not consume that reference.
 
-### 7.5 Optional visual reference alignment
+### 7.6 Optional visual reference alignment
 
 BeyondSlides does not require the original lecture video. When it is available,
 visual matching can supply reference evidence for evaluating semantic slide
@@ -449,7 +466,7 @@ path. It measures whether inferred slide positions match what was displayed,
 while manually labeled related slides remain necessary to evaluate semantic
 retrieval.
 
-### 7.6 Agent annotation
+### 7.7 Agent annotation
 
 The core builds one provider-neutral `TranscriptWindowTask` per window after
 semantic alignment. A task preserves the window's left, owned, and right
@@ -497,7 +514,7 @@ one transcript window; independent windows have independent model contexts.
 Retrieval failure is reported as failure rather than an empty result. Tool
 rounds and calls are bounded.
 
-### 7.7 Validation and assembly
+### 7.8 Validation and assembly
 
 Model output is untrusted input. Rust code validates its schema, score ranges,
 IDs, owned-region partition, and evidence requirements before accepting it.
@@ -523,7 +540,7 @@ and coverage validation.
 `ValidatedAnalysis` combines already-validated sources with the accepted
 lecture passages, so source validation is not repeated after annotation.
 
-### 7.8 Ranking and rendering
+### 7.9 Ranking and rendering
 
 The initial ranked view sorts primarily by importance, then novelty, then
 connection strength. It should retain the component scores rather than collapse

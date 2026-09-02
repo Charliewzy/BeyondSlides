@@ -1,8 +1,8 @@
 use std::{error::Error, time::Duration};
 
 use beyond_slides::{
-    AnnotationToolError, AnnotationToolSession, SearchError, SentenceId, Slide, SlideDeck,
-    SlideEvidence, SlideId, SlideScore, SlideScorer, Transcript, TranscriptSentence,
+    AnnotationToolError, AnnotationToolSession, SearchError, Slide, SlideDeck, SlideEvidence,
+    SlideId, SlideScore, SlideScorer, Transcript, TranscriptSegment, TranscriptSegmentId,
     TranscriptWindowTask, ValidatedSources, WindowingConfig, build_annotation_tasks, build_windows,
 };
 use serde_json::json;
@@ -190,8 +190,8 @@ fn search_rejects_scores_that_do_not_match_the_validated_slide_deck() -> Result<
 fn sources() -> Result<ValidatedSources, Box<dyn Error>> {
     Ok(ValidatedSources::new(
         Transcript {
-            sentences: vec![TranscriptSentence {
-                id: SentenceId(0),
+            segments: vec![TranscriptSegment {
+                id: TranscriptSegmentId(0),
                 start_ms: 0,
                 end_ms: 1_000,
                 text: "二分查找的课堂讲解".into(),

@@ -1,6 +1,6 @@
 use std::{error::Error, fmt, num::NonZeroUsize, time::Duration};
 
-use crate::{TranscriptSentence, ValidatedSources};
+use crate::{TranscriptSegment, ValidatedSources};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowingConfig {
@@ -10,8 +10,8 @@ pub struct WindowingConfig {
 }
 
 impl WindowingConfig {
-    /// Configures complete-sentence windows using Unicode character and
-    /// wall-clock budgets. An individually oversized sentence remains intact.
+    /// Configures complete-segment windows using Unicode character and
+    /// wall-clock budgets. An individually oversized segment remains intact.
     pub fn new(
         max_owned_characters: usize,
         max_owned_duration: Duration,
@@ -55,21 +55,21 @@ impl Error for WindowingConfigError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TranscriptWindow<'a> {
-    left_context: &'a [TranscriptSentence],
-    owned_region: &'a [TranscriptSentence],
-    right_context: &'a [TranscriptSentence],
+    left_context: &'a [TranscriptSegment],
+    owned_region: &'a [TranscriptSegment],
+    right_context: &'a [TranscriptSegment],
 }
 
 impl<'a> TranscriptWindow<'a> {
-    pub fn left_context(&self) -> &'a [TranscriptSentence] {
+    pub fn left_context(&self) -> &'a [TranscriptSegment] {
         self.left_context
     }
 
-    pub fn owned_region(&self) -> &'a [TranscriptSentence] {
+    pub fn owned_region(&self) -> &'a [TranscriptSegment] {
         self.owned_region
     }
 
-    pub fn right_context(&self) -> &'a [TranscriptSentence] {
+    pub fn right_context(&self) -> &'a [TranscriptSegment] {
         self.right_context
     }
 }
@@ -78,20 +78,19 @@ pub fn build_windows(
     sources: &ValidatedSources,
     config: WindowingConfig,
 ) -> Vec<TranscriptWindow<'_>> {
-    let sentences = &sources.transcript().sentences;
+    let segments = &sources.transcript().segments;
     let mut windows = Vec::new();
     let mut owned_start = 0;
 
-    while owned_start < sentences.len() {
+    while owned_start < segments.len() {
         let mut owned_end = owned_start;
         let mut character_count = 0_usize;
-        while let Some(sentence) = sentences.get(owned_end) {
-            let next_character_count =
-                character_count.saturating_add(sentence.text.chars().count());
+        while let Some(segment) = segments.get(owned_end) {
+            let next_character_count = character_count.saturating_add(segment.text.chars().count());
             let next_duration = Duration::from_millis(
-                sentence
+                segment
                     .end_ms
-                    .saturating_sub(sentences[owned_start].start_ms),
+                    .saturating_sub(segments[owned_start].start_ms),
             );
             let exceeds_budget = next_character_count > config.max_owned_characters.get()
                 || next_duration > config.max_owned_duration;
@@ -106,7 +105,7 @@ pub fn build_windows(
         let mut left_context_characters = 0_usize;
         while visible_start > 0 {
             let next_character_count = left_context_characters
-                .saturating_add(sentences[visible_start - 1].text.chars().count());
+                .saturating_add(segments[visible_start - 1].text.chars().count());
             if next_character_count > config.context_characters {
                 break;
             }
@@ -116,9 +115,9 @@ pub fn build_windows(
 
         let mut visible_end = owned_end;
         let mut right_context_characters = 0_usize;
-        while let Some(sentence) = sentences.get(visible_end) {
+        while let Some(segment) = segments.get(visible_end) {
             let next_character_count =
-                right_context_characters.saturating_add(sentence.text.chars().count());
+                right_context_characters.saturating_add(segment.text.chars().count());
             if next_character_count > config.context_characters {
                 break;
             }
@@ -127,9 +126,9 @@ pub fn build_windows(
         }
 
         windows.push(TranscriptWindow {
-            left_context: &sentences[visible_start..owned_start],
-            owned_region: &sentences[owned_start..owned_end],
-            right_context: &sentences[owned_end..visible_end],
+            left_context: &segments[visible_start..owned_start],
+            owned_region: &segments[owned_start..owned_end],
+            right_context: &segments[owned_end..visible_end],
         });
         owned_start = owned_end;
     }

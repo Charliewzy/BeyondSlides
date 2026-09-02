@@ -1,6 +1,6 @@
 use std::{collections::HashSet, error::Error, fmt};
 
-use crate::{LecturePassage, LecturePassages, SentenceId, SlideDeck, SlideId, Transcript};
+use crate::{LecturePassage, LecturePassages, SlideDeck, SlideId, Transcript, TranscriptSegmentId};
 
 #[derive(Debug)]
 pub struct ValidatedSources {
@@ -10,29 +10,29 @@ pub struct ValidatedSources {
 
 impl ValidatedSources {
     pub fn new(transcript: Transcript, slide_deck: SlideDeck) -> Result<Self, ValidationError> {
-        for (position, sentence) in transcript.sentences.iter().enumerate() {
-            if sentence.id.index() != position {
-                return Err(ValidationError::NonCanonicalSentenceId {
+        for (position, segment) in transcript.segments.iter().enumerate() {
+            if segment.id.index() != position {
+                return Err(ValidationError::NonCanonicalTranscriptSegmentId {
                     position,
-                    actual: sentence.id,
+                    actual: segment.id,
                 });
             }
-            if sentence.text.trim().is_empty() {
-                return Err(ValidationError::EmptyTranscriptSentence { id: sentence.id });
+            if segment.text.trim().is_empty() {
+                return Err(ValidationError::EmptyTranscriptSegment { id: segment.id });
             }
-            if sentence.start_ms > sentence.end_ms {
-                return Err(ValidationError::InvalidTranscriptSentenceTimeRange {
-                    id: sentence.id,
-                    start_ms: sentence.start_ms,
-                    end_ms: sentence.end_ms,
+            if segment.start_ms > segment.end_ms {
+                return Err(ValidationError::InvalidTranscriptSegmentTimeRange {
+                    id: segment.id,
+                    start_ms: segment.start_ms,
+                    end_ms: segment.end_ms,
                 });
             }
         }
-        for pair in transcript.sentences.windows(2) {
+        for pair in transcript.segments.windows(2) {
             let previous = &pair[0];
             let current = &pair[1];
             if current.start_ms < previous.start_ms || current.end_ms < previous.end_ms {
-                return Err(ValidationError::TranscriptSentenceOutOfOrder {
+                return Err(ValidationError::TranscriptSegmentOutOfOrder {
                     previous: previous.id,
                     current: current.id,
                 });
@@ -76,12 +76,12 @@ impl ValidatedAnalysis {
     ) -> Result<Self, ValidationError> {
         let mut next_uncovered = 0;
         for passage in &passages.passages {
-            let Some(_) = sources.transcript.sentences.get(passage.start.index()) else {
+            let Some(_) = sources.transcript.segments.get(passage.start.index()) else {
                 return Err(ValidationError::UnknownPassageStart {
                     start: passage.start,
                 });
             };
-            let Some(_) = sources.transcript.sentences.get(passage.end.index()) else {
+            let Some(_) = sources.transcript.segments.get(passage.end.index()) else {
                 return Err(ValidationError::UnknownPassageEnd {
                     passage_start: passage.start,
                     end: passage.end,
@@ -108,7 +108,7 @@ impl ValidatedAnalysis {
                     });
                 }
             }
-            let Some(expected) = sources.transcript.sentences.get(next_uncovered) else {
+            let Some(expected) = sources.transcript.segments.get(next_uncovered) else {
                 return Err(ValidationError::UnexpectedPassage {
                     actual: passage.start,
                 });
@@ -121,7 +121,7 @@ impl ValidatedAnalysis {
             }
             next_uncovered = passage.end.index() + 1;
         }
-        if let Some(expected) = sources.transcript.sentences.get(next_uncovered) {
+        if let Some(expected) = sources.transcript.segments.get(next_uncovered) {
             return Err(ValidationError::UncoveredTranscriptTail {
                 expected: expected.id,
             });
@@ -145,80 +145,80 @@ impl ValidatedAnalysis {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
-    NonCanonicalSentenceId {
+    NonCanonicalTranscriptSegmentId {
         position: usize,
-        actual: SentenceId,
+        actual: TranscriptSegmentId,
     },
-    EmptyTranscriptSentence {
-        id: SentenceId,
+    EmptyTranscriptSegment {
+        id: TranscriptSegmentId,
     },
-    InvalidTranscriptSentenceTimeRange {
-        id: SentenceId,
+    InvalidTranscriptSegmentTimeRange {
+        id: TranscriptSegmentId,
         start_ms: u64,
         end_ms: u64,
     },
-    TranscriptSentenceOutOfOrder {
-        previous: SentenceId,
-        current: SentenceId,
+    TranscriptSegmentOutOfOrder {
+        previous: TranscriptSegmentId,
+        current: TranscriptSegmentId,
     },
     NonCanonicalSlideId {
         position: usize,
         actual: SlideId,
     },
     UnknownRelatedSlide {
-        passage_start: SentenceId,
+        passage_start: TranscriptSegmentId,
         slide: SlideId,
     },
     DuplicateRelatedSlide {
-        passage_start: SentenceId,
+        passage_start: TranscriptSegmentId,
         slide: SlideId,
     },
     UnknownPassageStart {
-        start: SentenceId,
+        start: TranscriptSegmentId,
     },
     UnknownPassageEnd {
-        passage_start: SentenceId,
-        end: SentenceId,
+        passage_start: TranscriptSegmentId,
+        end: TranscriptSegmentId,
     },
     PassageEndBeforeStart {
-        start: SentenceId,
-        end: SentenceId,
+        start: TranscriptSegmentId,
+        end: TranscriptSegmentId,
     },
     PassageCoverageMismatch {
-        expected: SentenceId,
-        actual: SentenceId,
+        expected: TranscriptSegmentId,
+        actual: TranscriptSegmentId,
     },
     UncoveredTranscriptTail {
-        expected: SentenceId,
+        expected: TranscriptSegmentId,
     },
     UnexpectedPassage {
-        actual: SentenceId,
+        actual: TranscriptSegmentId,
     },
 }
 
 impl fmt::Display for ValidationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NonCanonicalSentenceId { position, actual } => write!(
+            Self::NonCanonicalTranscriptSegmentId { position, actual } => write!(
                 formatter,
-                "transcript sentence at position {position} must have ID {position}, found {}",
+                "transcript segment at position {position} must have ID {position}, found {}",
                 actual.0
             ),
-            Self::EmptyTranscriptSentence { id } => {
-                write!(formatter, "transcript sentence {} has empty text", id.0)
+            Self::EmptyTranscriptSegment { id } => {
+                write!(formatter, "transcript segment {} has empty text", id.0)
             }
-            Self::InvalidTranscriptSentenceTimeRange {
+            Self::InvalidTranscriptSegmentTimeRange {
                 id,
                 start_ms,
                 end_ms,
             } => write!(
                 formatter,
-                "transcript sentence {} starts at {} ms but ends at {} ms",
+                "transcript segment {} starts at {} ms but ends at {} ms",
                 id.0, start_ms, end_ms
             ),
-            Self::TranscriptSentenceOutOfOrder { previous, current } => write!(
+            Self::TranscriptSegmentOutOfOrder { previous, current } => write!(
                 formatter,
-                "transcript sentence {} appears before sentence {} in time",
+                "transcript segment {} appears before segment {} in time",
                 current.0, previous.0
             ),
             Self::NonCanonicalSlideId { position, actual } => write!(
@@ -231,7 +231,7 @@ impl fmt::Display for ValidationError {
                 slide,
             } => write!(
                 formatter,
-                "lecture passage starting at sentence {} references unknown slide {}",
+                "lecture passage starting at segment {} references unknown slide {}",
                 passage_start.0, slide.0
             ),
             Self::DuplicateRelatedSlide {
@@ -239,37 +239,37 @@ impl fmt::Display for ValidationError {
                 slide,
             } => write!(
                 formatter,
-                "lecture passage starting at sentence {} references slide {} more than once",
+                "lecture passage starting at segment {} references slide {} more than once",
                 passage_start.0, slide.0
             ),
             Self::UnknownPassageStart { start } => write!(
                 formatter,
-                "lecture passage starts at unknown transcript sentence {}",
+                "lecture passage starts at unknown transcript segment {}",
                 start.0
             ),
             Self::UnknownPassageEnd { passage_start, end } => write!(
                 formatter,
-                "lecture passage starting at sentence {} ends at unknown transcript sentence {}",
+                "lecture passage starting at segment {} ends at unknown transcript segment {}",
                 passage_start.0, end.0
             ),
             Self::PassageEndBeforeStart { start, end } => write!(
                 formatter,
-                "lecture passage starting at sentence {} ends earlier at sentence {}",
+                "lecture passage starting at segment {} ends earlier at segment {}",
                 start.0, end.0
             ),
             Self::PassageCoverageMismatch { expected, actual } => write!(
                 formatter,
-                "lecture passage coverage expected sentence {} but found sentence {}",
+                "lecture passage coverage expected segment {} but found segment {}",
                 expected.0, actual.0
             ),
             Self::UncoveredTranscriptTail { expected } => write!(
                 formatter,
-                "transcript sentence {} and the remaining tail are not covered by a lecture passage",
+                "transcript segment {} and the remaining tail are not covered by a lecture passage",
                 expected.0
             ),
             Self::UnexpectedPassage { actual } => write!(
                 formatter,
-                "lecture passage starting at sentence {} appears after the transcript is already covered",
+                "lecture passage starting at segment {} appears after the transcript is already covered",
                 actual.0
             ),
         }

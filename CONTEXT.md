@@ -16,14 +16,14 @@ _Avoid_: Written material, reference material
 The ordered, timestamped textual record of a lecture.
 _Avoid_: Notes, lecture summary
 
-**Transcript sentence**:
+**Transcript segment**:
 The smallest individually timestamped and referenced part of a transcript.
-_Avoid_: ASR segment, utterance
+_Avoid_: Transcript sentence, ASR segment, utterance
 
 **Lecture passage**:
 A contiguous part of the transcript evaluated as one meaningful unit. Every
-transcript sentence belongs to exactly one lecture passage after analysis.
-_Avoid_: Annotation group, sentence group
+transcript segment belongs to exactly one lecture passage after analysis.
+_Avoid_: Annotation group, segment group
 
 ## Windowing
 
@@ -33,7 +33,7 @@ owned region and its optional left and right context.
 _Avoid_: Chunk, annotatable window
 
 **Owned region**:
-A contiguous range of transcript sentences for which exactly one transcript
+A contiguous range of transcript segments for which exactly one transcript
 window is responsible. All owned regions together partition the transcript.
 _Avoid_: Owned window, annotation span
 

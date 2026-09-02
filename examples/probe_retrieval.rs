@@ -7,8 +7,9 @@ use std::{
 };
 
 use beyond_slides::{
-    DenseSlideScorer, HybridSlideScorer, LexicalSlideScorer, SentenceId, SlideDeck, SlideId,
-    SlideScorer, Transcript, TranscriptSentence, ValidatedSources, WindowingConfig, build_windows,
+    DenseSlideScorer, HybridSlideScorer, LexicalSlideScorer, SlideDeck, SlideId, SlideScorer,
+    Transcript, TranscriptSegment, TranscriptSegmentId, ValidatedSources, WindowingConfig,
+    build_windows,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -19,7 +20,7 @@ const MAX_RESULTS: usize = 5;
 
 #[derive(Serialize)]
 struct RetrievalProbe {
-    transcript_sentence_count: usize,
+    transcript_segment_count: usize,
     slide_count: usize,
     windowing: WindowingSettings,
     retrieval: RetrievalSettings,
@@ -52,11 +53,11 @@ struct WindowResult {
 
 #[derive(Serialize)]
 struct SentenceRange {
-    first_sentence: SentenceId,
-    last_sentence: SentenceId,
+    first_segment: TranscriptSegmentId,
+    last_segment: TranscriptSegmentId,
     start_ms: u64,
     end_ms: u64,
-    sentence_count: usize,
+    segment_count: usize,
 }
 
 #[derive(Serialize)]
@@ -103,7 +104,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let query = window
             .owned_region()
             .iter()
-            .map(|sentence| sentence.text.as_str())
+            .map(|segment| segment.text.as_str())
             .collect::<Vec<_>>()
             .join(" ");
         let mut scores = hybrid.score_slides(&query)?;
@@ -128,14 +129,14 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         results.push(WindowResult {
             number: position + 1,
-            left_context: sentence_range(window.left_context()),
-            owned_region: sentence_range(window.owned_region()).ok_or_else(|| {
+            left_context: segment_range(window.left_context()),
+            owned_region: segment_range(window.owned_region()).ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     "window has an empty owned region",
                 )
             })?,
-            right_context: sentence_range(window.right_context()),
+            right_context: segment_range(window.right_context()),
             query,
             candidates,
         });
@@ -150,7 +151,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let probe = RetrievalProbe {
-        transcript_sentence_count: sources.transcript().sentences.len(),
+        transcript_segment_count: sources.transcript().segments.len(),
         slide_count: sources.slide_deck().slides.len(),
         windowing: WindowingSettings {
             max_owned_characters: MAX_OWNED_CHARACTERS,
@@ -196,14 +197,14 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, Box<dyn Error>> {
     })
 }
 
-fn sentence_range(sentences: &[TranscriptSentence]) -> Option<SentenceRange> {
-    let first = sentences.first()?;
-    let last = sentences.last()?;
+fn segment_range(segments: &[TranscriptSegment]) -> Option<SentenceRange> {
+    let first = segments.first()?;
+    let last = segments.last()?;
     Some(SentenceRange {
-        first_sentence: first.id,
-        last_sentence: last.id,
+        first_segment: first.id,
+        last_segment: last.id,
         start_ms: first.start_ms,
         end_ms: last.end_ms,
-        sentence_count: sentences.len(),
+        segment_count: segments.len(),
     })
 }

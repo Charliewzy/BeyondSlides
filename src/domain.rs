@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(transparent)]
-pub struct SentenceId(pub u32);
+pub struct TranscriptSegmentId(pub u32);
 
-impl SentenceId {
+impl TranscriptSegmentId {
     pub const fn index(self) -> usize {
         self.0 as usize
     }
@@ -56,8 +56,8 @@ impl fmt::Display for ScoreOutOfRange {
 impl Error for ScoreOutOfRange {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct TranscriptSentence {
-    pub id: SentenceId,
+pub struct TranscriptSegment {
+    pub id: TranscriptSegmentId,
     pub start_ms: u64,
     pub end_ms: u64,
     pub text: String,
@@ -65,7 +65,8 @@ pub struct TranscriptSentence {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Transcript {
-    pub sentences: Vec<TranscriptSentence>,
+    #[serde(alias = "sentences")]
+    pub segments: Vec<TranscriptSegment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -87,8 +88,8 @@ impl SlideDeck {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct LecturePassage {
-    pub start: SentenceId,
-    pub end: SentenceId,
+    pub start: TranscriptSegmentId,
+    pub end: TranscriptSegmentId,
     pub novelty: Score5,
     pub connection_strength: Score5,
     pub importance: Score5,

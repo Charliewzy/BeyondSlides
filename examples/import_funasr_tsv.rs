@@ -31,8 +31,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     })?;
 
     println!(
-        "Wrote {} transcript sentences to {}",
-        transcript.sentences.len(),
+        "Wrote {} transcript segments to {}",
+        transcript.segments.len(),
         output_path.display()
     );
     Ok(())

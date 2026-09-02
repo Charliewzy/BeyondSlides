@@ -1,10 +1,10 @@
 use std::{error::Error, time::Duration};
 
 use beyond_slides::{
-    AnalysisAssemblyError, LexicalSlideScorer, SentenceId, Slide, SlideDeck, SlideId, SlideScorer,
-    Transcript, TranscriptSentence, TranscriptWindowAnalysis, ValidatedSources, ValidationError,
-    WindowingConfig, assemble_window_analyses, build_windows, infer_slide_positions,
-    rank_oral_additions, render_report,
+    AnalysisAssemblyError, LexicalSlideScorer, Slide, SlideDeck, SlideId, SlideScorer, Transcript,
+    TranscriptSegment, TranscriptSegmentId, TranscriptWindowAnalysis, ValidatedSources,
+    ValidationError, WindowingConfig, assemble_window_analyses, build_windows,
+    infer_slide_positions, rank_oral_additions, render_report,
 };
 
 #[test]
@@ -58,16 +58,16 @@ fn transcript_window_analyses_become_one_validated_analysis() -> Result<(), Box<
             .map(|passage| (passage.start, passage.end))
             .collect::<Vec<_>>(),
         vec![
-            (SentenceId(0), SentenceId(1)),
-            (SentenceId(2), SentenceId(2)),
-            (SentenceId(3), SentenceId(3)),
+            (TranscriptSegmentId(0), TranscriptSegmentId(1)),
+            (TranscriptSegmentId(2), TranscriptSegmentId(2)),
+            (TranscriptSegmentId(3), TranscriptSegmentId(3)),
         ]
     );
     Ok(())
 }
 
 #[test]
-fn transcript_window_analysis_cannot_claim_context_sentences() -> Result<(), Box<dyn Error>> {
+fn transcript_window_analysis_cannot_claim_context_segments() -> Result<(), Box<dyn Error>> {
     let window_analyses: Vec<TranscriptWindowAnalysis> = serde_json::from_str(
         r#"
         [
@@ -106,10 +106,10 @@ fn transcript_window_analysis_cannot_claim_context_sentences() -> Result<(), Box
         error,
         AnalysisAssemblyError::PassageOutsideOwnedRegion {
             window: 2,
-            owned_start: SentenceId(2),
-            owned_end: SentenceId(3),
-            passage_start: SentenceId(1),
-            passage_end: SentenceId(3),
+            owned_start: TranscriptSegmentId(2),
+            owned_end: TranscriptSegmentId(3),
+            passage_start: TranscriptSegmentId(1),
+            passage_end: TranscriptSegmentId(3),
         }
     );
     Ok(())
@@ -154,16 +154,16 @@ fn transcript_window_analysis_rejects_a_reversed_passage() -> Result<(), Box<dyn
     assert_eq!(
         error,
         AnalysisAssemblyError::InvalidAnalysis(ValidationError::PassageEndBeforeStart {
-            start: SentenceId(3),
-            end: SentenceId(2),
+            start: TranscriptSegmentId(3),
+            end: TranscriptSegmentId(2),
         })
     );
     Ok(())
 }
 
 #[test]
-fn transcript_window_analysis_cannot_leave_an_owned_sentence_uncovered()
--> Result<(), Box<dyn Error>> {
+fn transcript_window_analysis_cannot_leave_an_owned_segment_uncovered() -> Result<(), Box<dyn Error>>
+{
     let window_analyses: Vec<TranscriptWindowAnalysis> = serde_json::from_str(
         r#"
         [
@@ -196,21 +196,21 @@ fn transcript_window_analysis_cannot_leave_an_owned_sentence_uncovered()
         WindowingConfig::new(4, Duration::from_secs(60), 2)?,
         window_analyses,
     )
-    .expect_err("every sentence in an owned region must be covered");
+    .expect_err("every segment in an owned region must be covered");
 
     assert_eq!(
         error,
         AnalysisAssemblyError::WindowCoverageMismatch {
             window: 2,
-            expected: SentenceId(2),
-            actual: SentenceId(3),
+            expected: TranscriptSegmentId(2),
+            actual: TranscriptSegmentId(3),
         }
     );
     Ok(())
 }
 
 #[test]
-fn transcript_window_analysis_cannot_cover_an_owned_sentence_twice() -> Result<(), Box<dyn Error>> {
+fn transcript_window_analysis_cannot_cover_an_owned_segment_twice() -> Result<(), Box<dyn Error>> {
     let window_analyses: Vec<TranscriptWindowAnalysis> = serde_json::from_str(
         r#"
         [
@@ -253,13 +253,13 @@ fn transcript_window_analysis_cannot_cover_an_owned_sentence_twice() -> Result<(
         WindowingConfig::new(4, Duration::from_secs(60), 2)?,
         window_analyses,
     )
-    .expect_err("an owned sentence must not be covered twice");
+    .expect_err("an owned segment must not be covered twice");
 
     assert_eq!(
         error,
         AnalysisAssemblyError::UnexpectedWindowPassage {
             window: 2,
-            actual: SentenceId(3),
+            actual: TranscriptSegmentId(3),
         }
     );
     Ok(())
@@ -306,7 +306,7 @@ fn transcript_window_analysis_must_reach_the_end_of_its_owned_region() -> Result
         error,
         AnalysisAssemblyError::UncoveredWindowTail {
             window: 2,
-            expected: SentenceId(3),
+            expected: TranscriptSegmentId(3),
         }
     );
     Ok(())
@@ -362,7 +362,7 @@ fn tiny_course_runs_from_windowing_through_annotation_rendering() -> Result<(), 
             let query = window
                 .owned_region()
                 .iter()
-                .map(|sentence| sentence.text.as_str())
+                .map(|segment| segment.text.as_str())
                 .collect::<Vec<_>>()
                 .join(" ");
             scorer.score_slides(&query)
@@ -385,11 +385,11 @@ fn tiny_course_runs_from_windowing_through_annotation_rendering() -> Result<(), 
 fn sources() -> ValidatedSources {
     ValidatedSources::new(
         Transcript {
-            sentences: vec![
-                sentence(0, 0, 1_000, "甲乙"),
-                sentence(1, 1_000, 2_000, "丙丁"),
-                sentence(2, 2_000, 3_000, "戊己"),
-                sentence(3, 3_000, 4_000, "庚辛"),
+            segments: vec![
+                segment(0, 0, 1_000, "甲乙"),
+                segment(1, 1_000, 2_000, "丙丁"),
+                segment(2, 2_000, 3_000, "戊己"),
+                segment(3, 3_000, 4_000, "庚辛"),
             ],
         },
         SlideDeck {
@@ -408,9 +408,9 @@ fn sources() -> ValidatedSources {
     .expect("the shared sources should be valid")
 }
 
-fn sentence(id: u32, start_ms: u64, end_ms: u64, text: &str) -> TranscriptSentence {
-    TranscriptSentence {
-        id: SentenceId(id),
+fn segment(id: u32, start_ms: u64, end_ms: u64, text: &str) -> TranscriptSegment {
+    TranscriptSegment {
+        id: TranscriptSegmentId(id),
         start_ms,
         end_ms,
         text: text.into(),

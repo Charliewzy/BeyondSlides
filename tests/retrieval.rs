@@ -68,9 +68,9 @@ fn lexical_scoring_returns_every_slide_in_presentation_order() -> Result<(), Box
 }
 
 #[test]
-fn lexical_search_matches_chinese_words_across_different_sentences() -> Result<(), Box<dyn Error>> {
+fn lexical_search_matches_chinese_words_across_different_segments() -> Result<(), Box<dyn Error>> {
     let sources = ValidatedSources::new(
-        Transcript { sentences: vec![] },
+        Transcript { segments: vec![] },
         SlideDeck {
             slides: vec![
                 Slide {
@@ -149,7 +149,7 @@ fn lexical_scoring_uses_zero_for_queries_without_term_evidence() -> Result<(), B
 #[test]
 fn lexical_search_preserves_english_terms() -> Result<(), Box<dyn Error>> {
     let sources = ValidatedSources::new(
-        Transcript { sentences: vec![] },
+        Transcript { segments: vec![] },
         SlideDeck {
             slides: vec![
                 Slide {
@@ -174,7 +174,7 @@ fn lexical_search_preserves_english_terms() -> Result<(), Box<dyn Error>> {
 #[test]
 fn equally_relevant_slides_remain_in_presentation_order() -> Result<(), Box<dyn Error>> {
     let sources = ValidatedSources::new(
-        Transcript { sentences: vec![] },
+        Transcript { segments: vec![] },
         SlideDeck {
             slides: vec![
                 Slide {
@@ -256,7 +256,7 @@ fn hybrid_search_rewards_agreement_between_retrieval_modes() -> Result<(), Box<d
 #[ignore = "downloads and runs the Chinese embedding model"]
 fn dense_search_matches_a_chinese_semantic_paraphrase() -> Result<(), Box<dyn Error>> {
     let sources = ValidatedSources::new(
-        Transcript { sentences: vec![] },
+        Transcript { segments: vec![] },
         SlideDeck {
             slides: vec![
                 Slide {

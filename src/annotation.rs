@@ -6,7 +6,7 @@ use std::{collections::HashSet, error::Error, fmt};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    LecturePassage, LecturePassages, SentenceId, Slide, SlideId, TranscriptSentence,
+    LecturePassage, LecturePassages, Slide, SlideId, TranscriptSegment, TranscriptSegmentId,
     TranscriptWindow, ValidatedAnalysis, ValidatedSources, ValidationError, WindowingConfig,
     build_windows,
 };
@@ -28,9 +28,9 @@ const ANNOTATION_INSTRUCTIONS: &str = include_str!(concat!(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct TranscriptWindowTask<'a> {
     pub window_number: usize,
-    pub left_context: &'a [TranscriptSentence],
-    pub owned_region: &'a [TranscriptSentence],
-    pub right_context: &'a [TranscriptSentence],
+    pub left_context: &'a [TranscriptSegment],
+    pub owned_region: &'a [TranscriptSegment],
+    pub right_context: &'a [TranscriptSegment],
     pub slide_position: SlideId,
     pub nearby_slides: &'a [Slide],
 }
@@ -177,7 +177,7 @@ pub fn assemble_window_analyses(
 fn validate_owned_region(
     sources: &ValidatedSources,
     window: usize,
-    owned_region: &[TranscriptSentence],
+    owned_region: &[TranscriptSegment],
     analysis: &TranscriptWindowAnalysis,
 ) -> Result<(), AnalysisAssemblyError> {
     let Some((owned_start, owned_end)) = owned_region
@@ -269,23 +269,23 @@ pub enum AnalysisAssemblyError {
     },
     PassageOutsideOwnedRegion {
         window: usize,
-        owned_start: SentenceId,
-        owned_end: SentenceId,
-        passage_start: SentenceId,
-        passage_end: SentenceId,
+        owned_start: TranscriptSegmentId,
+        owned_end: TranscriptSegmentId,
+        passage_start: TranscriptSegmentId,
+        passage_end: TranscriptSegmentId,
     },
     WindowCoverageMismatch {
         window: usize,
-        expected: SentenceId,
-        actual: SentenceId,
+        expected: TranscriptSegmentId,
+        actual: TranscriptSegmentId,
     },
     UnexpectedWindowPassage {
         window: usize,
-        actual: SentenceId,
+        actual: TranscriptSegmentId,
     },
     UncoveredWindowTail {
         window: usize,
-        expected: SentenceId,
+        expected: TranscriptSegmentId,
     },
     InvalidAnalysis(ValidationError),
 }
@@ -311,7 +311,7 @@ impl fmt::Display for AnalysisAssemblyError {
                 passage_end,
             } => write!(
                 formatter,
-                "transcript window {window} owns sentences {} through {} but contains a lecture passage from sentence {} through {}",
+                "transcript window {window} owns segments {} through {} but contains a lecture passage from segment {} through {}",
                 owned_start.0, owned_end.0, passage_start.0, passage_end.0
             ),
             Self::WindowCoverageMismatch {
@@ -320,17 +320,17 @@ impl fmt::Display for AnalysisAssemblyError {
                 actual,
             } => write!(
                 formatter,
-                "transcript window {window} expected coverage at sentence {} but found sentence {}",
+                "transcript window {window} expected coverage at segment {} but found segment {}",
                 expected.0, actual.0
             ),
             Self::UnexpectedWindowPassage { window, actual } => write!(
                 formatter,
-                "transcript window {window} contains an unexpected lecture passage starting at sentence {} after its owned region is already covered",
+                "transcript window {window} contains an unexpected lecture passage starting at segment {} after its owned region is already covered",
                 actual.0
             ),
             Self::UncoveredWindowTail { window, expected } => write!(
                 formatter,
-                "transcript window {window} leaves sentence {} and the remaining owned-region tail uncovered",
+                "transcript window {window} leaves segment {} and the remaining owned-region tail uncovered",
                 expected.0
             ),
             Self::InvalidAnalysis(error) => error.fmt(formatter),

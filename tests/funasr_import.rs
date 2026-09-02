@@ -1,25 +1,25 @@
 use std::error::Error;
 
 use beyond_slides::ingestion::funasr::{ImportError, import_tsv};
-use beyond_slides::{SentenceId, TranscriptSentence};
+use beyond_slides::{TranscriptSegment, TranscriptSegmentId};
 
 #[test]
-fn funasr_rows_become_individually_referenced_transcript_sentences() -> Result<(), Box<dyn Error>> {
+fn funasr_rows_become_individually_referenced_transcript_segments() -> Result<(), Box<dyn Error>> {
     let tsv = "start\tend\ttext\r\n8.800\t8.860\t 好 \r\n31.64\t31.700\t我们继续上课\r\n";
 
     let transcript = import_tsv(tsv)?;
 
     assert_eq!(
-        transcript.sentences,
+        transcript.segments,
         vec![
-            TranscriptSentence {
-                id: SentenceId(0),
+            TranscriptSegment {
+                id: TranscriptSegmentId(0),
                 start_ms: 8_800,
                 end_ms: 8_860,
                 text: "好".to_owned(),
             },
-            TranscriptSentence {
-                id: SentenceId(1),
+            TranscriptSegment {
+                id: TranscriptSegmentId(1),
                 start_ms: 31_640,
                 end_ms: 31_700,
                 text: "我们继续上课".to_owned(),
@@ -30,11 +30,11 @@ fn funasr_rows_become_individually_referenced_transcript_sentences() -> Result<(
 }
 
 #[test]
-fn blank_lines_do_not_create_transcript_sentences() -> Result<(), Box<dyn Error>> {
+fn blank_lines_do_not_create_transcript_segments() -> Result<(), Box<dyn Error>> {
     let transcript = import_tsv("start\tend\ttext\n\n0\t0.060\t好\n   \n0.500\t1\t下一句\n")?;
 
-    assert_eq!(transcript.sentences.len(), 2);
-    assert_eq!(transcript.sentences[1].id, SentenceId(1));
+    assert_eq!(transcript.segments.len(), 2);
+    assert_eq!(transcript.segments[1].id, TranscriptSegmentId(1));
     Ok(())
 }
 

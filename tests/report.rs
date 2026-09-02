@@ -1,6 +1,7 @@
 use beyond_slides::{
-    LecturePassage, LecturePassages, Score5, SentenceId, Slide, SlideDeck, SlideId, Transcript,
-    TranscriptSentence, ValidatedAnalysis, ValidatedSources, rank_oral_additions, render_report,
+    LecturePassage, LecturePassages, Score5, Slide, SlideDeck, SlideId, Transcript,
+    TranscriptSegment, TranscriptSegmentId, ValidatedAnalysis, ValidatedSources,
+    rank_oral_additions, render_report,
 };
 
 #[test]
@@ -80,8 +81,8 @@ fn report_packages_its_presentation_in_the_html_document() {
 #[test]
 fn transcript_evidence_becomes_the_title_when_summary_is_absent() {
     let transcript = Transcript {
-        sentences: vec![TranscriptSentence {
-            id: SentenceId(0),
+        segments: vec![TranscriptSegment {
+            id: TranscriptSegmentId(0),
             start_ms: 0,
             end_ms: 1_000,
             text: "<二分 & 查找>".to_owned(),
@@ -95,8 +96,8 @@ fn transcript_evidence_becomes_the_title_when_summary_is_absent() {
     };
     let passages = LecturePassages {
         passages: vec![LecturePassage {
-            start: SentenceId(0),
-            end: SentenceId(0),
+            start: TranscriptSegmentId(0),
+            end: TranscriptSegmentId(0),
             novelty: Score5::try_from(3).expect("test score should be valid"),
             connection_strength: Score5::try_from(0).expect("test score should be valid"),
             importance: Score5::try_from(3).expect("test score should be valid"),

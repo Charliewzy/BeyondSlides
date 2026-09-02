@@ -32,7 +32,7 @@ useful lecture content - what the slides already communicate
 
 The first useful version accepts two normalized files:
 
-- `transcript.json`: ordered, timestamped sentences;
+- `transcript.json`: ordered, timestamped segments;
 - `slides.json`: ordered slide texts.
 
 It produces:
@@ -137,40 +137,40 @@ The examples below describe the intended model, not a frozen Rust API.
 ### Canonical source identifiers
 
 ```rust
-struct SentenceId(u32);
+struct TranscriptSegmentId(u32);
 struct SlideId(u32);
 ```
 
-Sentence and slide IDs are typed, zero-based collection positions. For every
-normalized source, `sentences[i].id == SentenceId(i)` and
+Transcript segment and slide IDs are typed, zero-based collection positions. For every
+normalized source, `segments[i].id == TranscriptSegmentId(i)` and
 `slides[i].id == SlideId(i)`. They remain stable within that normalized source
 snapshot; changing normalization invalidates downstream artifacts. If later
 ingestion requires identity across normalization runs, it must add a separate
-source reference rather than weakening this invariant. Human-facing sentence,
-slide, and PDF page numbers may remain one-based and are not IDs. Timestamps are
-integer milliseconds.
+source reference rather than weakening this invariant. Human-facing slide and
+PDF page numbers may remain one-based and are not IDs. Timestamps are integer
+milliseconds.
 
 ### Transcript
 
 ```rust
-struct Sentence {
-    id: SentenceId,
+struct TranscriptSegment {
+    id: TranscriptSegmentId,
     start_ms: u64,
     end_ms: u64,
     text: String,
 }
 
 struct Transcript {
-    sentences: Vec<Sentence>,
+    segments: Vec<TranscriptSegment>,
 }
 ```
 
 Required invariants:
 
-- each ID equals the sentence's zero-based collection position;
+- each ID equals the segment's zero-based collection position;
 - text is non-empty;
 - `start_ms <= end_ms`;
-- sentence times are nondecreasing;
+- segment times are nondecreasing;
 - transcript order agrees with timestamp order.
 
 ### Slides
@@ -236,12 +236,12 @@ applying the course:
 
 ### Lecture passages
 
-A lecture passage covers a contiguous, inclusive sentence range:
+A lecture passage covers a contiguous, inclusive segment range:
 
 ```rust
 struct LecturePassage {
-    start: SentenceId,
-    end: SentenceId,
+    start: TranscriptSegmentId,
+    end: TranscriptSegmentId,
     novelty: Score5,
     connection_strength: Score5,
     importance: Score5,
@@ -258,7 +258,7 @@ written source when such a note is useful. It is optional, stored in
 `annotations.json` for internal logging, debugging, and evaluation, and not
 rendered in the user-facing report.
 
-The source evidence for a passage is the referenced sentence range itself. Its
+The source evidence for a passage is the referenced segment range itself. Its
 written-source evidence is `related_slides`; an optional `comparison_note` may
 supplement it. A later schema may add exact slide excerpts if evaluation shows
 that slide-level references are not sufficiently auditable.
@@ -285,17 +285,17 @@ but owns a non-overlapping transcript region:
 ```
 
 Owned regions partition the transcript. The model must partition its entire
-owned region into contiguous lecture passages. Context sentences may influence
+owned region into contiguous lecture passages. Context segments may influence
 the judgment but may not appear in that window's output.
 
 For every owned region, validation enforces:
 
-- the first passage starts at the first owned sentence;
-- the last passage ends at the last owned sentence;
+- the first passage starts at the first owned segment;
+- the last passage ends at the last owned segment;
 - consecutive passages are adjacent;
-- no sentence is skipped or covered twice.
+- no segment is skipped or covered twice.
 
-Consequently, after all windows finish, every transcript sentence belongs to
+Consequently, after all windows finish, every transcript segment belongs to
 exactly one lecture passage. No overlap-merging stage is needed.
 
 ## 7. Intended pipeline
@@ -340,9 +340,9 @@ and other pre-annotation stages to operate on trusted sources.
 
 The FunASR TSV adapter preserves evidence rather than inventing grammatical
 boundaries: every nonblank `start`, `end`, `text` row becomes one transcript
-sentence with a sequential zero-based ID. It converts decimal seconds exactly to
+segment with a sequential zero-based ID. It converts decimal seconds exactly to
 milliseconds, trims surrounding text whitespace, and rejects malformed,
-reversed, or overlapping rows. Punctuation restoration or sentence merging, if
+reversed, or overlapping rows. Punctuation restoration or segment merging, if
 added later, must remain a separate transformation with traceable source
 evidence.
 
@@ -358,13 +358,13 @@ decision outside the adapter.
 ### 7.2 Windowing
 
 The transcript is divided into owned regions with left and right context. The
-current policy greedily adds complete transcript sentences while both a text
-character budget and a wall-clock duration budget permit it. A single sentence
+current policy greedily adds complete transcript segments while both a text
+character budget and a wall-clock duration budget permit it. A single segment
 that exceeds either budget remains intact in its own owned region. Left and
-right context also contain only complete sentences and each has its own
+right context also contain only complete segments and each has its own
 character budget. A later agent adapter may translate its model-specific token
 budget into these model-independent source-window limits; the correctness
-contract remains based on sentence ownership rather than token counts.
+contract remains based on segment ownership rather than token counts.
 
 ### 7.3 Retrieval
 
@@ -517,7 +517,7 @@ Responses are supplied in transcript-window order. Assembly rebuilds the
 deterministic window assignments from the recorded `WindowingConfig`, requires
 exactly one response per window, and requires the response's lecture passages
 to partition exactly that window's owned region. A response cannot claim
-sentences from its left or right context. Only after these window-local checks
+segments from its left or right context. Only after these window-local checks
 pass are all passages joined and subjected to lecture-wide source, related-slide,
 and coverage validation.
 `ValidatedAnalysis` combines already-validated sources with the accepted
@@ -583,7 +583,7 @@ The permanent `tiny_course` fixture should contain at least:
 - a valuable oral explanation absent from the slide wording;
 - a useful connection to an earlier slide;
 - a novel but unimportant anecdote;
-- adjacent sentences that must be grouped together.
+- adjacent segments that must be grouped together.
 
 The first automated tests verify deserialization, domain invariants, complete
 annotation coverage, ranking behavior, and successful HTML generation.
@@ -621,7 +621,7 @@ evaluation above.
 7. Add schema-constrained model annotation using only local aligned slides.
 8. Add global `inspect_slide` and `search_slides` agent tools.
 9. Add real PDF slide extraction.
-10. Add an external transcription adapter and sentence normalization.
+10. Add an external transcription adapter and segment normalization.
 11. Evaluate on a manually labeled lecture segment and tune from evidence.
 
 The first acceptance checkpoint is intentionally smaller than the complete

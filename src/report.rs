@@ -1,6 +1,6 @@
 use askama::Template;
 
-use crate::{LecturePassage, Slide, TranscriptSentence, ValidatedAnalysis};
+use crate::{LecturePassage, Slide, TranscriptSegment, ValidatedAnalysis};
 
 pub fn render_report(analysis: &ValidatedAnalysis, ranked: &[&LecturePassage]) -> String {
     ReportTemplate {
@@ -32,18 +32,18 @@ struct PassageView<'a> {
     novelty: u8,
     connection_strength: u8,
     transcript: String,
-    sentences: Vec<&'a str>,
+    segments: Vec<&'a str>,
     related_slides: Vec<SlideView<'a>>,
 }
 
 impl<'a> PassageView<'a> {
     fn new(analysis: &'a ValidatedAnalysis, passage: &'a LecturePassage) -> Self {
-        let sentences = passage_sentences(analysis, passage);
-        let first = &sentences[0];
-        let last = &sentences[sentences.len() - 1];
-        let transcript = sentences
+        let segments = passage_segments(analysis, passage);
+        let first = &segments[0];
+        let last = &segments[segments.len() - 1];
+        let transcript = segments
             .iter()
-            .map(|sentence| sentence.text.as_str())
+            .map(|segment| segment.text.as_str())
             .collect::<Vec<_>>()
             .join(" ");
         let title = passage
@@ -72,9 +72,9 @@ impl<'a> PassageView<'a> {
             novelty: passage.novelty.get(),
             connection_strength: passage.connection_strength.get(),
             transcript,
-            sentences: sentences
+            segments: segments
                 .iter()
-                .map(|sentence| sentence.text.as_str())
+                .map(|segment| segment.text.as_str())
                 .collect(),
             related_slides,
         }
@@ -95,11 +95,11 @@ impl<'a> From<&'a Slide> for SlideView<'a> {
     }
 }
 
-fn passage_sentences<'a>(
+fn passage_segments<'a>(
     analysis: &'a ValidatedAnalysis,
     passage: &'a LecturePassage,
-) -> &'a [TranscriptSentence] {
-    &analysis.transcript().sentences[passage.start.index()..=passage.end.index()]
+) -> &'a [TranscriptSegment] {
+    &analysis.transcript().segments[passage.start.index()..=passage.end.index()]
 }
 
 fn format_timestamp(milliseconds: u64) -> String {

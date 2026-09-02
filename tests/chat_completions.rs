@@ -1,9 +1,9 @@
 use std::{collections::VecDeque, error::Error, sync::Mutex, time::Duration};
 
 use beyond_slides::{
-    AnalysisAssemblyError, ChatCompletionsConfig, ChatCompletionsError, SearchError, SentenceId,
-    Slide, SlideDeck, SlideId, SlideScore, SlideScorer, Transcript, TranscriptSentence,
-    TranscriptWindowTask, ValidatedSources, ValidationError, WindowingConfig,
+    AnalysisAssemblyError, ChatCompletionsConfig, ChatCompletionsError, SearchError, Slide,
+    SlideDeck, SlideId, SlideScore, SlideScorer, Transcript, TranscriptSegment,
+    TranscriptSegmentId, TranscriptWindowTask, ValidatedSources, ValidationError, WindowingConfig,
     build_annotation_tasks, build_windows,
 };
 use serde_json::{Value, json};
@@ -30,7 +30,7 @@ async fn annotation_uses_the_configured_openai_compatible_endpoint() -> Result<(
     let result = client.annotate_window(&sources, &scorer, &task).await?;
 
     assert_eq!(result.analysis.passages.len(), 1);
-    assert_eq!(result.analysis.passages[0].start, SentenceId(0));
+    assert_eq!(result.analysis.passages[0].start, TranscriptSegmentId(0));
     assert_eq!(result.diagnostics.prompt_tokens, Some(20));
     assert_eq!(result.diagnostics.completion_tokens, Some(10));
     assert_eq!(result.diagnostics.tool_rounds, 0);
@@ -315,7 +315,7 @@ async fn invalid_window_analysis_fails_after_the_repair_limit() -> Result<(), Bo
         *source,
         ChatCompletionsError::InvalidWindowAnalysis(AnalysisAssemblyError::InvalidAnalysis(
             ValidationError::UnknownRelatedSlide {
-                passage_start: SentenceId(0),
+                passage_start: TranscriptSegmentId(0),
                 slide: SlideId(99),
             }
         ))
@@ -401,8 +401,8 @@ fn analysis_json() -> String {
 fn sources() -> Result<ValidatedSources, Box<dyn Error>> {
     Ok(ValidatedSources::new(
         Transcript {
-            sentences: vec![TranscriptSentence {
-                id: SentenceId(0),
+            segments: vec![TranscriptSegment {
+                id: TranscriptSegmentId(0),
                 start_ms: 0,
                 end_ms: 1_000,
                 text: "二分查找的课堂讲解".into(),

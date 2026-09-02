@@ -7,9 +7,9 @@ use std::{
 };
 
 use beyond_slides::{
-    DenseSlideScorer, HybridSlideScorer, LexicalSlideScorer, SentenceId, SlideDeck, SlideId,
-    SlideScore, SlideScorer, Transcript, TranscriptSentence, ValidatedSources, WindowingConfig,
-    build_windows, infer_slide_positions,
+    DenseSlideScorer, HybridSlideScorer, LexicalSlideScorer, SlideDeck, SlideId, SlideScore,
+    SlideScorer, Transcript, TranscriptSegment, TranscriptSegmentId, ValidatedSources,
+    WindowingConfig, build_windows, infer_slide_positions,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -19,7 +19,7 @@ const CONTEXT_CHARACTERS: usize = 150;
 
 #[derive(Serialize)]
 struct SemanticAlignmentProbe {
-    transcript_sentence_count: usize,
+    transcript_segment_count: usize,
     slide_count: usize,
     scoring_mode: &'static str,
     dense_model: &'static str,
@@ -38,11 +38,11 @@ struct WindowAlignment {
 
 #[derive(Serialize)]
 struct SentenceRange {
-    first_sentence: SentenceId,
-    last_sentence: SentenceId,
+    first_segment: TranscriptSegmentId,
+    last_segment: TranscriptSegmentId,
     start_ms: u64,
     end_ms: u64,
-    sentence_count: usize,
+    segment_count: usize,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -83,7 +83,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let query = window
             .owned_region()
             .iter()
-            .map(|sentence| sentence.text.as_str())
+            .map(|segment| segment.text.as_str())
             .collect::<Vec<_>>()
             .join(" ");
         score_rows.push(hybrid.score_slides(&query)?);
@@ -106,7 +106,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .enumerate()
         .map(
             |(position, (((window, query), slide_scores), slide_position))| {
-                let owned_region = sentence_range(window.owned_region()).ok_or_else(|| {
+                let owned_region = segment_range(window.owned_region()).ok_or_else(|| {
                     io::Error::new(
                         io::ErrorKind::InvalidData,
                         "window has an empty owned region",
@@ -124,7 +124,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .collect::<Result<Vec<_>, io::Error>>()?;
 
     let probe = SemanticAlignmentProbe {
-        transcript_sentence_count: sources.transcript().sentences.len(),
+        transcript_segment_count: sources.transcript().segments.len(),
         slide_count: sources.slide_deck().slides.len(),
         scoring_mode: "hybrid",
         dense_model: "BAAI/bge-small-zh-v1.5",
@@ -164,14 +164,14 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, Box<dyn Error>> {
     })
 }
 
-fn sentence_range(sentences: &[TranscriptSentence]) -> Option<SentenceRange> {
-    let first = sentences.first()?;
-    let last = sentences.last()?;
+fn segment_range(segments: &[TranscriptSegment]) -> Option<SentenceRange> {
+    let first = segments.first()?;
+    let last = segments.last()?;
     Some(SentenceRange {
-        first_sentence: first.id,
-        last_sentence: last.id,
+        first_segment: first.id,
+        last_segment: last.id,
         start_ms: first.start_ms,
         end_ms: last.end_ms,
-        sentence_count: sentences.len(),
+        segment_count: segments.len(),
     })
 }

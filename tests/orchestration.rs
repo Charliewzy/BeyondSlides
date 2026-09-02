@@ -2,9 +2,9 @@ use std::{error::Error, time::Duration};
 
 use beyond_slides::{
     ChatCompletionsClient, ChatCompletionsConfig, LectureAnalysisConfig,
-    LectureAnalysisConfigError, LectureAnalysisError, LectureAnalysisSession, SearchError,
-    SentenceId, Slide, SlideDeck, SlideId, SlideScore, SlideScorer, Transcript, TranscriptSentence,
-    ValidatedSources, WindowingConfig,
+    LectureAnalysisConfigError, LectureAnalysisError, LectureAnalysisSession, SearchError, Slide,
+    SlideDeck, SlideId, SlideScore, SlideScorer, Transcript, TranscriptSegment,
+    TranscriptSegmentId, ValidatedSources, WindowingConfig,
 };
 use serde_json::{Value, json};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate, matchers::any};
@@ -47,7 +47,7 @@ async fn lecture_analysis_runs_a_canary_then_assembles_every_window() -> Result<
         .analyze_canary()
         .await?
         .expect("the nonempty transcript has a canary");
-    assert_eq!(canary.analysis.passages[0].start, SentenceId(0));
+    assert_eq!(canary.analysis.passages[0].start, TranscriptSegmentId(0));
     assert_eq!(canary.diagnostics.prompt_tokens, Some(10));
     assert!(session.analyze_canary().await?.is_some());
 
@@ -73,9 +73,9 @@ async fn lecture_analysis_runs_a_canary_then_assembles_every_window() -> Result<
             .map(|passage| (passage.start, passage.end))
             .collect::<Vec<_>>(),
         vec![
-            (SentenceId(0), SentenceId(0)),
-            (SentenceId(1), SentenceId(1)),
-            (SentenceId(2), SentenceId(2)),
+            (TranscriptSegmentId(0), TranscriptSegmentId(0)),
+            (TranscriptSegmentId(1), TranscriptSegmentId(1)),
+            (TranscriptSegmentId(2), TranscriptSegmentId(2)),
         ]
     );
 
@@ -165,7 +165,10 @@ async fn lecture_analysis_reports_new_windows_in_completion_order() -> Result<()
 
     assert_eq!(
         progress,
-        vec![(3, 2, 3, SentenceId(2)), (2, 3, 3, SentenceId(1)),]
+        vec![
+            (3, 2, 3, TranscriptSegmentId(2)),
+            (2, 3, 3, TranscriptSegmentId(1)),
+        ]
     );
     Ok(())
 }
@@ -186,7 +189,7 @@ async fn restored_canary_is_validated_and_not_sent_again() -> Result<(), Box<dyn
         .clone();
 
     let mut invalid = canary.clone();
-    invalid.analysis.passages[0].start = SentenceId(1);
+    invalid.analysis.passages[0].start = TranscriptSegmentId(1);
     let mut invalid_resume =
         LectureAnalysisSession::prepare(&client, sources()?, &FixedScorer, config(2)?)?;
     let error = invalid_resume
@@ -250,10 +253,10 @@ fn windowing() -> Result<WindowingConfig, Box<dyn Error>> {
 fn sources() -> Result<ValidatedSources, Box<dyn Error>> {
     Ok(ValidatedSources::new(
         Transcript {
-            sentences: vec![
-                sentence(0, 0, 1_000, "甲乙"),
-                sentence(1, 1_000, 2_000, "丙丁"),
-                sentence(2, 2_000, 3_000, "戊己"),
+            segments: vec![
+                segment(0, 0, 1_000, "甲乙"),
+                segment(1, 1_000, 2_000, "丙丁"),
+                segment(2, 2_000, 3_000, "戊己"),
             ],
         },
         SlideDeck {
@@ -271,9 +274,9 @@ fn sources() -> Result<ValidatedSources, Box<dyn Error>> {
     )?)
 }
 
-fn sentence(id: u32, start_ms: u64, end_ms: u64, text: &str) -> TranscriptSentence {
-    TranscriptSentence {
-        id: SentenceId(id),
+fn segment(id: u32, start_ms: u64, end_ms: u64, text: &str) -> TranscriptSegment {
+    TranscriptSegment {
+        id: TranscriptSegmentId(id),
         start_ms,
         end_ms,
         text: text.into(),
@@ -313,12 +316,12 @@ impl Respond for WindowAnalysisResponder {
             .expect("owned region is an array");
         let start = owned_region
             .first()
-            .and_then(|sentence| sentence["id"].as_u64())
-            .expect("owned region has a first sentence");
+            .and_then(|segment| segment["id"].as_u64())
+            .expect("owned region has a first segment");
         let end = owned_region
             .last()
-            .and_then(|sentence| sentence["id"].as_u64())
-            .expect("owned region has a last sentence");
+            .and_then(|segment| segment["id"].as_u64())
+            .expect("owned region has a last segment");
         let related_slide = if self.reject_canary && window_number == 1 {
             99
         } else {

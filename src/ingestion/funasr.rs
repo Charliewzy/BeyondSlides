@@ -1,6 +1,6 @@
 use std::{error::Error, fmt};
 
-use crate::{SentenceId, Transcript, TranscriptSentence};
+use crate::{Transcript, TranscriptSegment, TranscriptSegmentId};
 
 const FUNASR_TSV_HEADER: &str = "start\tend\ttext";
 
@@ -14,7 +14,7 @@ pub fn import_tsv(input: &str) -> Result<Transcript, ImportError> {
         });
     }
 
-    let mut sentences = Vec::new();
+    let mut segments = Vec::new();
     let mut previous_row = None;
     for (position, row) in lines.enumerate() {
         let line = position + 2;
@@ -63,11 +63,11 @@ pub fn import_tsv(input: &str) -> Result<Transcript, ImportError> {
             return Err(ImportError::EmptyText { line });
         }
 
-        let id = u32::try_from(sentences.len())
+        let id = u32::try_from(segments.len())
             .ok()
-            .map(SentenceId)
+            .map(TranscriptSegmentId)
             .ok_or(ImportError::TooManyRows)?;
-        sentences.push(TranscriptSentence {
+        segments.push(TranscriptSegment {
             id,
             start_ms,
             end_ms,
@@ -76,7 +76,7 @@ pub fn import_tsv(input: &str) -> Result<Transcript, ImportError> {
         previous_row = Some((line, end_ms));
     }
 
-    Ok(Transcript { sentences })
+    Ok(Transcript { segments })
 }
 
 fn parse_milliseconds(value: &str) -> Option<u64> {
@@ -173,7 +173,7 @@ impl fmt::Display for ImportError {
             }
             Self::TooManyRows => write!(
                 formatter,
-                "FunASR TSV contains more transcript sentences than can be assigned IDs"
+                "FunASR TSV contains more transcript segments than can be assigned IDs"
             ),
         }
     }

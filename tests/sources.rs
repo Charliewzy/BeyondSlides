@@ -1,16 +1,16 @@
 use beyond_slides::{
-    LecturePassage, LecturePassages, Score5, SentenceId, Slide, SlideDeck, SlideId, Transcript,
-    TranscriptSentence, ValidatedAnalysis, ValidatedSources,
+    LecturePassage, LecturePassages, Score5, Slide, SlideDeck, SlideId, Transcript,
+    TranscriptSegment, TranscriptSegmentId, ValidatedAnalysis, ValidatedSources,
 };
 
 #[test]
 fn normalized_sources_can_be_validated_before_analysis() {
     let transcript = Transcript {
-        sentences: vec![TranscriptSentence {
-            id: SentenceId(0),
+        segments: vec![TranscriptSegment {
+            id: TranscriptSegmentId(0),
             start_ms: 0,
             end_ms: 1_000,
-            text: "A valid transcript sentence.".to_owned(),
+            text: "A valid transcript segment.".to_owned(),
         }],
     };
     let slide_deck = SlideDeck {
@@ -25,10 +25,10 @@ fn normalized_sources_can_be_validated_before_analysis() {
 
     assert_eq!(
         (
-            sources.transcript().sentences[0].id,
+            sources.transcript().segments[0].id,
             sources.slide_deck().slides[0].id,
         ),
-        (SentenceId(0), SlideId(0))
+        (TranscriptSegmentId(0), SlideId(0))
     );
 }
 
@@ -36,11 +36,11 @@ fn normalized_sources_can_be_validated_before_analysis() {
 fn validated_sources_can_be_completed_with_lecture_passages() {
     let sources = ValidatedSources::new(
         Transcript {
-            sentences: vec![TranscriptSentence {
-                id: SentenceId(0),
+            segments: vec![TranscriptSegment {
+                id: TranscriptSegmentId(0),
                 start_ms: 0,
                 end_ms: 1_000,
-                text: "A valid transcript sentence.".to_owned(),
+                text: "A valid transcript segment.".to_owned(),
             }],
         },
         SlideDeck {
@@ -53,8 +53,8 @@ fn validated_sources_can_be_completed_with_lecture_passages() {
     .expect("the normalized sources should be valid");
     let passages = LecturePassages {
         passages: vec![LecturePassage {
-            start: SentenceId(0),
-            end: SentenceId(0),
+            start: TranscriptSegmentId(0),
+            end: TranscriptSegmentId(0),
             novelty: score(3),
             connection_strength: score(0),
             importance: score(4),
@@ -68,6 +68,28 @@ fn validated_sources_can_be_completed_with_lecture_passages() {
         .expect("valid lecture passages should complete the analysis");
 
     assert_eq!(analysis.passages().len(), 1);
+}
+
+#[test]
+fn legacy_transcript_json_with_sentences_still_deserializes() {
+    let transcript: Transcript = serde_json::from_str(
+        r#"{
+            "sentences": [
+                { "id": 0, "start_ms": 0, "end_ms": 1000, "text": "甲" }
+            ]
+        }"#,
+    )
+    .expect("the pre-rename transcript field should remain readable");
+
+    assert_eq!(
+        transcript.segments,
+        vec![TranscriptSegment {
+            id: TranscriptSegmentId(0),
+            start_ms: 0,
+            end_ms: 1_000,
+            text: "甲".into(),
+        }]
+    );
 }
 
 fn score(value: u8) -> Score5 {

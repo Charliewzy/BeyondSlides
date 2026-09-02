@@ -1,8 +1,8 @@
 use std::{error::Error, time::Duration};
 
 use beyond_slides::{
-    AnnotationTaskError, SentenceId, Slide, SlideDeck, SlideId, Transcript, TranscriptSentence,
-    ValidatedSources, WindowingConfig, build_annotation_tasks, build_windows,
+    AnnotationTaskError, Slide, SlideDeck, SlideId, Transcript, TranscriptSegment,
+    TranscriptSegmentId, ValidatedSources, WindowingConfig, build_annotation_tasks, build_windows,
 };
 
 #[test]
@@ -16,21 +16,21 @@ fn annotation_tasks_preserve_window_ownership_and_slide_neighborhoods() -> Resul
 
     assert_eq!(tasks[0].window_number, 1);
     assert!(tasks[0].left_context.is_empty());
-    assert_eq!(sentence_ids(tasks[0].owned_region), vec![0, 1]);
-    assert_eq!(sentence_ids(tasks[0].right_context), vec![2]);
+    assert_eq!(segment_ids(tasks[0].owned_region), vec![0, 1]);
+    assert_eq!(segment_ids(tasks[0].right_context), vec![2]);
     assert_eq!(tasks[0].slide_position, SlideId(0));
     assert_eq!(slide_ids(tasks[0].nearby_slides), vec![0, 1, 2, 3]);
 
     assert_eq!(tasks[1].window_number, 2);
-    assert_eq!(sentence_ids(tasks[1].left_context), vec![1]);
-    assert_eq!(sentence_ids(tasks[1].owned_region), vec![2, 3]);
-    assert_eq!(sentence_ids(tasks[1].right_context), vec![4]);
+    assert_eq!(segment_ids(tasks[1].left_context), vec![1]);
+    assert_eq!(segment_ids(tasks[1].owned_region), vec![2, 3]);
+    assert_eq!(segment_ids(tasks[1].right_context), vec![4]);
     assert_eq!(tasks[1].slide_position, SlideId(4));
     assert_eq!(slide_ids(tasks[1].nearby_slides), vec![1, 2, 3, 4, 5, 6, 7]);
 
     assert_eq!(tasks[2].window_number, 3);
-    assert_eq!(sentence_ids(tasks[2].left_context), vec![3]);
-    assert_eq!(sentence_ids(tasks[2].owned_region), vec![4, 5]);
+    assert_eq!(segment_ids(tasks[2].left_context), vec![3]);
+    assert_eq!(segment_ids(tasks[2].owned_region), vec![4, 5]);
     assert!(tasks[2].right_context.is_empty());
     assert_eq!(tasks[2].slide_position, SlideId(7));
     assert_eq!(slide_ids(tasks[2].nearby_slides), vec![4, 5, 6, 7]);
@@ -109,13 +109,13 @@ fn annotation_tasks_require_one_known_slide_position_per_window() -> Result<(), 
 
 fn sources() -> Result<ValidatedSources, Box<dyn Error>> {
     let transcript = Transcript {
-        sentences: vec![
-            sentence(0, "甲甲"),
-            sentence(1, "乙乙"),
-            sentence(2, "丙丙"),
-            sentence(3, "丁丁"),
-            sentence(4, "戊戊"),
-            sentence(5, "己己"),
+        segments: vec![
+            segment(0, "甲甲"),
+            segment(1, "乙乙"),
+            segment(2, "丙丙"),
+            segment(3, "丁丁"),
+            segment(4, "戊戊"),
+            segment(5, "己己"),
         ],
     };
     let names = ["零", "一", "二", "三", "四", "五", "六", "七"];
@@ -133,9 +133,9 @@ fn sources() -> Result<ValidatedSources, Box<dyn Error>> {
     Ok(ValidatedSources::new(transcript, slide_deck)?)
 }
 
-fn sentence(id: u32, text: &str) -> TranscriptSentence {
-    TranscriptSentence {
-        id: SentenceId(id),
+fn segment(id: u32, text: &str) -> TranscriptSegment {
+    TranscriptSegment {
+        id: TranscriptSegmentId(id),
         start_ms: u64::from(id) * 1_000,
         end_ms: u64::from(id + 1) * 1_000,
         text: text.into(),
@@ -146,8 +146,8 @@ fn windowing_config() -> Result<WindowingConfig, Box<dyn Error>> {
     Ok(WindowingConfig::new(4, Duration::from_secs(60), 2)?)
 }
 
-fn sentence_ids(sentences: &[TranscriptSentence]) -> Vec<u32> {
-    sentences.iter().map(|sentence| sentence.id.0).collect()
+fn segment_ids(segments: &[TranscriptSegment]) -> Vec<u32> {
+    segments.iter().map(|segment| segment.id.0).collect()
 }
 
 fn slide_ids(slides: &[Slide]) -> Vec<u32> {

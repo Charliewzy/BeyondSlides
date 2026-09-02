@@ -308,7 +308,7 @@ fn window_query(window: &TranscriptWindow<'_>) -> String {
     window
         .owned_region()
         .iter()
-        .map(|sentence| sentence.text.as_str())
+        .map(|segment| segment.text.as_str())
         .collect::<Vec<_>>()
         .join(" ")
 }

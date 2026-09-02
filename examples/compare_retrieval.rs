@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let slide_deck: SlideDeck = serde_json::from_str(include_str!("retrieval_course/slides.json"))?;
     let cases: RetrievalCases =
         serde_json::from_str(include_str!("retrieval_course/queries.json"))?;
-    let sources = ValidatedSources::new(Transcript { sentences: vec![] }, slide_deck)?;
+    let sources = ValidatedSources::new(Transcript { segments: vec![] }, slide_deck)?;
 
     eprintln!("Loading BAAI/bge-small-zh-v1.5 and indexing slides...");
     let lexical = LexicalSlideScorer::new(&sources);

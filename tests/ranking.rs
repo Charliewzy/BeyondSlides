@@ -1,20 +1,24 @@
 use beyond_slides::{
-    LecturePassages, SentenceId, SlideDeck, Transcript, ValidatedAnalysis, ValidatedSources,
-    rank_oral_additions,
+    LecturePassages, SlideDeck, Transcript, TranscriptSegmentId, ValidatedAnalysis,
+    ValidatedSources, rank_oral_additions,
 };
 
 #[test]
 fn tiny_course_oral_additions_are_filtered_and_ranked() {
     let analysis = tiny_course();
 
-    let ranked_starts: Vec<SentenceId> = rank_oral_additions(&analysis)
+    let ranked_starts: Vec<TranscriptSegmentId> = rank_oral_additions(&analysis)
         .into_iter()
         .map(|passage| passage.start)
         .collect();
 
     assert_eq!(
         ranked_starts,
-        vec![SentenceId(3), SentenceId(12), SentenceId(6)]
+        vec![
+            TranscriptSegmentId(3),
+            TranscriptSegmentId(12),
+            TranscriptSegmentId(6)
+        ]
     );
 }
 

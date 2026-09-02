@@ -19,8 +19,8 @@ pub use annotation::{
     build_annotation_tasks, validate_window_analysis,
 };
 pub use domain::{
-    LecturePassage, LecturePassages, Score5, ScoreOutOfRange, SentenceId, Slide, SlideDeck,
-    SlideId, Transcript, TranscriptSentence,
+    LecturePassage, LecturePassages, Score5, ScoreOutOfRange, Slide, SlideDeck, SlideId,
+    Transcript, TranscriptSegment, TranscriptSegmentId,
 };
 pub use orchestration::{
     LectureAnalysisConfig, LectureAnalysisConfigError, LectureAnalysisError,

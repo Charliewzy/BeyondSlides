@@ -56,8 +56,8 @@
             <li>连接强度 <strong>{{ passage.connection_strength }}</strong></li>
           </ul>
         </header>
-{% for sentence in passage.sentences %}
-        <p>{{ sentence }}</p>
+{% for segment in passage.segments %}
+        <p>{{ segment }}</p>
 {% endfor %}
       </article>
 {% endfor %}

@@ -1,4 +1,6 @@
 mod analysis_run;
+mod restoration_run;
+mod run_support;
 
 use std::{
     env,
@@ -28,6 +30,14 @@ async fn main() -> ExitCode {
 
 async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
     match arguments.as_slice() {
+        [command, transcript_path, run_directory]
+            if command == OsStr::new("restore-canary") =>
+        {
+            restoration_run::run_canary(transcript_path, run_directory).await
+        }
+        [command, transcript_path, run_directory] if command == OsStr::new("restore") => {
+            restoration_run::run_complete(transcript_path, run_directory).await
+        }
         [command, transcript_path, slides_path, output_path]
             if command == OsStr::new("canary") =>
         {
@@ -49,8 +59,11 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
             "usage: beyond-slides <transcript.json> <slides.json> <annotations.json> <result.html>\n\
              or:    beyond-slides canary <transcript.json> <slides.json> <canary.json>\n\
              or:    beyond-slides analyze <transcript.json> <slides.json> <run-directory>\n\
-             canary and analyze require BEYOND_SLIDES_API_BASE_URL, \
-             BEYOND_SLIDES_API_KEY, and BEYOND_SLIDES_MODEL",
+             or:    beyond-slides restore-canary <transcript.json> <run-directory>\n\
+             or:    beyond-slides restore <transcript.json> <run-directory>\n\
+             model-backed commands require BEYOND_SLIDES_API_BASE_URL, \
+             BEYOND_SLIDES_API_KEY, and BEYOND_SLIDES_MODEL; optional \
+             BEYOND_SLIDES_CHAT_EXTRA_BODY contains provider-specific JSON",
         )
         .into()),
     }

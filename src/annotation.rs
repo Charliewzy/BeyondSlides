@@ -1,4 +1,3 @@
-mod chat_completions;
 mod tools;
 
 use std::{collections::HashSet, error::Error, fmt};
@@ -12,10 +11,6 @@ use crate::{
     windowing::{OwnedRegionPartitionError, validate_owned_region_partition},
 };
 
-pub use chat_completions::{
-    AnnotationDiagnostics, AnnotationResult, ChatCompletionsClient, ChatCompletionsConfig,
-    ChatCompletionsConfigError, ChatCompletionsError,
-};
 pub use tools::{AnnotationToolError, AnnotationToolSession, SlideEvidence};
 
 const SLIDE_NEIGHBORHOOD_RADIUS: usize = 3;

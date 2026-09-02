@@ -4,7 +4,7 @@ use beyond_slides::{
     AnalysisAssemblyError, ChatCompletionsConfig, ChatCompletionsError, SearchError, Slide,
     SlideDeck, SlideId, SlideScore, SlideScorer, Transcript, TranscriptSegment,
     TranscriptSegmentId, TranscriptWindowTask, ValidatedSources, ValidationError, WindowingConfig,
-    build_annotation_tasks, build_windows,
+    build_annotation_tasks, build_restoration_tasks, build_windows,
 };
 use serde_json::{Value, json};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate, matchers::any};
@@ -66,6 +66,97 @@ async fn annotation_uses_the_configured_openai_compatible_endpoint() -> Result<(
     assert_eq!(tool_names, ["inspect_slide", "search_slides"]);
     assert_eq!(request["messages"][0]["role"], "system");
     assert_eq!(request["messages"][1]["role"], "user");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restoration_uses_json_mode_without_annotation_tools() -> Result<(), Box<dyn Error>> {
+    let api = mock_api(vec![final_response("chat-1", restoration_json())]).await;
+    let config = ChatCompletionsConfig::new(base_url(&api), "test-key", "test-model")?
+        .with_max_output_tokens(2_048)?
+        .with_extra_body(json!({ "thinking": { "type": "disabled" } }))?;
+    let client = beyond_slides::ChatCompletionsClient::new(config);
+    let sources = sources()?;
+    let windows = build_windows(
+        &sources,
+        WindowingConfig::new(100, Duration::from_secs(60), 20)?,
+    );
+    let task = build_restoration_tasks(&windows)
+        .into_iter()
+        .next()
+        .expect("the transcript creates one restoration task");
+
+    let result = client.restore_window(&task).await?;
+
+    assert_eq!(result.restoration.spans.len(), 1);
+    assert_eq!(result.diagnostics.final_answer_repairs, 0);
+    assert_eq!(result.diagnostics.prompt_tokens, Some(20));
+    assert_eq!(result.diagnostics.completion_tokens, Some(10));
+
+    let requests = api
+        .received_requests()
+        .await
+        .expect("mock request recording is enabled");
+    let request: Value = requests[0].body_json()?;
+    assert_eq!(request["response_format"], json!({ "type": "json_object" }));
+    assert_eq!(request["thinking"], json!({ "type": "disabled" }));
+    assert!(request.get("tools").is_none());
+    assert!(request.get("tool_choice").is_none());
+    assert!(
+        request["messages"][0]["content"]
+            .as_str()
+            .expect("system instructions are text")
+            .contains("TranscriptWindowRestoration")
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn invalid_restoration_is_returned_to_the_model_for_repair() -> Result<(), Box<dyn Error>> {
+    let invalid = json!({
+        "spans": [{
+            "kind": "text",
+            "source_start": 1,
+            "source_end": 1,
+            "text": "错误的来源范围。"
+        }]
+    })
+    .to_string();
+    let api = mock_api(vec![
+        final_response("chat-1", invalid.clone()),
+        final_response("chat-2", restoration_json()),
+    ])
+    .await;
+    let client = beyond_slides::ChatCompletionsClient::new(ChatCompletionsConfig::new(
+        base_url(&api),
+        "test-key",
+        "test-model",
+    )?);
+    let sources = sources()?;
+    let windows = build_windows(
+        &sources,
+        WindowingConfig::new(100, Duration::from_secs(60), 20)?,
+    );
+    let task = build_restoration_tasks(&windows)
+        .into_iter()
+        .next()
+        .expect("the transcript creates one restoration task");
+
+    let result = client.restore_window(&task).await?;
+
+    assert_eq!(result.diagnostics.final_answer_repairs, 1);
+    let requests = api
+        .received_requests()
+        .await
+        .expect("mock request recording is enabled");
+    let repair_request: Value = requests[1].body_json()?;
+    assert_eq!(repair_request["messages"][2]["content"], invalid);
+    assert!(
+        repair_request["messages"][3]["content"]
+            .as_str()
+            .expect("repair instruction is text")
+            .contains("owned_region")
+    );
     Ok(())
 }
 
@@ -393,6 +484,18 @@ fn analysis_json() -> String {
             "connection_strength": 2,
             "importance": 3,
             "related_slides": [0]
+        }]
+    })
+    .to_string()
+}
+
+fn restoration_json() -> String {
+    json!({
+        "spans": [{
+            "kind": "text",
+            "source_start": 0,
+            "source_end": 0,
+            "text": "二分查找的课堂讲解。"
         }]
     })
     .to_string()

@@ -383,6 +383,19 @@ no gaps or overlap. Assembly consumes the existing windows rather than
 rebuilding them, validates each response, and concatenates accepted spans in
 source order. Pure disfluencies remain traceable as explicit omitted spans.
 
+The OpenAI-compatible adapter requests JSON mode without advertising annotation
+tools. Invalid JSON or invalid owned-region coverage is returned to the same
+conversation for a bounded number of repair attempts. A restoration run sends
+the first window alone as a canary, then processes remaining windows with
+bounded concurrency. Transient timeouts, rate limits, and server failures have
+a separate bounded transport-retry budget. Each accepted response is written as
+a resumable checkpoint. The completed run emits the evidence-preserving
+restored transcript as JSON, its directly concatenated readable text, and
+per-window diagnostics. Optional provider-specific Chat Completions fields are
+supplied as one explicit JSON object and recorded in the run manifest; for GLM
+restoration, disabling deep thinking avoids spending the gateway timeout on
+reasoning for a primarily editorial task.
+
 ### 7.4 Retrieval
 
 Slides are indexed once behind one interface:

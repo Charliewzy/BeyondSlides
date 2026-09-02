@@ -1,27 +1,23 @@
 use std::{
-    env,
     error::Error,
     ffi::OsStr,
-    fs,
-    io::{self, Write},
+    io,
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use beyond_slides::{
-    AnnotationDiagnostics, ChatCompletionsClient, ChatCompletionsConfig, DenseSlideScorer,
-    HybridSlideScorer, LectureAnalysisConfig, LectureAnalysisProgressError, LectureAnalysisSession,
-    LecturePassage, LexicalSlideScorer, SlideDeck, SlideId, Transcript, ValidatedSources,
-    WindowingConfig,
+    AnnotationDiagnostics, ChatCompletionsClient, DenseSlideScorer, HybridSlideScorer,
+    LectureAnalysisConfig, LectureAnalysisProgressError, LectureAnalysisSession, LecturePassage,
+    LexicalSlideScorer, SlideDeck, SlideId, Transcript, ValidatedSources, WindowingConfig,
 };
-use indicatif::{ProgressBar, ProgressStyle};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use sha2::{Digest, Sha256};
-use tempfile::NamedTempFile;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-const API_BASE_URL_ENV: &str = "BEYOND_SLIDES_API_BASE_URL";
-const API_KEY_ENV: &str = "BEYOND_SLIDES_API_KEY";
-const MODEL_ENV: &str = "BEYOND_SLIDES_MODEL";
+use crate::run_support::{
+    ProviderSettings, checkpoint_path, display_token_count, initialize_run_directory, read_json,
+    read_json_with_hash, sha256, window_progress_bar, write_json_atomically,
+};
 
 const ANALYSIS_RUN_FORMAT_VERSION: u32 = 2;
 const MAX_OWNED_CHARACTERS: usize = 400;
@@ -34,7 +30,6 @@ const MAX_SEARCH_RESULTS: usize = 5;
 const MAX_OUTPUT_TOKENS: u32 = 16_384;
 const DENSE_MODEL: &str = "BAAI/bge-small-zh-v1.5";
 const RETRIEVAL_MODE: &str = "hybrid-rrf";
-const MANIFEST_FILE: &str = "manifest.json";
 const ANALYSIS_FILE: &str = "analysis.json";
 
 pub async fn run_canary(
@@ -57,7 +52,7 @@ pub async fn run_canary(
     let lexical = LexicalSlideScorer::new(&sources);
     let dense = DenseSlideScorer::try_new(&sources)?;
     let hybrid = HybridSlideScorer::new(&lexical, &dense);
-    let client = provider.client()?;
+    let client = analysis_client(&provider)?;
 
     eprintln!("Preparing the lecture and scoring every transcript window...");
     let mut session =
@@ -95,7 +90,7 @@ pub async fn run_complete(
     let (transcript, transcript_hash) = read_json_with_hash(&transcript_path, "transcript")?;
     let (slide_deck, slides_hash) = read_json_with_hash(&slides_path, "slides")?;
     let manifest = AnalysisRunManifest::new(&provider, transcript_hash, slides_hash);
-    initialize_run_directory(&run_directory, &manifest)?;
+    initialize_run_directory(&run_directory, &manifest, "analysis")?;
     let sources = ValidatedSources::new(transcript, slide_deck)?;
 
     eprintln!(
@@ -105,14 +100,14 @@ pub async fn run_complete(
     let lexical = LexicalSlideScorer::new(&sources);
     let dense = DenseSlideScorer::try_new(&sources)?;
     let hybrid = HybridSlideScorer::new(&lexical, &dense);
-    let client = provider.client()?;
+    let client = analysis_client(&provider)?;
 
     eprintln!("Preparing the lecture and scoring every transcript window...");
     let mut session =
         LectureAnalysisSession::prepare(&client, sources, &hybrid, lecture_config()?)?;
     restore_checkpoints(&mut session, &run_directory)?;
 
-    let progress = analysis_progress_bar(session.window_count(), session.completed_window_count())?;
+    let progress = window_progress_bar(session.window_count(), session.completed_window_count())?;
     if session.window_count() > 0 {
         if session.completed_window_count() == 0 {
             progress.set_message("running canary");
@@ -166,33 +161,14 @@ pub async fn run_complete(
     Ok(())
 }
 
-struct ProviderSettings {
-    base_url: String,
-    api_key: String,
-    model: String,
-}
-
-impl ProviderSettings {
-    fn from_environment() -> Result<Self, io::Error> {
-        Ok(Self {
-            base_url: required_environment_variable(API_BASE_URL_ENV)?,
-            api_key: required_environment_variable(API_KEY_ENV)?,
-            model: required_environment_variable(MODEL_ENV)?,
-        })
-    }
-
-    fn client(&self) -> Result<ChatCompletionsClient, Box<dyn Error>> {
-        let config = ChatCompletionsConfig::new(
-            self.base_url.clone(),
-            self.api_key.clone(),
-            self.model.clone(),
-        )?
+fn analysis_client(provider: &ProviderSettings) -> Result<ChatCompletionsClient, Box<dyn Error>> {
+    let config = provider
+        .chat_config()?
         .with_max_tool_rounds(MAX_TOOL_ROUNDS)?
         .with_max_final_answer_repairs(MAX_FINAL_ANSWER_REPAIRS)?
         .with_max_search_results(MAX_SEARCH_RESULTS)?
         .with_max_output_tokens(MAX_OUTPUT_TOKENS)?;
-        Ok(ChatCompletionsClient::new(config))
-    }
+    Ok(ChatCompletionsClient::new(config))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -204,6 +180,8 @@ struct AnalysisRunManifest {
     annotation_prompt_sha256: String,
     api_base_url: String,
     model: String,
+    #[serde(default)]
+    chat_extra_body: Option<Value>,
     retrieval_mode: String,
     dense_model: String,
     max_owned_characters: usize,
@@ -226,8 +204,9 @@ impl AnalysisRunManifest {
                 env!("CARGO_MANIFEST_DIR"),
                 "/prompts/annotation.md"
             ))),
-            api_base_url: provider.base_url.clone(),
-            model: provider.model.clone(),
+            api_base_url: provider.base_url().into(),
+            model: provider.model().into(),
+            chat_extra_body: provider.extra_body().cloned(),
             retrieval_mode: RETRIEVAL_MODE.into(),
             dense_model: DENSE_MODEL.into(),
             max_owned_characters: MAX_OWNED_CHARACTERS,
@@ -261,37 +240,6 @@ fn lecture_config() -> Result<LectureAnalysisConfig, Box<dyn Error>> {
     )?)
 }
 
-fn initialize_run_directory(
-    run_directory: &Path,
-    expected_manifest: &AnalysisRunManifest,
-) -> Result<(), io::Error> {
-    fs::create_dir_all(run_directory).map_err(|error| {
-        io::Error::new(
-            error.kind(),
-            format!(
-                "could not create analysis run directory {}: {error}",
-                run_directory.display()
-            ),
-        )
-    })?;
-    let manifest_path = run_directory.join(MANIFEST_FILE);
-    if manifest_path.exists() {
-        let actual_manifest: AnalysisRunManifest = read_json(&manifest_path, "run manifest")?;
-        if actual_manifest != *expected_manifest {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "analysis run manifest {} does not match the current inputs or configuration; use a new run directory",
-                    manifest_path.display()
-                ),
-            ));
-        }
-    } else {
-        write_json_atomically(&manifest_path, expected_manifest, "run manifest")?;
-    }
-    Ok(())
-}
-
 fn restore_checkpoints(
     session: &mut LectureAnalysisSession<'_>,
     run_directory: &Path,
@@ -314,159 +262,39 @@ fn restore_checkpoints(
     Ok(())
 }
 
-fn checkpoint_path(run_directory: &Path, window_number: usize) -> PathBuf {
-    run_directory.join(format!("window-{window_number:04}.json"))
-}
-
-fn analysis_progress_bar(
-    total_windows: usize,
-    completed_windows: usize,
-) -> Result<ProgressBar, indicatif::style::TemplateError> {
-    let progress = ProgressBar::new(total_windows as u64);
-    progress.set_style(
-        ProgressStyle::with_template(
-            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] \
-             {pos}/{len} windows {msg}",
-        )?
-        .progress_chars("=>-"),
-    );
-    progress.set_position(completed_windows as u64);
-    progress.enable_steady_tick(Duration::from_millis(100));
-    Ok(progress)
-}
-
-fn required_environment_variable(name: &str) -> Result<String, io::Error> {
-    env::var(name).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("could not read required environment variable {name}: {error}"),
-        )
-    })
-}
-
-fn display_token_count(tokens: Option<u64>) -> String {
-    tokens.map_or_else(|| "unknown".into(), |tokens| tokens.to_string())
-}
-
-fn read_json<T: DeserializeOwned>(path: &Path, kind: &str) -> Result<T, io::Error> {
-    let bytes = fs::read(path).map_err(|error| {
-        io::Error::new(
-            error.kind(),
-            format!("could not read {kind} {}: {error}", path.display()),
-        )
-    })?;
-    parse_json(&bytes, path, kind)
-}
-
-fn read_json_with_hash<T: DeserializeOwned>(
-    path: &Path,
-    kind: &str,
-) -> Result<(T, String), io::Error> {
-    let bytes = fs::read(path).map_err(|error| {
-        io::Error::new(
-            error.kind(),
-            format!("could not read {kind} {}: {error}", path.display()),
-        )
-    })?;
-    let value = parse_json(&bytes, path, kind)?;
-    Ok((value, sha256(&bytes)))
-}
-
-fn parse_json<T: DeserializeOwned>(bytes: &[u8], path: &Path, kind: &str) -> Result<T, io::Error> {
-    serde_json::from_slice(bytes).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("invalid {kind} JSON in {}: {error}", path.display()),
-        )
-    })
-}
-
-fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
-
-fn write_json_atomically<T: Serialize>(
-    path: &Path,
-    value: &T,
-    kind: &str,
-) -> Result<(), io::Error> {
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let mut temporary = NamedTempFile::new_in(parent).map_err(|error| {
-        io::Error::new(
-            error.kind(),
-            format!(
-                "could not create temporary {kind} in {}: {error}",
-                parent.display()
-            ),
-        )
-    })?;
-    serde_json::to_writer_pretty(&mut temporary, value).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("could not serialize {kind}: {error}"),
-        )
-    })?;
-    temporary.write_all(b"\n")?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| {
-        io::Error::new(
-            error.error.kind(),
-            format!(
-                "could not persist {kind} {}: {}",
-                path.display(),
-                error.error
-            ),
-        )
-    })?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn run_directory_only_resumes_an_identical_manifest() -> Result<(), Box<dyn Error>> {
         let directory = tempfile::tempdir()?;
-        let provider = ProviderSettings {
-            base_url: "https://example.test/v1".into(),
-            api_key: "secret-not-persisted".into(),
-            model: "test-model".into(),
-        };
+        let provider = ProviderSettings::new(
+            "https://example.test/v1",
+            "secret-not-persisted",
+            "test-model",
+        );
         let manifest = AnalysisRunManifest::new(&provider, "transcript".into(), "slides".into());
 
-        initialize_run_directory(directory.path(), &manifest)?;
-        initialize_run_directory(directory.path(), &manifest)?;
+        initialize_run_directory(directory.path(), &manifest, "analysis")?;
+        initialize_run_directory(directory.path(), &manifest, "analysis")?;
 
-        let persisted = fs::read_to_string(directory.path().join(MANIFEST_FILE))?;
-        assert!(!persisted.contains(&provider.api_key));
+        let persisted = fs::read_to_string(directory.path().join("manifest.json"))?;
+        assert!(!persisted.contains("secret-not-persisted"));
 
         let different = AnalysisRunManifest::new(
-            &ProviderSettings {
-                model: "different-model".into(),
-                ..provider
-            },
+            &ProviderSettings::new(
+                "https://example.test/v1",
+                "secret-not-persisted",
+                "different-model",
+            ),
             "transcript".into(),
             "slides".into(),
         );
-        let error = initialize_run_directory(directory.path(), &different)
+        let error = initialize_run_directory(directory.path(), &different, "analysis")
             .expect_err("a changed model must not reuse existing checkpoints");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        Ok(())
-    }
-
-    #[test]
-    fn atomic_json_writer_replaces_an_existing_checkpoint() -> Result<(), Box<dyn Error>> {
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("window-0001.json");
-
-        write_json_atomically(&path, &1, "test checkpoint")?;
-        write_json_atomically(&path, &2, "test checkpoint")?;
-
-        assert_eq!(read_json::<u8>(&path, "test checkpoint")?, 2);
         Ok(())
     }
 }

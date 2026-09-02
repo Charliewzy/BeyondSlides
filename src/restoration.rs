@@ -1,10 +1,13 @@
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, num::NonZeroUsize};
 
+use futures::{StreamExt, TryStreamExt, stream};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    RestoredTranscript, RestoredTranscriptSpan, TranscriptSegment, TranscriptSegmentId,
-    TranscriptWindow,
+    ChatCompletionsClient, ChatCompletionsError, RestorationDiagnostics, RestoredTranscript,
+    RestoredTranscriptSpan, SlideDeck, Transcript, TranscriptSegment, TranscriptSegmentId,
+    TranscriptWindow, TranscriptWindowRestorationResult, ValidatedSources, ValidationError,
+    WindowingConfig, build_windows,
     windowing::{OwnedRegionPartitionError, validate_owned_region_partition},
 };
 
@@ -88,6 +91,310 @@ pub fn assemble_restored_transcript(
     }
 
     Ok(RestoredTranscript { spans })
+}
+
+pub type RestorationProgressError = Box<dyn Error + Send + Sync>;
+
+/// Runtime policy for restoring one complete transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptRestorationConfig {
+    windowing: WindowingConfig,
+    max_concurrent_windows: NonZeroUsize,
+}
+
+impl TranscriptRestorationConfig {
+    /// The first transcript window always runs alone as a canary. Concurrency
+    /// applies only to the remaining windows after that response is accepted.
+    pub fn new(
+        windowing: WindowingConfig,
+        max_concurrent_windows: usize,
+    ) -> Result<Self, TranscriptRestorationConfigError> {
+        let Some(max_concurrent_windows) = NonZeroUsize::new(max_concurrent_windows) else {
+            return Err(TranscriptRestorationConfigError::ZeroConcurrency);
+        };
+        Ok(Self {
+            windowing,
+            max_concurrent_windows,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptRestorationConfigError {
+    ZeroConcurrency,
+}
+
+impl fmt::Display for TranscriptRestorationConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ZeroConcurrency => formatter
+                .write_str("transcript restoration must allow at least one concurrent window"),
+        }
+    }
+}
+
+impl Error for TranscriptRestorationConfigError {}
+
+/// The restored transcript and diagnostics produced for each source window.
+#[derive(Debug)]
+pub struct CompleteTranscriptRestoration {
+    transcript: RestoredTranscript,
+    window_diagnostics: Vec<RestorationDiagnostics>,
+}
+
+impl CompleteTranscriptRestoration {
+    pub fn transcript(&self) -> &RestoredTranscript {
+        &self.transcript
+    }
+
+    pub fn window_diagnostics(&self) -> &[RestorationDiagnostics] {
+        &self.window_diagnostics
+    }
+
+    pub fn into_transcript(self) -> RestoredTranscript {
+        self.transcript
+    }
+}
+
+/// One newly restored transcript window and the overall run progress.
+pub struct RestorationProgress<'a> {
+    pub window_index: usize,
+    pub completed_windows: usize,
+    pub total_windows: usize,
+    pub result: &'a TranscriptWindowRestorationResult,
+}
+
+/// A prepared restoration that pauses after its first model request.
+pub struct TranscriptRestorationSession<'a> {
+    client: &'a ChatCompletionsClient,
+    sources: ValidatedSources,
+    config: TranscriptRestorationConfig,
+    window_results: Vec<Option<TranscriptWindowRestorationResult>>,
+}
+
+impl<'a> TranscriptRestorationSession<'a> {
+    /// Validates and windows the transcript without contacting the model.
+    pub fn prepare(
+        client: &'a ChatCompletionsClient,
+        transcript: Transcript,
+        config: TranscriptRestorationConfig,
+    ) -> Result<Self, RestorationSessionError> {
+        let sources = ValidatedSources::new(transcript, SlideDeck { slides: Vec::new() })
+            .map_err(RestorationSessionError::InvalidTranscript)?;
+        let window_results = vec![None; build_windows(&sources, config.windowing).len()];
+        Ok(Self {
+            client,
+            sources,
+            config,
+            window_results,
+        })
+    }
+
+    pub fn window_count(&self) -> usize {
+        self.window_results.len()
+    }
+
+    pub fn completed_window_count(&self) -> usize {
+        self.window_results.iter().flatten().count()
+    }
+
+    /// Loads one persisted result after validating it against its source window.
+    pub fn restore_window_checkpoint(
+        &mut self,
+        window_index: usize,
+        result: TranscriptWindowRestorationResult,
+    ) -> Result<(), RestorationSessionError> {
+        let Some(stored_result) = self.window_results.get(window_index) else {
+            return Err(RestorationSessionError::UnknownWindowIndex {
+                index: window_index,
+                count: self.window_results.len(),
+            });
+        };
+        if stored_result.is_some() {
+            return Err(RestorationSessionError::WindowAlreadyCompleted {
+                index: window_index,
+            });
+        }
+
+        let windows = build_windows(&self.sources, self.config.windowing);
+        let tasks = build_restoration_tasks(&windows);
+        validate_window_restoration(&tasks[window_index], &result.restoration).map_err(
+            |source| RestorationSessionError::InvalidWindowCheckpoint {
+                index: window_index,
+                source,
+            },
+        )?;
+        self.window_results[window_index] = Some(result);
+        Ok(())
+    }
+
+    /// Restores the first window without launching later windows.
+    pub async fn restore_canary(
+        &mut self,
+    ) -> Result<Option<&TranscriptWindowRestorationResult>, RestorationSessionError> {
+        let Some(canary_result) = self.window_results.first() else {
+            return Ok(None);
+        };
+        if canary_result.is_none() {
+            let result = {
+                let windows = build_windows(&self.sources, self.config.windowing);
+                let tasks = build_restoration_tasks(&windows);
+                let Some(canary) = tasks.first() else {
+                    return Ok(None);
+                };
+                self.client.restore_window(canary).await.map_err(|source| {
+                    RestorationSessionError::WindowRestoration {
+                        index: canary.window_index,
+                        source,
+                    }
+                })?
+            };
+            self.window_results[0] = Some(result);
+        }
+        Ok(self.window_results[0].as_ref())
+    }
+
+    pub async fn complete_restoration(
+        self,
+    ) -> Result<CompleteTranscriptRestoration, RestorationSessionError> {
+        self.complete_restoration_with_progress(|_| Ok(())).await
+    }
+
+    /// Restores all remaining windows with bounded concurrency.
+    /// Persisted results count toward progress but are not reported again.
+    pub async fn complete_restoration_with_progress(
+        self,
+        mut report_progress: impl FnMut(RestorationProgress<'_>) -> Result<(), RestorationProgressError>,
+    ) -> Result<CompleteTranscriptRestoration, RestorationSessionError> {
+        let Self {
+            client,
+            sources,
+            config,
+            window_results: stored_results,
+        } = self;
+        let windows = build_windows(&sources, config.windowing);
+        let tasks = build_restoration_tasks(&windows);
+        let mut window_results = Vec::with_capacity(tasks.len());
+        let mut pending_tasks = Vec::new();
+        let mut completed_windows = stored_results.iter().flatten().count();
+
+        for (task, result) in tasks.iter().copied().zip(stored_results) {
+            if let Some(result) = result {
+                window_results.push((task.window_index, result));
+            } else if task.window_index == 0 {
+                return Err(RestorationSessionError::CanaryNotRestored);
+            } else {
+                pending_tasks.push(task);
+            }
+        }
+
+        if !pending_tasks.is_empty() {
+            let remaining_results = stream::iter(pending_tasks)
+                .map(move |task| async move {
+                    client
+                        .restore_window(&task)
+                        .await
+                        .map(|result| (task.window_index, result))
+                        .map_err(|source| RestorationSessionError::WindowRestoration {
+                            index: task.window_index,
+                            source,
+                        })
+                })
+                .buffer_unordered(config.max_concurrent_windows.get());
+            futures::pin_mut!(remaining_results);
+            while let Some((window_index, result)) = remaining_results.try_next().await? {
+                completed_windows += 1;
+                report_progress(RestorationProgress {
+                    window_index,
+                    completed_windows,
+                    total_windows: tasks.len(),
+                    result: &result,
+                })
+                .map_err(RestorationSessionError::Progress)?;
+                window_results.push((window_index, result));
+            }
+        }
+
+        window_results.sort_unstable_by_key(|(window_index, _)| *window_index);
+        let (window_restorations, window_diagnostics) = window_results
+            .into_iter()
+            .map(|(_, result)| (result.restoration, result.diagnostics))
+            .unzip();
+        let transcript = assemble_restored_transcript(&windows, window_restorations)
+            .map_err(RestorationSessionError::Assembly)?;
+        Ok(CompleteTranscriptRestoration {
+            transcript,
+            window_diagnostics,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub enum RestorationSessionError {
+    InvalidTranscript(ValidationError),
+    UnknownWindowIndex {
+        index: usize,
+        count: usize,
+    },
+    WindowAlreadyCompleted {
+        index: usize,
+    },
+    InvalidWindowCheckpoint {
+        index: usize,
+        source: RestorationError,
+    },
+    WindowRestoration {
+        index: usize,
+        source: ChatCompletionsError,
+    },
+    CanaryNotRestored,
+    Progress(RestorationProgressError),
+    Assembly(RestorationError),
+}
+
+impl fmt::Display for RestorationSessionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidTranscript(error) => write!(formatter, "invalid transcript: {error}"),
+            Self::UnknownWindowIndex { index, count } => write!(
+                formatter,
+                "transcript window index {index} does not exist; the transcript has {count} windows"
+            ),
+            Self::WindowAlreadyCompleted { index } => write!(
+                formatter,
+                "transcript window index {index} already has a restoration result"
+            ),
+            Self::InvalidWindowCheckpoint { index, source } => write!(
+                formatter,
+                "persisted restoration for transcript window index {index} is invalid: {source}"
+            ),
+            Self::WindowRestoration { index, source } => write!(
+                formatter,
+                "could not restore transcript window index {index}: {source}"
+            ),
+            Self::CanaryNotRestored => formatter.write_str(
+                "the first transcript window must be restored before concurrent restoration begins",
+            ),
+            Self::Progress(error) => write!(formatter, "restoration progress failed: {error}"),
+            Self::Assembly(error) => {
+                write!(formatter, "could not assemble restored transcript: {error}")
+            }
+        }
+    }
+}
+
+impl Error for RestorationSessionError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::InvalidTranscript(error) => Some(error),
+            Self::InvalidWindowCheckpoint { source, .. } | Self::Assembly(source) => Some(source),
+            Self::WindowRestoration { source, .. } => Some(source),
+            Self::Progress(error) => Some(error.as_ref()),
+            Self::UnknownWindowIndex { .. }
+            | Self::WindowAlreadyCompleted { .. }
+            | Self::CanaryNotRestored => None,
+        }
+    }
 }
 
 fn validate_owned_region(

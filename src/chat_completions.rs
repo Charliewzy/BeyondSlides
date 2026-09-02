@@ -1,4 +1,4 @@
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, time::Duration};
 
 use genai::{
     Client, ModelIden, ServiceTarget,
@@ -9,15 +9,22 @@ use genai::{
     },
     resolver::{AuthData, Endpoint},
 };
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use url::Url;
 
-use super::{
-    AnalysisAssemblyError, AnnotationToolError, AnnotationToolSession, TranscriptWindowAnalysis,
-    TranscriptWindowTask, validate_window_analysis,
+use crate::{
+    SlideId, SlideScorer, ValidatedSources,
+    annotation::{
+        AnalysisAssemblyError, AnnotationToolError, AnnotationToolSession,
+        TranscriptWindowAnalysis, TranscriptWindowTask, validate_window_analysis,
+    },
+    restoration::{
+        RestorationError, TranscriptRestorationTask, TranscriptWindowRestoration,
+        validate_window_restoration,
+    },
 };
-use crate::{SlideId, SlideScorer, ValidatedSources};
 
 const DEFAULT_MAX_TOOL_ROUNDS: usize = 4;
 const DEFAULT_MAX_FINAL_ANSWER_REPAIRS: usize = 2;
@@ -38,6 +45,8 @@ pub struct ChatCompletionsConfig {
     max_final_answer_repairs: usize,
     max_search_results: usize,
     max_output_tokens: u32,
+    max_provider_retries: usize,
+    extra_body: Option<Value>,
 }
 
 impl ChatCompletionsConfig {
@@ -78,6 +87,8 @@ impl ChatCompletionsConfig {
             max_final_answer_repairs: DEFAULT_MAX_FINAL_ANSWER_REPAIRS,
             max_search_results: DEFAULT_MAX_SEARCH_RESULTS,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+            max_provider_retries: 0,
+            extra_body: None,
         })
     }
 
@@ -126,6 +137,24 @@ impl ChatCompletionsConfig {
         self.max_output_tokens = max_output_tokens;
         Ok(self)
     }
+
+    pub const fn with_max_provider_retries(mut self, max_provider_retries: usize) -> Self {
+        self.max_provider_retries = max_provider_retries;
+        self
+    }
+
+    /// Adds provider-specific top-level request fields after validating that
+    /// they can be merged into the Chat Completions request object.
+    pub fn with_extra_body(
+        mut self,
+        extra_body: Value,
+    ) -> Result<Self, ChatCompletionsConfigError> {
+        if !extra_body.is_object() {
+            return Err(ChatCompletionsConfigError::ExtraBodyNotObject);
+        }
+        self.extra_body = Some(extra_body);
+        Ok(self)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +162,7 @@ pub enum ChatCompletionsConfigError {
     InvalidBaseUrl(String),
     EmptyApiKey,
     EmptyModel,
+    ExtraBodyNotObject,
     ZeroLimit(&'static str),
 }
 
@@ -147,6 +177,9 @@ impl fmt::Display for ChatCompletionsConfigError {
             }
             Self::EmptyModel => {
                 formatter.write_str("the Chat Completions model name cannot be empty")
+            }
+            Self::ExtraBodyNotObject => {
+                formatter.write_str("the Chat Completions extra body must be a JSON object")
             }
             Self::ZeroLimit(name) => {
                 write!(
@@ -172,6 +205,7 @@ pub struct ChatCompletionsClient {
     max_tool_rounds: usize,
     max_final_answer_repairs: usize,
     max_search_results: usize,
+    max_provider_retries: usize,
 }
 
 impl ChatCompletionsClient {
@@ -181,12 +215,14 @@ impl ChatCompletionsClient {
             auth: AuthData::from_single(config.api_key),
             model: ModelIden::new(AdapterKind::OpenAI, config.model),
         };
-        let options = ChatOptions::default()
+        let mut options = ChatOptions::default()
             .with_temperature(0.0)
             .with_max_tokens(config.max_output_tokens)
             .with_response_format(ChatResponseFormat::JsonMode)
-            .with_tool_choice(ToolChoice::Auto)
             .with_capture_raw_body(true);
+        if let Some(extra_body) = config.extra_body {
+            options = options.with_extra_body(extra_body);
+        }
 
         Self {
             transport: Client::default(),
@@ -195,6 +231,7 @@ impl ChatCompletionsClient {
             max_tool_rounds: config.max_tool_rounds,
             max_final_answer_repairs: config.max_final_answer_repairs,
             max_search_results: config.max_search_results,
+            max_provider_retries: config.max_provider_retries,
         }
     }
 
@@ -219,9 +256,9 @@ impl ChatCompletionsClient {
         let mut diagnostics = AnnotationDiagnostics::default();
 
         loop {
-            let response = self.chat(request.clone()).await?;
+            let (response, provider_retries) = self.chat(request.clone(), true).await?;
             ensure_one_choice(&response)?;
-            diagnostics.record(&response);
+            diagnostics.record(&response, provider_retries);
             let tool_calls: Vec<_> = response.tool_calls().into_iter().cloned().collect();
 
             if !tool_calls.is_empty() {
@@ -288,11 +325,95 @@ impl ChatCompletionsClient {
         }
     }
 
-    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ChatCompletionsError> {
-        self.transport
-            .exec_chat(self.target.clone(), request, Some(&self.options))
-            .await
-            .map_err(provider_error)
+    /// Restores one transcript window without exposing annotation tools.
+    pub async fn restore_window(
+        &self,
+        task: &TranscriptRestorationTask<'_>,
+    ) -> Result<TranscriptWindowRestorationResult, ChatCompletionsError> {
+        let message = task
+            .message()
+            .map_err(ChatCompletionsError::SerializeTask)?;
+        let mut request = ChatRequest::from_user(message.input).with_system(message.instructions);
+        let mut diagnostics = RestorationDiagnostics::default();
+
+        loop {
+            let (response, provider_retries) = self.chat(request.clone(), false).await?;
+            ensure_one_choice(&response)?;
+            diagnostics.record(&response, provider_retries);
+            let has_tool_calls = response.tool_calls().into_iter().next().is_some();
+            if has_tool_calls {
+                return Err(unexpected_finish_reason(&response, true));
+            }
+
+            match response.stop_reason.as_ref() {
+                Some(StopReason::Completed(_)) => {}
+                Some(StopReason::MaxTokens(_)) => {
+                    return Err(ChatCompletionsError::OutputTruncated);
+                }
+                _ => return Err(unexpected_finish_reason(&response, false)),
+            }
+            let content = response
+                .first_text()
+                .filter(|content| !content.trim().is_empty())
+                .ok_or(ChatCompletionsError::MissingAssistantContent)?;
+            let candidate =
+                parse_restoration(content).and_then(|(restoration, accepted_json_fence)| {
+                    validate_window_restoration(task, &restoration)
+                        .map_err(ChatCompletionsError::InvalidWindowRestoration)?;
+                    Ok((restoration, accepted_json_fence))
+                });
+            match candidate {
+                Ok((restoration, accepted_json_fence)) => {
+                    diagnostics.accepted_json_fence = accepted_json_fence;
+                    return Ok(TranscriptWindowRestorationResult {
+                        restoration,
+                        diagnostics,
+                    });
+                }
+                Err(error) => {
+                    if diagnostics.final_answer_repairs == self.max_final_answer_repairs {
+                        return Err(ChatCompletionsError::FinalAnswerRepairLimit {
+                            limit: self.max_final_answer_repairs,
+                            source: Box::new(error),
+                        });
+                    }
+                    diagnostics.final_answer_repairs += 1;
+                    request = request
+                        .append_message(ChatMessage::assistant(content.to_owned()))
+                        .append_message(ChatMessage::user(restoration_repair_instruction(&error)));
+                }
+            }
+        }
+    }
+
+    async fn chat(
+        &self,
+        request: ChatRequest,
+        tools_enabled: bool,
+    ) -> Result<(ChatResponse, usize), ChatCompletionsError> {
+        let options = if tools_enabled {
+            self.options.clone().with_tool_choice(ToolChoice::Auto)
+        } else {
+            self.options.clone()
+        };
+        let mut retries = 0;
+        loop {
+            match self
+                .transport
+                .exec_chat(self.target.clone(), request.clone(), Some(&options))
+                .await
+            {
+                Ok(response) => return Ok((response, retries)),
+                Err(error)
+                    if retries < self.max_provider_retries
+                        && is_retryable_provider_error(&error) =>
+                {
+                    retries += 1;
+                    tokio::time::sleep(provider_retry_delay(retries)).await;
+                }
+                Err(error) => return Err(provider_error(error)),
+            }
+        }
     }
 
     fn execute_tool_call(
@@ -356,7 +477,52 @@ pub struct AnnotationResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct TranscriptWindowRestorationResult {
+    pub restoration: TranscriptWindowRestoration,
+    pub diagnostics: RestorationDiagnostics,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct RestorationDiagnostics {
+    /// Number of transient provider failures retried before accepted responses.
+    #[serde(default)]
+    pub provider_retries: usize,
+    /// Number of schema or window-validation failures returned to the model for correction.
+    pub final_answer_repairs: usize,
+    /// Sum across every response, or `None` if any prompt-token count was absent or invalid.
+    pub prompt_tokens: Option<u64>,
+    /// Sum across every response, or `None` if any completion-token count was absent or invalid.
+    pub completion_tokens: Option<u64>,
+    /// True when a whole-response `json` code fence had to be removed.
+    pub accepted_json_fence: bool,
+}
+
+impl Default for RestorationDiagnostics {
+    fn default() -> Self {
+        Self {
+            provider_retries: 0,
+            final_answer_repairs: 0,
+            prompt_tokens: Some(0),
+            completion_tokens: Some(0),
+            accepted_json_fence: false,
+        }
+    }
+}
+
+impl RestorationDiagnostics {
+    fn record(&mut self, response: &ChatResponse, provider_retries: usize) {
+        self.provider_retries = self.provider_retries.saturating_add(provider_retries);
+        self.prompt_tokens = add_token_count(self.prompt_tokens, response.usage.prompt_tokens);
+        self.completion_tokens =
+            add_token_count(self.completion_tokens, response.usage.completion_tokens);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct AnnotationDiagnostics {
+    /// Number of transient provider failures retried before accepted responses.
+    #[serde(default)]
+    pub provider_retries: usize,
     pub tool_rounds: usize,
     /// Number of schema or window-validation failures returned to the model for correction.
     pub final_answer_repairs: usize,
@@ -371,6 +537,7 @@ pub struct AnnotationDiagnostics {
 impl Default for AnnotationDiagnostics {
     fn default() -> Self {
         Self {
+            provider_retries: 0,
             tool_rounds: 0,
             final_answer_repairs: 0,
             prompt_tokens: Some(0),
@@ -381,7 +548,8 @@ impl Default for AnnotationDiagnostics {
 }
 
 impl AnnotationDiagnostics {
-    fn record(&mut self, response: &ChatResponse) {
+    fn record(&mut self, response: &ChatResponse, provider_retries: usize) {
+        self.provider_retries = self.provider_retries.saturating_add(provider_retries);
         self.prompt_tokens = add_token_count(self.prompt_tokens, response.usage.prompt_tokens);
         self.completion_tokens =
             add_token_count(self.completion_tokens, response.usage.completion_tokens);
@@ -416,6 +584,8 @@ pub enum ChatCompletionsError {
     SerializeTool(serde_json::Error),
     InvalidAnalysisJson(serde_json::Error),
     InvalidWindowAnalysis(AnalysisAssemblyError),
+    InvalidRestorationJson(serde_json::Error),
+    InvalidWindowRestoration(RestorationError),
 }
 
 impl fmt::Display for ChatCompletionsError {
@@ -444,7 +614,7 @@ impl fmt::Display for ChatCompletionsError {
             Self::MissingAssistantContent => formatter
                 .write_str("the model returned neither tool calls nor final assistant content"),
             Self::OutputTruncated => formatter.write_str(
-                "the model exhausted the output-token limit before returning a complete analysis",
+                "the model exhausted the output-token limit before returning a complete structured response",
             ),
             Self::ToolRoundLimit { limit } => write!(
                 formatter,
@@ -452,7 +622,7 @@ impl fmt::Display for ChatCompletionsError {
             ),
             Self::FinalAnswerRepairLimit { limit, source } => write!(
                 formatter,
-                "the model still returned an invalid final analysis after {limit} repair attempts: {source}"
+                "the model still returned an invalid structured response after {limit} repair attempts: {source}"
             ),
             Self::Tool(error) => write!(formatter, "annotation tool failed: {error}"),
             Self::SerializeTool(error) => {
@@ -473,6 +643,16 @@ impl fmt::Display for ChatCompletionsError {
                     "the model returned an invalid transcript-window analysis: {error}"
                 )
             }
+            Self::InvalidRestorationJson(error) => write!(
+                formatter,
+                "the model's final content is not a TranscriptWindowRestoration JSON object: {error}"
+            ),
+            Self::InvalidWindowRestoration(error) => {
+                write!(
+                    formatter,
+                    "the model returned an invalid transcript-window restoration: {error}"
+                )
+            }
         }
     }
 }
@@ -482,9 +662,11 @@ impl Error for ChatCompletionsError {
         match self {
             Self::SerializeTask(error)
             | Self::SerializeTool(error)
-            | Self::InvalidAnalysisJson(error) => Some(error),
+            | Self::InvalidAnalysisJson(error)
+            | Self::InvalidRestorationJson(error) => Some(error),
             Self::Tool(error) => Some(error),
             Self::InvalidWindowAnalysis(error) => Some(error),
+            Self::InvalidWindowRestoration(error) => Some(error),
             Self::FinalAnswerRepairLimit { source, .. } => Some(source.as_ref()),
             Self::Provider(_)
             | Self::UnexpectedChoiceCount { .. }
@@ -494,6 +676,37 @@ impl Error for ChatCompletionsError {
             | Self::ToolRoundLimit { .. } => None,
         }
     }
+}
+
+fn is_retryable_provider_error(error: &genai::Error) -> bool {
+    match error {
+        genai::Error::WebAdapterCall { webc_error, .. }
+        | genai::Error::WebModelCall { webc_error, .. } => is_retryable_web_error(webc_error),
+        genai::Error::HttpError { status, .. } => is_retryable_status(status.as_u16()),
+        _ => false,
+    }
+}
+
+fn is_retryable_web_error(error: &genai::webc::Error) -> bool {
+    match error {
+        genai::webc::Error::ResponseFailedStatus { status, .. } => {
+            is_retryable_status(status.as_u16())
+        }
+        genai::webc::Error::Reqwest(error) => {
+            error.is_connect() || error.is_request() || error.is_timeout()
+        }
+        genai::webc::Error::ResponseFailedNotJson { .. }
+        | genai::webc::Error::ResponseFailedInvalidJson { .. } => true,
+        genai::webc::Error::JsonValueExt(_) => false,
+    }
+}
+
+fn is_retryable_status(status: u16) -> bool {
+    status == 408 || status == 429 || (500..=599).contains(&status)
+}
+
+fn provider_retry_delay(retry: usize) -> Duration {
+    Duration::from_secs(retry.min(5) as u64)
 }
 
 fn provider_error(error: genai::Error) -> ChatCompletionsError {
@@ -538,16 +751,24 @@ fn unexpected_finish_reason(response: &ChatResponse, has_tool_calls: bool) -> Ch
 }
 
 fn parse_analysis(content: &str) -> Result<(TranscriptWindowAnalysis, bool), ChatCompletionsError> {
+    parse_json_content(content).map_err(ChatCompletionsError::InvalidAnalysisJson)
+}
+
+fn parse_restoration(
+    content: &str,
+) -> Result<(TranscriptWindowRestoration, bool), ChatCompletionsError> {
+    parse_json_content(content).map_err(ChatCompletionsError::InvalidRestorationJson)
+}
+
+fn parse_json_content<T: DeserializeOwned>(content: &str) -> Result<(T, bool), serde_json::Error> {
     let content = content.trim();
     match serde_json::from_str(content) {
-        Ok(analysis) => Ok((analysis, false)),
+        Ok(value) => Ok((value, false)),
         Err(direct_error) => {
             let Some(payload) = strip_json_fence(content) else {
-                return Err(ChatCompletionsError::InvalidAnalysisJson(direct_error));
+                return Err(direct_error);
             };
-            serde_json::from_str(payload)
-                .map(|analysis| (analysis, true))
-                .map_err(ChatCompletionsError::InvalidAnalysisJson)
+            serde_json::from_str(payload).map(|value| (value, true))
         }
     }
 }
@@ -555,6 +776,12 @@ fn parse_analysis(content: &str) -> Result<(TranscriptWindowAnalysis, bool), Cha
 fn repair_instruction(error: &ChatCompletionsError) -> String {
     format!(
         "你上一条最终答案未通过验证：{error}\n请返回修正后的完整 TranscriptWindowAnalysis JSON 对象，不要只返回局部修改，也不要调用工具。每个 passage 都必须包含全部必需字段；如果没有相关幻灯片，related_slides 使用空数组 []。"
+    )
+}
+
+fn restoration_repair_instruction(error: &ChatCompletionsError) -> String {
+    format!(
+        "你上一条最终答案未通过验证：{error}\n请返回修正后的完整 TranscriptWindowRestoration JSON 对象，不要只返回局部修改。spans 必须按顺序、无重叠、无遗漏地完整划分 owned_region；不要输出 Markdown 或解释。"
     )
 }
 
@@ -683,5 +910,14 @@ mod tests {
             error,
             ChatCompletionsError::InvalidAnalysisJson(_)
         ));
+    }
+
+    #[test]
+    fn only_transient_http_statuses_are_retried() {
+        assert!(is_retryable_status(408));
+        assert!(is_retryable_status(429));
+        assert!(is_retryable_status(504));
+        assert!(!is_retryable_status(400));
+        assert!(!is_retryable_status(401));
     }
 }

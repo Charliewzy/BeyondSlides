@@ -4,6 +4,7 @@ mod chat_completions;
 mod domain;
 pub mod evaluation;
 pub mod ingestion;
+mod model_trace;
 mod orchestration;
 mod ranking;
 mod report;
@@ -26,6 +27,10 @@ pub use chat_completions::{
 pub use domain::{
     LecturePassage, LecturePassages, RestoredTranscript, RestoredTranscriptSpan, Score5,
     ScoreOutOfRange, Slide, SlideDeck, SlideId, Transcript, TranscriptSegment, TranscriptSegmentId,
+};
+pub use model_trace::{
+    MODEL_TRACE_FORMAT_VERSION, ModelExchangeTrace, ModelProviderError, ModelRequestKind,
+    ModelTraceEvent, ModelTraceRecord, ModelWorkflow, read_model_trace,
 };
 pub use orchestration::{
     LectureAnalysisConfig, LectureAnalysisConfigError, LectureAnalysisError,

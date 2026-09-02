@@ -7,15 +7,16 @@ use std::{
 };
 
 use beyond_slides::{
-    ChatCompletionsClient, RestorationProgressError, RestoredTranscriptSpan,
+    ChatCompletionsClient, ModelExchangeTrace, RestorationProgressError, RestoredTranscriptSpan,
     TranscriptRestorationConfig, TranscriptRestorationSession, WindowingConfig,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::run_support::{
-    ProviderSettings, checkpoint_path, display_token_count, initialize_run_directory, read_json,
-    read_json_with_hash, sha256, window_progress_bar, write_json_atomically, write_text_atomically,
+    ProviderSettings, checkpoint_path, display_token_count, initialize_run_directory,
+    open_run_model_trace, read_json, read_json_with_hash, sha256, window_progress_bar,
+    write_json_atomically, write_text_atomically,
 };
 
 const RESTORATION_RUN_FORMAT_VERSION: u32 = 1;
@@ -42,7 +43,7 @@ pub async fn run_canary(
     let (transcript, transcript_hash) = read_json_with_hash(&transcript_path, "transcript")?;
     let manifest = RestorationRunManifest::new(&provider, transcript_hash);
     initialize_run_directory(&run_directory, &manifest, "restoration")?;
-    let client = restoration_client(&provider)?;
+    let client = restoration_client(&provider, open_run_model_trace(&run_directory)?)?;
     let mut session =
         TranscriptRestorationSession::prepare(&client, transcript, restoration_config()?)?;
     restore_checkpoints(&mut session, &run_directory)?;
@@ -90,7 +91,7 @@ pub async fn run_complete(
     let (transcript, transcript_hash) = read_json_with_hash(&transcript_path, "transcript")?;
     let manifest = RestorationRunManifest::new(&provider, transcript_hash);
     initialize_run_directory(&run_directory, &manifest, "restoration")?;
-    let client = restoration_client(&provider)?;
+    let client = restoration_client(&provider, open_run_model_trace(&run_directory)?)?;
     let mut session =
         TranscriptRestorationSession::prepare(&client, transcript, restoration_config()?)?;
     restore_checkpoints(&mut session, &run_directory)?;
@@ -162,9 +163,11 @@ pub async fn run_complete(
 
 fn restoration_client(
     provider: &ProviderSettings,
+    model_trace: ModelExchangeTrace,
 ) -> Result<ChatCompletionsClient, Box<dyn Error>> {
     let config = provider
         .chat_config()?
+        .with_model_trace(model_trace)
         .with_max_provider_retries(MAX_PROVIDER_RETRIES)
         .with_max_final_answer_repairs(MAX_FINAL_ANSWER_REPAIRS)?
         .with_max_output_tokens(MAX_OUTPUT_TOKENS)?;

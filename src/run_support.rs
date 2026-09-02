@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use beyond_slides::{ChatCompletionsConfig, ChatCompletionsConfigError};
+use beyond_slides::{ChatCompletionsConfig, ChatCompletionsConfigError, ModelExchangeTrace};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -17,6 +17,7 @@ const API_KEY_ENV: &str = "BEYOND_SLIDES_API_KEY";
 const MODEL_ENV: &str = "BEYOND_SLIDES_MODEL";
 const CHAT_EXTRA_BODY_ENV: &str = "BEYOND_SLIDES_CHAT_EXTRA_BODY";
 const MANIFEST_FILE: &str = "manifest.json";
+const MODEL_TRACE_FILE: &str = "model-trace.jsonl";
 
 pub(crate) struct ProviderSettings {
     base_url: String,
@@ -107,6 +108,14 @@ where
 
 pub(crate) fn checkpoint_path(run_directory: &Path, window_number: usize) -> PathBuf {
     run_directory.join(format!("window-{window_number:04}.json"))
+}
+
+pub(crate) fn open_run_model_trace(run_directory: &Path) -> Result<ModelExchangeTrace, io::Error> {
+    ModelExchangeTrace::open(run_directory.join(MODEL_TRACE_FILE))
+}
+
+pub(crate) fn open_output_model_trace(output_path: &Path) -> Result<ModelExchangeTrace, io::Error> {
+    ModelExchangeTrace::open(output_path.with_extension("model-trace.jsonl"))
 }
 
 pub(crate) fn window_progress_bar(

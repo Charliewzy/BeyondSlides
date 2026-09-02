@@ -1,10 +1,11 @@
 use std::{collections::VecDeque, error::Error, sync::Mutex, time::Duration};
 
 use beyond_slides::{
-    AnalysisAssemblyError, ChatCompletionsConfig, ChatCompletionsError, SearchError, Slide,
-    SlideDeck, SlideId, SlideScore, SlideScorer, Transcript, TranscriptSegment,
-    TranscriptSegmentId, TranscriptWindowTask, ValidatedSources, ValidationError, WindowingConfig,
-    build_annotation_tasks, build_restoration_tasks, build_windows,
+    AnalysisAssemblyError, ChatCompletionsConfig, ChatCompletionsError, ModelExchangeTrace,
+    ModelRequestKind, ModelTraceEvent, SearchError, Slide, SlideDeck, SlideId, SlideScore,
+    SlideScorer, Transcript, TranscriptSegment, TranscriptSegmentId, TranscriptWindowTask,
+    ValidatedSources, ValidationError, WindowingConfig, build_annotation_tasks,
+    build_restoration_tasks, build_windows, read_model_trace,
 };
 use serde_json::{Value, json};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate, matchers::any};
@@ -157,6 +158,129 @@ async fn invalid_restoration_is_returned_to_the_model_for_repair() -> Result<(),
             .expect("repair instruction is text")
             .contains("owned_region")
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn trace_records_requests_responses_and_validation_repairs_without_credentials()
+-> Result<(), Box<dyn Error>> {
+    let invalid = json!({
+        "spans": [{
+            "kind": "text",
+            "source_start": 1,
+            "source_end": 1,
+            "text": "错误的来源范围。"
+        }]
+    })
+    .to_string();
+    let api = mock_api(vec![
+        final_response("chat-1", invalid),
+        final_response("chat-2", restoration_json()),
+    ])
+    .await;
+    let directory = tempfile::tempdir()?;
+    let trace_path = directory.path().join("model-trace.jsonl");
+    let trace = ModelExchangeTrace::open(&trace_path)?;
+    let config = ChatCompletionsConfig::new(base_url(&api), "secret-test-key", "test-model")?
+        .with_extra_body(json!({ "thinking": { "type": "disabled" } }))?
+        .with_model_trace(trace);
+    let client = beyond_slides::ChatCompletionsClient::new(config);
+    let sources = sources()?;
+    let windows = build_windows(
+        &sources,
+        WindowingConfig::new(100, Duration::from_secs(60), 20)?,
+    );
+    let task = build_restoration_tasks(&windows)
+        .into_iter()
+        .next()
+        .expect("the transcript creates one restoration task");
+
+    client.restore_window(&task).await?;
+
+    let trace_text = std::fs::read_to_string(&trace_path)?;
+    assert!(!trace_text.contains("secret-test-key"));
+    assert!(!trace_text.to_ascii_lowercase().contains("authorization"));
+    let records = read_model_trace(&trace_path)?;
+    assert_eq!(records.len(), 6);
+    assert!(matches!(
+        &records[0].event,
+        ModelTraceEvent::Request { options, .. }
+            if options["extra_body"] == json!({ "thinking": { "type": "disabled" } })
+    ));
+    assert!(matches!(
+        &records[1].event,
+        ModelTraceEvent::Response { raw_response: Some(body), .. }
+            if body["id"] == "chat-1"
+    ));
+    assert!(matches!(
+        &records[2].event,
+        ModelTraceEvent::Validation {
+            accepted: false,
+            category: Some(category),
+            ..
+        } if category == "outside_owned_region"
+    ));
+    assert_eq!(records[3].request_kind, ModelRequestKind::Repair);
+    assert!(matches!(
+        &records[5].event,
+        ModelTraceEvent::Validation {
+            accepted: true,
+            category: None,
+            error: None,
+        }
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn trace_records_each_provider_retry_attempt() -> Result<(), Box<dyn Error>> {
+    let api = MockServer::builder().start().await;
+    Mock::given(any())
+        .respond_with(FailOnceThenRespond {
+            failed: Mutex::new(false),
+            response: final_response("chat-2", restoration_json()),
+        })
+        .mount(&api)
+        .await;
+    let directory = tempfile::tempdir()?;
+    let trace_path = directory.path().join("model-trace.jsonl");
+    let config = ChatCompletionsConfig::new(base_url(&api), "test-key", "test-model")?
+        .with_max_provider_retries(1)
+        .with_model_trace(ModelExchangeTrace::open(&trace_path)?);
+    let client = beyond_slides::ChatCompletionsClient::new(config);
+    let sources = sources()?;
+    let windows = build_windows(
+        &sources,
+        WindowingConfig::new(100, Duration::from_secs(60), 20)?,
+    );
+    let task = build_restoration_tasks(&windows)
+        .into_iter()
+        .next()
+        .expect("the transcript creates one restoration task");
+
+    let result = client.restore_window(&task).await?;
+
+    assert_eq!(result.diagnostics.provider_retries, 1);
+    let records = read_model_trace(&trace_path)?;
+    assert_eq!(records.len(), 5);
+    assert!(matches!(
+        &records[1].event,
+        ModelTraceEvent::ProviderError {
+            provider_attempt: 0,
+            retryable: true,
+            will_retry: true,
+            error,
+            ..
+        } if error.status == Some(503)
+    ));
+    assert!(matches!(
+        &records[2].event,
+        ModelTraceEvent::Request {
+            provider_attempt: 1,
+            ..
+        }
+    ));
+    assert_ne!(records[0].exchange_id, records[2].exchange_id);
     Ok(())
 }
 
@@ -577,5 +701,22 @@ impl Respond for ResponseSequence {
             .pop_front()
             .expect("a response exists for every expected request");
         ResponseTemplate::new(200).set_body_json(response)
+    }
+}
+
+struct FailOnceThenRespond {
+    failed: Mutex<bool>,
+    response: Value,
+}
+
+impl Respond for FailOnceThenRespond {
+    fn respond(&self, _request: &Request) -> ResponseTemplate {
+        let mut failed = self.failed.lock().expect("lock mock provider state");
+        if !*failed {
+            *failed = true;
+            ResponseTemplate::new(503).set_body_json(json!({ "error": "temporarily unavailable" }))
+        } else {
+            ResponseTemplate::new(200).set_body_json(self.response.clone())
+        }
     }
 }

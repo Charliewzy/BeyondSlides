@@ -396,7 +396,25 @@ supplied as one explicit JSON object and recorded in the run manifest; for GLM
 restoration, disabling deep thinking avoids spending the gateway timeout on
 reasoning for a primarily editorial task.
 
-### 7.4 Retrieval
+### 7.4 Model exchange tracing
+
+Every model-backed CLI run records an append-only `model-trace.jsonl`. Each
+provider attempt writes its complete provider-neutral request and effective
+options before network I/O, then writes either the raw and normalized response
+or a structured provider error. Parsing, validation, and response-contract
+failures are separate events correlated to the provider exchange. Repair turns,
+tool follow-ups, and transport retries remain distinguishable. The writer
+serializes concurrent windows, flushes every JSONL event, and continues event
+and exchange identifiers when a run resumes.
+
+The trace is a sensitive run artifact because it contains transcript excerpts,
+slide evidence, and model output. It never contains the configured API key or
+authorization headers, and it remains excluded from version control with the
+rest of `run/`. A trace-write failure fails the model operation rather than
+silently claiming a complete audit trail. A final partial line left by a process
+crash is preserved and separated before valid events are appended on resume.
+
+### 7.5 Retrieval
 
 Slides are indexed once behind one interface:
 
@@ -431,7 +449,7 @@ operation. Model files are downloaded into FastEmbed's local cache on first use
 and reused afterward. The model identifier and scoring mode must eventually be
 recorded in the run manifest.
 
-### 7.5 Semantic alignment
+### 7.6 Semantic alignment
 
 Every transcript window is scored against every slide. Each row is normalized
 independently to `0..1`, preventing BM25, cosine, or reciprocal-rank-fusion
@@ -457,7 +475,7 @@ slide neighborhood. When optional visual reference evidence exists, the report
 adds a separate dotted path and mismatch markers; the production alignment does
 not consume that reference.
 
-### 7.6 Optional visual reference alignment
+### 7.7 Optional visual reference alignment
 
 BeyondSlides does not require the original lecture video. When it is available,
 visual matching can supply reference evidence for evaluating semantic slide
@@ -479,7 +497,7 @@ path. It measures whether inferred slide positions match what was displayed,
 while manually labeled related slides remain necessary to evaluate semantic
 retrieval.
 
-### 7.7 Agent annotation
+### 7.8 Agent annotation
 
 The core builds one provider-neutral `TranscriptWindowTask` per window after
 semantic alignment. A task preserves the window's left, owned, and right
@@ -527,7 +545,7 @@ one transcript window; independent windows have independent model contexts.
 Retrieval failure is reported as failure rather than an empty result. Tool
 rounds and calls are bounded.
 
-### 7.8 Validation and assembly
+### 7.9 Validation and assembly
 
 Model output is untrusted input. Rust code validates its schema, score ranges,
 IDs, owned-region partition, and evidence requirements before accepting it.
@@ -553,7 +571,7 @@ and coverage validation.
 `ValidatedAnalysis` combines already-validated sources with the accepted
 lecture passages, so source validation is not repeated after annotation.
 
-### 7.9 Ranking and rendering
+### 7.10 Ranking and rendering
 
 The initial ranked view sorts primarily by importance, then novelty, then
 connection strength. It should retain the component scores rather than collapse

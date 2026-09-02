@@ -1,4 +1,8 @@
-use std::{error::Error, fmt, time::Duration};
+use std::{
+    error::Error,
+    fmt, io,
+    time::{Duration, Instant},
+};
 
 use genai::{
     Client, ModelIden, ServiceTarget,
@@ -15,11 +19,13 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::{
-    SlideId, SlideScorer, ValidatedSources,
+    ModelExchangeTrace, ModelProviderError, ModelRequestKind, ModelWorkflow, SlideId, SlideScorer,
+    ValidatedSources,
     annotation::{
         AnalysisAssemblyError, AnnotationToolError, AnnotationToolSession,
         TranscriptWindowAnalysis, TranscriptWindowTask, validate_window_analysis,
     },
+    model_trace::{ModelProviderFailure, ModelTraceContext},
     restoration::{
         RestorationError, TranscriptRestorationTask, TranscriptWindowRestoration,
         validate_window_restoration,
@@ -47,6 +53,7 @@ pub struct ChatCompletionsConfig {
     max_output_tokens: u32,
     max_provider_retries: usize,
     extra_body: Option<Value>,
+    model_trace: Option<ModelExchangeTrace>,
 }
 
 impl ChatCompletionsConfig {
@@ -89,6 +96,7 @@ impl ChatCompletionsConfig {
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             max_provider_retries: 0,
             extra_body: None,
+            model_trace: None,
         })
     }
 
@@ -140,6 +148,12 @@ impl ChatCompletionsConfig {
 
     pub const fn with_max_provider_retries(mut self, max_provider_retries: usize) -> Self {
         self.max_provider_retries = max_provider_retries;
+        self
+    }
+
+    /// Records complete model exchanges without exposing credentials to the trace.
+    pub fn with_model_trace(mut self, model_trace: ModelExchangeTrace) -> Self {
+        self.model_trace = Some(model_trace);
         self
     }
 
@@ -206,14 +220,19 @@ pub struct ChatCompletionsClient {
     max_final_answer_repairs: usize,
     max_search_results: usize,
     max_provider_retries: usize,
+    endpoint: String,
+    model: String,
+    model_trace: Option<ModelExchangeTrace>,
 }
 
 impl ChatCompletionsClient {
     pub fn new(config: ChatCompletionsConfig) -> Self {
+        let endpoint = config.base_url.to_string();
+        let model = config.model.clone();
         let target = ServiceTarget {
-            endpoint: Endpoint::from_owned(config.base_url.to_string()),
+            endpoint: Endpoint::from_owned(endpoint.clone()),
             auth: AuthData::from_single(config.api_key),
-            model: ModelIden::new(AdapterKind::OpenAI, config.model),
+            model: ModelIden::new(AdapterKind::OpenAI, model.clone()),
         };
         let mut options = ChatOptions::default()
             .with_temperature(0.0)
@@ -232,6 +251,9 @@ impl ChatCompletionsClient {
             max_final_answer_repairs: config.max_final_answer_repairs,
             max_search_results: config.max_search_results,
             max_provider_retries: config.max_provider_retries,
+            endpoint,
+            model,
+            model_trace: config.model_trace,
         }
     }
 
@@ -254,21 +276,44 @@ impl ChatCompletionsClient {
             .with_tools(tool_definitions(self.max_search_results));
         let mut session = AnnotationToolSession::for_task(sources, scorer, task);
         let mut diagnostics = AnnotationDiagnostics::default();
+        let mut conversation_turn = 0;
+        let mut request_kind = ModelRequestKind::Initial;
 
         loop {
-            let (response, provider_retries) = self.chat(request.clone(), true).await?;
-            ensure_one_choice(&response)?;
+            let trace_context = ModelTraceContext {
+                workflow: ModelWorkflow::Annotation,
+                window_index: task.window_number.saturating_sub(1),
+                conversation_turn,
+                request_kind,
+            };
+            let (response, provider_retries, exchange_id) =
+                self.chat(request.clone(), true, trace_context).await?;
+            if let Err(error) = ensure_one_choice(&response) {
+                return self.processing_failure(exchange_id, trace_context, "choice_count", error);
+            }
             diagnostics.record(&response, provider_retries);
             let tool_calls: Vec<_> = response.tool_calls().into_iter().cloned().collect();
 
             if !tool_calls.is_empty() {
                 if !matches!(response.stop_reason.as_ref(), Some(StopReason::ToolCall(_))) {
-                    return Err(unexpected_finish_reason(&response, true));
+                    let error = unexpected_finish_reason(&response, true);
+                    return self.processing_failure(
+                        exchange_id,
+                        trace_context,
+                        "unexpected_finish_reason",
+                        error,
+                    );
                 }
                 if diagnostics.tool_rounds == self.max_tool_rounds {
-                    return Err(ChatCompletionsError::ToolRoundLimit {
+                    let error = ChatCompletionsError::ToolRoundLimit {
                         limit: self.max_tool_rounds,
-                    });
+                    };
+                    return self.processing_failure(
+                        exchange_id,
+                        trace_context,
+                        "tool_round_limit",
+                        error,
+                    );
                 }
                 diagnostics.tool_rounds += 1;
 
@@ -278,24 +323,59 @@ impl ChatCompletionsClient {
                         self.execute_tool_call(&mut session, tool_call)
                             .map(|content| ToolResponse::from_tool_call(tool_call, content))
                     })
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<_>, _>>();
+                let tool_responses = match tool_responses {
+                    Ok(tool_responses) => tool_responses,
+                    Err(error) => {
+                        return self.processing_failure(
+                            exchange_id,
+                            trace_context,
+                            "tool_execution",
+                            error,
+                        );
+                    }
+                };
                 request = request
                     .append_message(tool_calls)
                     .append_message(tool_responses);
+                conversation_turn += 1;
+                request_kind = ModelRequestKind::ToolFollowUp;
                 continue;
             }
 
             match response.stop_reason.as_ref() {
                 Some(StopReason::Completed(_)) => {}
                 Some(StopReason::MaxTokens(_)) => {
-                    return Err(ChatCompletionsError::OutputTruncated);
+                    let error = ChatCompletionsError::OutputTruncated;
+                    return self.processing_failure(
+                        exchange_id,
+                        trace_context,
+                        "output_truncated",
+                        error,
+                    );
                 }
-                _ => return Err(unexpected_finish_reason(&response, false)),
+                _ => {
+                    let error = unexpected_finish_reason(&response, false);
+                    return self.processing_failure(
+                        exchange_id,
+                        trace_context,
+                        "unexpected_finish_reason",
+                        error,
+                    );
+                }
             }
-            let content = response
+            let Some(content) = response
                 .first_text()
                 .filter(|content| !content.trim().is_empty())
-                .ok_or(ChatCompletionsError::MissingAssistantContent)?;
+            else {
+                let error = ChatCompletionsError::MissingAssistantContent;
+                return self.processing_failure(
+                    exchange_id,
+                    trace_context,
+                    "missing_assistant_content",
+                    error,
+                );
+            };
             let candidate = parse_analysis(content).and_then(|(analysis, accepted_json_fence)| {
                 validate_window_analysis(sources, task, &analysis)
                     .map_err(ChatCompletionsError::InvalidWindowAnalysis)?;
@@ -303,6 +383,7 @@ impl ChatCompletionsClient {
             });
             match candidate {
                 Ok((analysis, accepted_json_fence)) => {
+                    self.record_validation(exchange_id, trace_context, None)?;
                     diagnostics.accepted_json_fence = accepted_json_fence;
                     return Ok(AnnotationResult {
                         analysis,
@@ -310,6 +391,7 @@ impl ChatCompletionsClient {
                     });
                 }
                 Err(error) => {
+                    self.record_validation(exchange_id, trace_context, Some(&error))?;
                     if diagnostics.final_answer_repairs == self.max_final_answer_repairs {
                         return Err(ChatCompletionsError::FinalAnswerRepairLimit {
                             limit: self.max_final_answer_repairs,
@@ -320,6 +402,8 @@ impl ChatCompletionsClient {
                     request = request
                         .append_message(ChatMessage::assistant(content.to_owned()))
                         .append_message(ChatMessage::user(repair_instruction(&error)));
+                    conversation_turn += 1;
+                    request_kind = ModelRequestKind::Repair;
                 }
             }
         }
@@ -335,27 +419,66 @@ impl ChatCompletionsClient {
             .map_err(ChatCompletionsError::SerializeTask)?;
         let mut request = ChatRequest::from_user(message.input).with_system(message.instructions);
         let mut diagnostics = RestorationDiagnostics::default();
+        let mut conversation_turn = 0;
+        let mut request_kind = ModelRequestKind::Initial;
 
         loop {
-            let (response, provider_retries) = self.chat(request.clone(), false).await?;
-            ensure_one_choice(&response)?;
+            let trace_context = ModelTraceContext {
+                workflow: ModelWorkflow::Restoration,
+                window_index: task.window_index,
+                conversation_turn,
+                request_kind,
+            };
+            let (response, provider_retries, exchange_id) =
+                self.chat(request.clone(), false, trace_context).await?;
+            if let Err(error) = ensure_one_choice(&response) {
+                return self.processing_failure(exchange_id, trace_context, "choice_count", error);
+            }
             diagnostics.record(&response, provider_retries);
             let has_tool_calls = response.tool_calls().into_iter().next().is_some();
             if has_tool_calls {
-                return Err(unexpected_finish_reason(&response, true));
+                let error = unexpected_finish_reason(&response, true);
+                return self.processing_failure(
+                    exchange_id,
+                    trace_context,
+                    "unexpected_finish_reason",
+                    error,
+                );
             }
 
             match response.stop_reason.as_ref() {
                 Some(StopReason::Completed(_)) => {}
                 Some(StopReason::MaxTokens(_)) => {
-                    return Err(ChatCompletionsError::OutputTruncated);
+                    let error = ChatCompletionsError::OutputTruncated;
+                    return self.processing_failure(
+                        exchange_id,
+                        trace_context,
+                        "output_truncated",
+                        error,
+                    );
                 }
-                _ => return Err(unexpected_finish_reason(&response, false)),
+                _ => {
+                    let error = unexpected_finish_reason(&response, false);
+                    return self.processing_failure(
+                        exchange_id,
+                        trace_context,
+                        "unexpected_finish_reason",
+                        error,
+                    );
+                }
             }
-            let content = response
+            let Some(content) = response
                 .first_text()
                 .filter(|content| !content.trim().is_empty())
-                .ok_or(ChatCompletionsError::MissingAssistantContent)?;
+            else {
+                let error = ChatCompletionsError::MissingAssistantContent;
+                return self.processing_failure(
+                    exchange_id,
+                    trace_context,
+                    "missing_assistant_content",
+                    error,
+                );
+            };
             let candidate =
                 parse_restoration(content).and_then(|(restoration, accepted_json_fence)| {
                     validate_window_restoration(task, &restoration)
@@ -364,6 +487,7 @@ impl ChatCompletionsClient {
                 });
             match candidate {
                 Ok((restoration, accepted_json_fence)) => {
+                    self.record_validation(exchange_id, trace_context, None)?;
                     diagnostics.accepted_json_fence = accepted_json_fence;
                     return Ok(TranscriptWindowRestorationResult {
                         restoration,
@@ -371,6 +495,7 @@ impl ChatCompletionsClient {
                     });
                 }
                 Err(error) => {
+                    self.record_validation(exchange_id, trace_context, Some(&error))?;
                     if diagnostics.final_answer_repairs == self.max_final_answer_repairs {
                         return Err(ChatCompletionsError::FinalAnswerRepairLimit {
                             limit: self.max_final_answer_repairs,
@@ -381,6 +506,8 @@ impl ChatCompletionsClient {
                     request = request
                         .append_message(ChatMessage::assistant(content.to_owned()))
                         .append_message(ChatMessage::user(restoration_repair_instruction(&error)));
+                    conversation_turn += 1;
+                    request_kind = ModelRequestKind::Repair;
                 }
             }
         }
@@ -390,7 +517,8 @@ impl ChatCompletionsClient {
         &self,
         request: ChatRequest,
         tools_enabled: bool,
-    ) -> Result<(ChatResponse, usize), ChatCompletionsError> {
+        trace_context: ModelTraceContext,
+    ) -> Result<(ChatResponse, usize, Option<u64>), ChatCompletionsError> {
         let options = if tools_enabled {
             self.options.clone().with_tool_choice(ToolChoice::Auto)
         } else {
@@ -398,22 +526,104 @@ impl ChatCompletionsClient {
         };
         let mut retries = 0;
         loop {
+            let provider_attempt = retries;
+            let exchange_id = self
+                .model_trace
+                .as_ref()
+                .map(|trace| {
+                    trace.record_request(
+                        trace_context,
+                        provider_attempt,
+                        &self.endpoint,
+                        &self.model,
+                        &request,
+                        &options,
+                    )
+                })
+                .transpose()
+                .map_err(ChatCompletionsError::ModelTrace)?;
+            let started = Instant::now();
             match self
                 .transport
                 .exec_chat(self.target.clone(), request.clone(), Some(&options))
                 .await
             {
-                Ok(response) => return Ok((response, retries)),
-                Err(error)
-                    if retries < self.max_provider_retries
-                        && is_retryable_provider_error(&error) =>
-                {
+                Ok(response) => {
+                    if let (Some(trace), Some(exchange_id)) = (&self.model_trace, exchange_id) {
+                        trace
+                            .record_response(
+                                exchange_id,
+                                trace_context,
+                                provider_attempt,
+                                started.elapsed(),
+                                &response,
+                                response.captured_raw_body.clone(),
+                            )
+                            .map_err(ChatCompletionsError::ModelTrace)?;
+                    }
+                    return Ok((response, retries, exchange_id));
+                }
+                Err(error) => {
+                    let retryable = is_retryable_provider_error(&error);
+                    let will_retry = retries < self.max_provider_retries && retryable;
+                    if let (Some(trace), Some(exchange_id)) = (&self.model_trace, exchange_id) {
+                        trace
+                            .record_provider_error(
+                                exchange_id,
+                                trace_context,
+                                ModelProviderFailure {
+                                    provider_attempt,
+                                    elapsed: started.elapsed(),
+                                    retryable,
+                                    will_retry,
+                                    error: model_provider_error(&error),
+                                },
+                            )
+                            .map_err(ChatCompletionsError::ModelTrace)?;
+                    }
+                    if !will_retry {
+                        return Err(provider_error(error));
+                    }
                     retries += 1;
                     tokio::time::sleep(provider_retry_delay(retries)).await;
                 }
-                Err(error) => return Err(provider_error(error)),
             }
         }
+    }
+
+    fn record_validation(
+        &self,
+        exchange_id: Option<u64>,
+        context: ModelTraceContext,
+        error: Option<&ChatCompletionsError>,
+    ) -> Result<(), ChatCompletionsError> {
+        let (Some(trace), Some(exchange_id)) = (&self.model_trace, exchange_id) else {
+            return Ok(());
+        };
+        trace
+            .record_validation(
+                exchange_id,
+                context,
+                error.is_none(),
+                error.map(trace_error_category),
+                error.map(ToString::to_string).as_deref(),
+            )
+            .map_err(ChatCompletionsError::ModelTrace)
+    }
+
+    fn processing_failure<T>(
+        &self,
+        exchange_id: Option<u64>,
+        context: ModelTraceContext,
+        category: &str,
+        error: ChatCompletionsError,
+    ) -> Result<T, ChatCompletionsError> {
+        if let (Some(trace), Some(exchange_id)) = (&self.model_trace, exchange_id) {
+            trace
+                .record_processing_error(exchange_id, context, category, &error.to_string())
+                .map_err(ChatCompletionsError::ModelTrace)?;
+        }
+        Err(error)
     }
 
     fn execute_tool_call(
@@ -563,6 +773,7 @@ fn add_token_count(total: Option<u64>, count: Option<i32>) -> Option<u64> {
 #[derive(Debug)]
 pub enum ChatCompletionsError {
     Provider(String),
+    ModelTrace(io::Error),
     SerializeTask(serde_json::Error),
     UnexpectedChoiceCount {
         actual: usize,
@@ -594,6 +805,7 @@ impl fmt::Display for ChatCompletionsError {
             Self::Provider(error) => {
                 write!(formatter, "the model endpoint request failed: {error}")
             }
+            Self::ModelTrace(error) => write!(formatter, "could not record model exchange: {error}"),
             Self::SerializeTask(error) => write!(
                 formatter,
                 "could not serialize the transcript-window task: {error}"
@@ -660,6 +872,7 @@ impl fmt::Display for ChatCompletionsError {
 impl Error for ChatCompletionsError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::ModelTrace(error) => Some(error),
             Self::SerializeTask(error)
             | Self::SerializeTool(error)
             | Self::InvalidAnalysisJson(error)
@@ -707,6 +920,117 @@ fn is_retryable_status(status: u16) -> bool {
 
 fn provider_retry_delay(retry: usize) -> Duration {
     Duration::from_secs(retry.min(5) as u64)
+}
+
+fn model_provider_error(error: &genai::Error) -> ModelProviderError {
+    match error {
+        genai::Error::WebAdapterCall { webc_error, .. }
+        | genai::Error::WebModelCall { webc_error, .. } => model_web_error(webc_error),
+        genai::Error::HttpError { status, body, .. } => ModelProviderError {
+            kind: "http_status".into(),
+            message: error.to_string(),
+            status: Some(status.as_u16()),
+            body: Some(Value::String(body.clone())),
+        },
+        genai::Error::ChatResponseGeneration {
+            response_body,
+            cause,
+            ..
+        } => ModelProviderError {
+            kind: "response_decode".into(),
+            message: cause.clone(),
+            status: None,
+            body: Some(response_body.as_ref().clone()),
+        },
+        genai::Error::ChatResponse { body, .. } => ModelProviderError {
+            kind: "provider_response".into(),
+            message: error.to_string(),
+            status: None,
+            body: Some(body.clone()),
+        },
+        _ => ModelProviderError {
+            kind: "provider".into(),
+            message: error.to_string(),
+            status: None,
+            body: None,
+        },
+    }
+}
+
+fn model_web_error(error: &genai::webc::Error) -> ModelProviderError {
+    match error {
+        genai::webc::Error::ResponseFailedStatus { status, body, .. } => ModelProviderError {
+            kind: "http_status".into(),
+            message: error.to_string(),
+            status: Some(status.as_u16()),
+            body: Some(Value::String(body.clone())),
+        },
+        genai::webc::Error::ResponseFailedNotJson { body, .. } => ModelProviderError {
+            kind: "non_json_response".into(),
+            message: error.to_string(),
+            status: None,
+            body: Some(Value::String(body.clone())),
+        },
+        genai::webc::Error::ResponseFailedInvalidJson { body, .. } => ModelProviderError {
+            kind: "invalid_json_response".into(),
+            message: error.to_string(),
+            status: None,
+            body: Some(Value::String(body.clone())),
+        },
+        genai::webc::Error::Reqwest(_) => ModelProviderError {
+            kind: "transport".into(),
+            message: error.to_string(),
+            status: None,
+            body: None,
+        },
+        genai::webc::Error::JsonValueExt(_) => ModelProviderError {
+            kind: "response_decode".into(),
+            message: error.to_string(),
+            status: None,
+            body: None,
+        },
+    }
+}
+
+fn trace_error_category(error: &ChatCompletionsError) -> &'static str {
+    match error {
+        ChatCompletionsError::InvalidAnalysisJson(_)
+        | ChatCompletionsError::InvalidRestorationJson(_) => "malformed_json",
+        ChatCompletionsError::InvalidWindowRestoration(error) => restoration_error_category(error),
+        ChatCompletionsError::InvalidWindowAnalysis(error) => analysis_error_category(error),
+        _ => "structured_response",
+    }
+}
+
+fn restoration_error_category(error: &RestorationError) -> &'static str {
+    match error {
+        RestorationError::WindowCountMismatch { .. } => "window_count",
+        RestorationError::EmptyOwnedRegion { .. } => "empty_owned_region",
+        RestorationError::SpanEndBeforeStart { .. } => "reversed_range",
+        RestorationError::SpanOutsideOwnedRegion { .. } => "outside_owned_region",
+        RestorationError::CoverageMismatch {
+            expected, actual, ..
+        } if actual.0 > expected.0 => "coverage_gap",
+        RestorationError::CoverageMismatch { .. } => "coverage_overlap",
+        RestorationError::UnexpectedSpan { .. } => "unexpected_range",
+        RestorationError::UncoveredTail { .. } => "uncovered_tail",
+        RestorationError::EmptyText { .. } => "empty_text",
+    }
+}
+
+fn analysis_error_category(error: &AnalysisAssemblyError) -> &'static str {
+    match error {
+        AnalysisAssemblyError::WindowCountMismatch { .. } => "window_count",
+        AnalysisAssemblyError::EmptyOwnedRegion { .. } => "empty_owned_region",
+        AnalysisAssemblyError::PassageOutsideOwnedRegion { .. } => "outside_owned_region",
+        AnalysisAssemblyError::WindowCoverageMismatch {
+            expected, actual, ..
+        } if actual.0 > expected.0 => "coverage_gap",
+        AnalysisAssemblyError::WindowCoverageMismatch { .. } => "coverage_overlap",
+        AnalysisAssemblyError::UnexpectedWindowPassage { .. } => "unexpected_range",
+        AnalysisAssemblyError::UncoveredWindowTail { .. } => "uncovered_tail",
+        AnalysisAssemblyError::InvalidAnalysis(_) => "invalid_analysis",
+    }
 }
 
 fn provider_error(error: genai::Error) -> ChatCompletionsError {

@@ -9,14 +9,16 @@ use std::{
 use beyond_slides::{
     AnnotationDiagnostics, ChatCompletionsClient, DenseSlideScorer, HybridSlideScorer,
     LectureAnalysisConfig, LectureAnalysisProgressError, LectureAnalysisSession, LecturePassage,
-    LexicalSlideScorer, SlideDeck, SlideId, Transcript, ValidatedSources, WindowingConfig,
+    LexicalSlideScorer, ModelExchangeTrace, SlideDeck, SlideId, Transcript, ValidatedSources,
+    WindowingConfig,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::run_support::{
-    ProviderSettings, checkpoint_path, display_token_count, initialize_run_directory, read_json,
-    read_json_with_hash, sha256, window_progress_bar, write_json_atomically,
+    ProviderSettings, checkpoint_path, display_token_count, initialize_run_directory,
+    open_output_model_trace, open_run_model_trace, read_json, read_json_with_hash, sha256,
+    window_progress_bar, write_json_atomically,
 };
 
 const ANALYSIS_RUN_FORMAT_VERSION: u32 = 2;
@@ -52,7 +54,7 @@ pub async fn run_canary(
     let lexical = LexicalSlideScorer::new(&sources);
     let dense = DenseSlideScorer::try_new(&sources)?;
     let hybrid = HybridSlideScorer::new(&lexical, &dense);
-    let client = analysis_client(&provider)?;
+    let client = analysis_client(&provider, open_output_model_trace(&output_path)?)?;
 
     eprintln!("Preparing the lecture and scoring every transcript window...");
     let mut session =
@@ -100,7 +102,7 @@ pub async fn run_complete(
     let lexical = LexicalSlideScorer::new(&sources);
     let dense = DenseSlideScorer::try_new(&sources)?;
     let hybrid = HybridSlideScorer::new(&lexical, &dense);
-    let client = analysis_client(&provider)?;
+    let client = analysis_client(&provider, open_run_model_trace(&run_directory)?)?;
 
     eprintln!("Preparing the lecture and scoring every transcript window...");
     let mut session =
@@ -161,9 +163,13 @@ pub async fn run_complete(
     Ok(())
 }
 
-fn analysis_client(provider: &ProviderSettings) -> Result<ChatCompletionsClient, Box<dyn Error>> {
+fn analysis_client(
+    provider: &ProviderSettings,
+    model_trace: ModelExchangeTrace,
+) -> Result<ChatCompletionsClient, Box<dyn Error>> {
     let config = provider
         .chat_config()?
+        .with_model_trace(model_trace)
         .with_max_tool_rounds(MAX_TOOL_ROUNDS)?
         .with_max_final_answer_repairs(MAX_FINAL_ANSWER_REPAIRS)?
         .with_max_search_results(MAX_SEARCH_RESULTS)?

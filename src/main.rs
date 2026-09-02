@@ -1,4 +1,5 @@
 mod analysis_run;
+mod restoration_review_run;
 mod restoration_run;
 mod run_support;
 mod trace_summary_run;
@@ -42,6 +43,11 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
         [command, transcript_path, run_directory] if command == OsStr::new("restore") => {
             restoration_run::run_complete(transcript_path, run_directory).await
         }
+        [command, transcript_path, run_directory, output_path]
+            if command == OsStr::new("review-restoration") =>
+        {
+            restoration_review_run::run(transcript_path, run_directory, output_path)
+        }
         [command, transcript_path, slides_path, output_path]
             if command == OsStr::new("canary") =>
         {
@@ -66,6 +72,7 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
              or:    beyond-slides analyze <transcript.json> <slides.json> <run-directory>\n\
              or:    beyond-slides restore-canary <transcript.json> <run-directory>\n\
              or:    beyond-slides restore <transcript.json> <run-directory>\n\
+             or:    beyond-slides review-restoration <transcript.json> <run-directory> <result.html>\n\
              model-backed commands require BEYOND_SLIDES_API_BASE_URL, \
              BEYOND_SLIDES_API_KEY, and BEYOND_SLIDES_MODEL; optional \
              BEYOND_SLIDES_CHAT_EXTRA_BODY contains provider-specific JSON",

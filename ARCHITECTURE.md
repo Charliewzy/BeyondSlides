@@ -396,6 +396,13 @@ supplied as one explicit JSON object and recorded in the run manifest; for GLM
 restoration, disabling deep thinking avoids spending the gateway timeout on
 reasoning for a primarily editorial task.
 
+The offline `review-restoration` command renders accepted checkpoints as an
+evidence review. Each restored span sits beside the exact source transcript
+segments it references; window boundaries, explicit disfluency omissions,
+repair counts, provider retries, and token usage remain visible. The report
+therefore evaluates restoration quality without treating the readable text as
+an untraceable replacement for the transcript.
+
 ### 7.4 Model exchange tracing
 
 Every model-backed CLI run records an append-only `model-trace.jsonl`. Each

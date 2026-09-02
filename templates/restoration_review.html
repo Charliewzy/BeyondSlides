@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BeyondSlides 讲稿恢复审阅</title>
+  <style>
+{% include "restoration_review.css" %}
+  </style>
+</head>
+<body>
+  <main>
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">BeyondSlides · Restoration Review</p>
+        <h1>原始转录如何变成可读讲稿</h1>
+        <p class="lede">每一行右侧的恢复文本只由左侧连续的原始转录片段支持。窗口边界、明确省略与模型修复均保留在报告中。</p>
+      </div>
+      <dl class="summary">
+        <div><dt>窗口</dt><dd>{{ window_count }}</dd></div>
+        <div><dt>原始片段</dt><dd>{{ segment_count }}</dd></div>
+        <div><dt>发生修复的窗口</dt><dd>{{ repaired_window_count }}</dd></div>
+        <div><dt>明确省略的片段</dt><dd>{{ omitted_segment_count }}</dd></div>
+        <div><dt>原始字符</dt><dd>{{ raw_character_count }}</dd></div>
+        <div><dt>恢复字符</dt><dd>{{ restored_character_count }}</dd></div>
+      </dl>
+    </header>
+
+    <section class="controls" aria-label="窗口筛选">
+      <div class="filter-group" role="group" aria-label="筛选讲稿窗口">
+        <button class="active" type="button" data-review-filter="all">全部窗口</button>
+        <button type="button" data-review-filter="repaired">只看修复</button>
+        <button type="button" data-review-filter="omissions">只看省略</button>
+      </div>
+      <p><strong data-visible-window-count>{{ window_count }}</strong> 个窗口可见</p>
+    </section>
+
+    <section class="windows" aria-label="讲稿恢复窗口">
+{% for window in windows %}
+      <article class="window" data-review-window data-has-repair="{{ window.has_repair }}" data-has-omission="{{ window.has_omission }}" data-window-index="{{ window.index }}">
+        <header class="window-header">
+          <div>
+            <p class="window-kicker">窗口 {{ window.number }} · 索引 {{ window.index }}</p>
+            <h2>{{ window.source_range }}</h2>
+            <p class="timestamp">{{ window.timestamp }}</p>
+          </div>
+          <dl class="diagnostics">
+            <div><dt>结构修复</dt><dd>{{ window.repairs }}</dd></div>
+            <div><dt>请求重试</dt><dd>{{ window.provider_retries }}</dd></div>
+            <div><dt>输入 tokens</dt><dd>{{ window.prompt_tokens }}</dd></div>
+            <div><dt>输出 tokens</dt><dd>{{ window.completion_tokens }}</dd></div>
+          </dl>
+        </header>
+
+        <div class="column-labels" aria-hidden="true">
+          <span>原始转录片段</span>
+          <span>恢复结果</span>
+        </div>
+{% for group in window.groups %}
+        <section class="span-review{% if group.omitted %} omitted{% endif %}" data-span-range="{{ group.range }}">
+          <div class="source-column">
+            <p class="range-label">{{ group.range }}</p>
+{% for segment in group.source_segments %}
+            <article class="source-segment">
+              <header><span>#{{ segment.id }}</span><time>{{ segment.timestamp }}</time></header>
+              <p>{{ segment.text }}</p>
+            </article>
+{% endfor %}
+          </div>
+          <div class="restored-column">
+            <p class="result-kind">{{ group.kind }} · {{ group.range }}</p>
+            <p class="restored-text">{{ group.output }}</p>
+          </div>
+        </section>
+{% endfor %}
+      </article>
+{% endfor %}
+    </section>
+  </main>
+  <script>
+{% include "restoration_review.js" %}
+  </script>
+</body>
+</html>

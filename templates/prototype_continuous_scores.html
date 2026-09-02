@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN" data-variant="editorial">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PROTOTYPE · 连续讲稿价值分布</title>
+  <style>
+{% include "prototype_continuous_scores.css" %}
+  </style>
+</head>
+<body>
+  <main>
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">BeyondSlides · Throwaway Prototype</p>
+        <h1>在连续讲稿中看见课堂价值</h1>
+        <p class="lede">文字越粗，重要性越高；文字下方的线越粗，新颖度越高。点击任一段可固定查看它的评分。</p>
+      </div>
+      <dl class="summary">
+        <div><dt>讲稿时长</dt><dd>{{ duration }}</dd></div>
+        <div><dt>讲稿段落</dt><dd>{{ passage_count }}</dd></div>
+      </dl>
+    </header>
+
+    <section class="legend-card" aria-label="视觉编码图例">
+      <div class="legend-block">
+        <h2>重要性 → 字重</h2>
+        <div class="legend-scale importance-scale">
+{% for item in importance_distribution %}
+          <span data-score="{{ item.score }}"><b>讲</b><small>{{ item.score }} · {{ item.count }}段</small></span>
+{% endfor %}
+        </div>
+      </div>
+      <div class="legend-block">
+        <h2>新颖度 → 下划线粗细</h2>
+        <div class="legend-scale novelty-scale">
+{% for item in novelty_distribution %}
+          <span data-score="{{ item.score }}"><b>稿</b><small>{{ item.score }} · {{ item.count }}段</small></span>
+{% endfor %}
+        </div>
+      </div>
+    </section>
+
+    <section class="transcript-card" aria-labelledby="transcript-title">
+      <header>
+        <p class="section-kicker">Continuous lecture transcript</p>
+        <h2 id="transcript-title">完整讲稿</h2>
+      </header>
+      <p class="continuous-transcript">{% for passage in passages %}<span class="passage" tabindex="0" data-passage data-start="{{ passage.start }}" data-end="{{ passage.end }}" data-time="{{ passage.timestamp }}" data-importance="{{ passage.importance }}" data-novelty="{{ passage.novelty }}" data-connection="{{ passage.connection_strength }}" style="--editorial-weight:{{ passage.editorial_weight }};--signal-weight:{{ passage.signal_weight }};--manuscript-weight:{{ passage.manuscript_weight }};--editorial-underline:{{ passage.editorial_underline }}px;--signal-underline:{{ passage.signal_underline }}px;--manuscript-underline:{{ passage.manuscript_underline }}px">{{ passage.text }}</span>{% endfor %}</p>
+    </section>
+  </main>
+
+  <aside class="passage-inspector" data-passage-inspector aria-live="polite">
+    <p>点击讲稿段落查看评分</p>
+  </aside>
+
+  <nav class="variant-switcher" aria-label="原型视觉方案">
+    <span>PROTOTYPE</span>
+    <button type="button" data-variant-button="editorial">Editorial</button>
+    <button type="button" data-variant-button="signal">Signal</button>
+    <button type="button" data-variant-button="manuscript">Manuscript</button>
+  </nav>
+
+  <script>
+{% include "prototype_continuous_scores.js" %}
+  </script>
+</body>
+</html>

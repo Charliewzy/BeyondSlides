@@ -39,7 +39,7 @@ pub async fn run_canary(
     let started = Instant::now();
     let transcript_path = PathBuf::from(transcript_path);
     let run_directory = PathBuf::from(run_directory);
-    let provider = ProviderSettings::from_environment()?;
+    let provider = ProviderSettings::from_restoration_environment()?;
     let (transcript, transcript_hash) = read_json_with_hash(&transcript_path, "transcript")?;
     let manifest = RestorationRunManifest::new(&provider, transcript_hash);
     initialize_run_directory(&run_directory, &manifest, "restoration")?;
@@ -87,7 +87,7 @@ pub async fn run_complete(
     let started = Instant::now();
     let transcript_path = PathBuf::from(transcript_path);
     let run_directory = PathBuf::from(run_directory);
-    let provider = ProviderSettings::from_environment()?;
+    let provider = ProviderSettings::from_restoration_environment()?;
     let (transcript, transcript_hash) = read_json_with_hash(&transcript_path, "transcript")?;
     let manifest = RestorationRunManifest::new(&provider, transcript_hash);
     initialize_run_directory(&run_directory, &manifest, "restoration")?;

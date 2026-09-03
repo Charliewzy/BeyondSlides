@@ -16,6 +16,8 @@ const API_BASE_URL_ENV: &str = "BEYOND_SLIDES_API_BASE_URL";
 const API_KEY_ENV: &str = "BEYOND_SLIDES_API_KEY";
 const MODEL_ENV: &str = "BEYOND_SLIDES_MODEL";
 const CHAT_EXTRA_BODY_ENV: &str = "BEYOND_SLIDES_CHAT_EXTRA_BODY";
+const ANNOTATION_CHAT_EXTRA_BODY_ENV: &str = "BEYOND_SLIDES_ANNOTATION_CHAT_EXTRA_BODY";
+const RESTORATION_CHAT_EXTRA_BODY_ENV: &str = "BEYOND_SLIDES_RESTORATION_CHAT_EXTRA_BODY";
 const MANIFEST_FILE: &str = "manifest.json";
 const MODEL_TRACE_FILE: &str = "model-trace.jsonl";
 
@@ -27,12 +29,24 @@ pub(crate) struct ProviderSettings {
 }
 
 impl ProviderSettings {
-    pub(crate) fn from_environment() -> Result<Self, io::Error> {
+    pub(crate) fn from_annotation_environment() -> Result<Self, io::Error> {
+        Self::from_environment(ANNOTATION_CHAT_EXTRA_BODY_ENV)
+    }
+
+    pub(crate) fn from_restoration_environment() -> Result<Self, io::Error> {
+        Self::from_environment(RESTORATION_CHAT_EXTRA_BODY_ENV)
+    }
+
+    fn from_environment(stage_extra_body_env: &str) -> Result<Self, io::Error> {
+        let extra_body = match optional_json_object(stage_extra_body_env)? {
+            Some(extra_body) => Some(extra_body),
+            None => optional_json_object(CHAT_EXTRA_BODY_ENV)?,
+        };
         Ok(Self {
             base_url: required_environment_variable(API_BASE_URL_ENV)?,
             api_key: required_environment_variable(API_KEY_ENV)?,
             model: required_environment_variable(MODEL_ENV)?,
-            extra_body: optional_json_object(CHAT_EXTRA_BODY_ENV)?,
+            extra_body,
         })
     }
 

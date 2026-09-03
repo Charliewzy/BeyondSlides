@@ -92,7 +92,9 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
              or:    beyond-slides review-restoration <transcript.json> <run-directory> <result.html>\n\
              model-backed commands require BEYOND_SLIDES_API_BASE_URL, \
              BEYOND_SLIDES_API_KEY, and BEYOND_SLIDES_MODEL; optional \
-             BEYOND_SLIDES_CHAT_EXTRA_BODY contains provider-specific JSON",
+             BEYOND_SLIDES_CHAT_EXTRA_BODY contains provider-specific JSON; optional \n\
+             BEYOND_SLIDES_RESTORATION_CHAT_EXTRA_BODY and \n\
+             BEYOND_SLIDES_ANNOTATION_CHAT_EXTRA_BODY override it per stage",
         )
         .into()),
     }

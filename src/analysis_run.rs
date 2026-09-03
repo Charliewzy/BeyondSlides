@@ -48,7 +48,7 @@ pub async fn run_canary(
     let transcript_path = PathBuf::from(transcript_path);
     let slides_path = PathBuf::from(slides_path);
     let output_path = PathBuf::from(output_path);
-    let provider = ProviderSettings::from_environment()?;
+    let provider = ProviderSettings::from_annotation_environment()?;
     let restoration_directory = output_path.with_extension("restoration");
     restoration_run::run_complete(
         transcript_path.as_os_str(),
@@ -109,7 +109,7 @@ pub async fn run_complete(
     let transcript_path = PathBuf::from(transcript_path);
     let slides_path = PathBuf::from(slides_path);
     let run_directory = PathBuf::from(run_directory);
-    let provider = ProviderSettings::from_environment()?;
+    let provider = ProviderSettings::from_annotation_environment()?;
     let restoration_directory = run_directory.join(RESTORATION_DIRECTORY);
     restoration_run::run_complete(
         transcript_path.as_os_str(),

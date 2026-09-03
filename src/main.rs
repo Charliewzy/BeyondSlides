@@ -58,6 +58,21 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
         {
             analysis_run::run_complete(transcript_path, slides_path, run_directory).await
         }
+        [command, transcript_path, slides_path, analysis_path, report_path]
+            if command == OsStr::new("render-analysis") =>
+        {
+            analysis_run::render_saved_analysis(
+                transcript_path,
+                slides_path,
+                analysis_path,
+                report_path,
+            )
+        }
+        [command, analysis_path, trace_path]
+            if command == OsStr::new("evaluate-analysis") =>
+        {
+            analysis_run::evaluate_saved_analysis(analysis_path, trace_path)
+        }
         [transcript_path, slides_path, annotations_path, report_path] => run_report(
             transcript_path,
             slides_path,
@@ -70,6 +85,8 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
              or:    beyond-slides summarize-trace <model-trace.jsonl>\n\
              or:    beyond-slides canary <transcript.json> <slides.json> <canary.json>\n\
              or:    beyond-slides analyze <transcript.json> <slides.json> <run-directory>\n\
+             or:    beyond-slides render-analysis <transcript.json> <slides.json> <analysis.json> <result.html>\n\
+             or:    beyond-slides evaluate-analysis <analysis.json> <model-trace.jsonl>\n\
              or:    beyond-slides restore-canary <transcript.json> <run-directory>\n\
              or:    beyond-slides restore <transcript.json> <run-directory>\n\
              or:    beyond-slides review-restoration <transcript.json> <run-directory> <result.html>\n\

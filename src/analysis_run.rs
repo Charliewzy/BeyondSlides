@@ -7,11 +7,12 @@ use std::{
 };
 
 use beyond_slides::{
-    AnnotationDiagnostics, ChatCompletionsClient, DenseSlideScorer, HybridSlideScorer,
-    LectureAnalysisConfig, LectureAnalysisProgressError, LectureAnalysisSession,
-    LexicalSlideScorer, ModelExchangeTrace, PassageProjectionDiagnostics, RestoredLecturePassage,
-    RestoredTranscript, SlideDeck, SlideId, Transcript, ValidatedSources, WindowingConfig,
-    render_continuous_report,
+    ChatCompletionsClient, DenseSlideScorer, HybridSlideScorer, LectureAnalysisConfig,
+    LectureAnalysisProgressError, LectureAnalysisSession, LexicalSlideScorer, ModelExchangeTrace,
+    RestoredAnalysisArtifact, RestoredTranscript, SlideDeck, Transcript, ValidatedSources,
+    WindowingConfig,
+    evaluation::{render_annotation_quality, summarize_annotation_quality},
+    read_model_trace, render_continuous_report,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,8 +20,8 @@ use serde_json::Value;
 use crate::restoration_run;
 use crate::run_support::{
     ProviderSettings, checkpoint_path, display_token_count, initialize_run_directory,
-    open_output_model_trace, open_run_model_trace, read_json, read_json_with_hash, sha256,
-    window_progress_bar, write_json_atomically, write_text_atomically,
+    model_trace_path, open_output_model_trace, open_run_model_trace, read_json,
+    read_json_with_hash, sha256, window_progress_bar, write_json_atomically, write_text_atomically,
 };
 
 const ANALYSIS_RUN_FORMAT_VERSION: u32 = 3;
@@ -36,6 +37,7 @@ const DENSE_MODEL: &str = "BAAI/bge-small-zh-v1.5";
 const RETRIEVAL_MODE: &str = "hybrid-rrf";
 const ANALYSIS_FILE: &str = "analysis.json";
 const REPORT_FILE: &str = "report.html";
+const QUALITY_FILE: &str = "annotation-quality.json";
 const RESTORATION_DIRECTORY: &str = "restoration";
 
 pub async fn run_canary(
@@ -188,12 +190,12 @@ pub async fn run_complete(
         }
     };
 
-    let output = CompleteAnalysisOutput {
-        restored_transcript: result.analysis().restored_transcript(),
-        passages: result.analysis().passages(),
-        slide_positions: result.slide_positions(),
-        window_diagnostics: result.window_diagnostics(),
-        window_projections: result.window_projections(),
+    let output = RestoredAnalysisArtifact {
+        restored_transcript: result.analysis().restored_transcript().clone(),
+        passages: result.analysis().passages().to_vec(),
+        slide_positions: result.slide_positions().to_vec(),
+        window_diagnostics: result.window_diagnostics().to_vec(),
+        window_projections: result.window_projections().to_vec(),
     };
     let output_path = run_directory.join(ANALYSIS_FILE);
     write_json_atomically(&output_path, &output, "complete analysis")?;
@@ -203,11 +205,53 @@ pub async fn run_complete(
         &render_continuous_report(result.analysis()),
         "continuous lecture report",
     )?;
+    let trace = read_model_trace(&model_trace_path(&run_directory))?;
+    let quality = summarize_annotation_quality(&output, &trace);
+    let quality_path = run_directory.join(QUALITY_FILE);
+    write_json_atomically(&quality_path, &quality, "annotation quality summary")?;
     progress.finish_with_message("analysis complete");
     println!(
         "Wrote complete lecture analysis to {} and report to {}",
         output_path.display(),
         report_path.display()
+    );
+    print!("{}", render_annotation_quality(&quality));
+    Ok(())
+}
+
+pub fn render_saved_analysis(
+    transcript_path: &OsStr,
+    slides_path: &OsStr,
+    analysis_path: &OsStr,
+    report_path: &OsStr,
+) -> Result<(), Box<dyn Error>> {
+    let transcript: Transcript = read_json(Path::new(transcript_path), "transcript")?;
+    let slide_deck: SlideDeck = read_json(Path::new(slides_path), "slides")?;
+    let artifact: RestoredAnalysisArtifact =
+        read_json(Path::new(analysis_path), "restored analysis")?;
+    let analysis = artifact.validate(ValidatedSources::new(transcript, slide_deck)?)?;
+    write_text_atomically(
+        Path::new(report_path),
+        &render_continuous_report(&analysis),
+        "continuous lecture report",
+    )?;
+    println!(
+        "Wrote continuous lecture report to {}",
+        Path::new(report_path).display()
+    );
+    Ok(())
+}
+
+pub fn evaluate_saved_analysis(
+    analysis_path: &OsStr,
+    trace_path: &OsStr,
+) -> Result<(), Box<dyn Error>> {
+    let artifact: RestoredAnalysisArtifact =
+        read_json(Path::new(analysis_path), "restored analysis")?;
+    let trace = read_model_trace(Path::new(trace_path))?;
+    print!(
+        "{}",
+        render_annotation_quality(&summarize_annotation_quality(&artifact, &trace))
     );
     Ok(())
 }
@@ -281,15 +325,6 @@ impl AnalysisRunManifest {
             max_output_tokens: MAX_OUTPUT_TOKENS,
         }
     }
-}
-
-#[derive(Serialize)]
-struct CompleteAnalysisOutput<'a> {
-    restored_transcript: &'a RestoredTranscript,
-    passages: &'a [RestoredLecturePassage],
-    slide_positions: &'a [SlideId],
-    window_diagnostics: &'a [AnnotationDiagnostics],
-    window_projections: &'a [PassageProjectionDiagnostics],
 }
 
 fn lecture_config() -> Result<LectureAnalysisConfig, Box<dyn Error>> {

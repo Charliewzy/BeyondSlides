@@ -1,4 +1,5 @@
 mod alignment;
+mod analysis_artifact;
 mod annotation;
 mod chat_completions;
 mod continuous_report;
@@ -17,6 +18,7 @@ mod validation;
 mod windowing;
 
 pub use alignment::{SlideAlignmentError, infer_slide_positions};
+pub use analysis_artifact::{RestoredAnalysisArtifact, RestoredAnalysisArtifactError};
 pub use annotation::{
     AnalysisAssemblyError, AnnotationMessage, AnnotationTaskError, AnnotationToolError,
     AnnotationToolSession, SlideEvidence, TranscriptWindowAnalysis, TranscriptWindowTask,
@@ -57,9 +59,10 @@ pub use restoration::{
 };
 pub use restored_annotation::{
     ProposedLecturePassage, ProposedTranscriptWindowAnalysis, RestoredAnalysisAssemblyError,
-    RestoredAnnotationError, RestoredAnnotationMessage, RestoredTranscriptWindowAnalysis,
-    RestoredTranscriptWindowTask, ValidatedRestoredAnalysis, assemble_restored_window_analyses,
-    build_restored_annotation_tasks, project_window_analysis, validate_restored_window_analysis,
+    RestoredAnalysisValidationError, RestoredAnnotationError, RestoredAnnotationMessage,
+    RestoredTranscriptWindowAnalysis, RestoredTranscriptWindowTask, ValidatedRestoredAnalysis,
+    assemble_restored_window_analyses, build_restored_annotation_tasks, project_window_analysis,
+    validate_restored_window_analysis,
 };
 pub use retrieval::{
     DenseSlideScorer, HybridSlideScorer, LexicalSlideScorer, SearchError, SlideScore, SlideScorer,

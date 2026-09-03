@@ -6,6 +6,7 @@ use crate::{
     PassageProjection, PassageProjectionError, RestoredLecturePassage, RestoredTranscriptSpan,
     RestoredTranscriptWindow, RestoredWindowingError, Score5, Slide, SlideId, ValidatedSources,
     WindowingConfig, build_restored_windows, project_passage_boundaries,
+    windowing::validate_restored_transcript,
 };
 
 const SLIDE_NEIGHBORHOOD_RADIUS: usize = 3;
@@ -106,6 +107,26 @@ pub struct ValidatedRestoredAnalysis {
 }
 
 impl ValidatedRestoredAnalysis {
+    /// Validates a complete source-backed partition of one restored transcript.
+    pub fn new(
+        sources: ValidatedSources,
+        restored_transcript: crate::RestoredTranscript,
+        passages: Vec<RestoredLecturePassage>,
+    ) -> Result<Self, RestoredAnalysisValidationError> {
+        validate_restored_transcript(&sources, &restored_transcript)
+            .map_err(RestoredAnalysisValidationError::RestoredTranscript)?;
+
+        let source = restored_text(&restored_transcript.spans);
+        validate_passage_partition(&sources, &restored_transcript.spans, &source, &passages)
+            .map_err(RestoredAnalysisValidationError::Passages)?;
+
+        Ok(Self {
+            sources,
+            restored_transcript,
+            passages,
+        })
+    }
+
     pub fn transcript(&self) -> &crate::Transcript {
         self.sources.transcript()
     }
@@ -220,9 +241,23 @@ pub fn validate_restored_window_analysis(
     analysis: &RestoredTranscriptWindowAnalysis,
 ) -> Result<(), RestoredAnnotationError> {
     let source = task.window.owned_text();
+    validate_passage_partition(
+        sources,
+        task.window.owned_region(),
+        &source,
+        &analysis.passages,
+    )
+}
+
+fn validate_passage_partition(
+    sources: &ValidatedSources,
+    spans: &[RestoredTranscriptSpan],
+    source: &str,
+    passages: &[RestoredLecturePassage],
+) -> Result<(), RestoredAnnotationError> {
     let mut next_byte = 0;
 
-    for (passage_index, passage) in analysis.passages.iter().enumerate() {
+    for (passage_index, passage) in passages.iter().enumerate() {
         if passage.text.is_empty() {
             return Err(RestoredAnnotationError::EmptyTrustedPassage { passage_index });
         }
@@ -234,9 +269,8 @@ pub fn validate_restored_window_analysis(
         }
 
         let passage_range = next_byte..next_byte + passage.text.len();
-        let (expected_start, expected_end) =
-            source_provenance(task.window.owned_region(), &passage_range)
-                .ok_or(RestoredAnnotationError::MissingSourceProvenance { passage_index })?;
+        let (expected_start, expected_end) = source_provenance(spans, &passage_range)
+            .ok_or(RestoredAnnotationError::MissingSourceProvenance { passage_index })?;
         if passage.source_start != expected_start || passage.source_end != expected_end {
             return Err(RestoredAnnotationError::SourceProvenanceMismatch {
                 passage_index,
@@ -289,11 +323,8 @@ pub fn assemble_restored_window_analyses(
         passages
     };
 
-    Ok(ValidatedRestoredAnalysis {
-        sources,
-        restored_transcript,
-        passages,
-    })
+    ValidatedRestoredAnalysis::new(sources, restored_transcript, passages)
+        .map_err(RestoredAnalysisAssemblyError::CompleteValidation)
 }
 
 fn validate_related_slides(
@@ -491,6 +522,7 @@ pub enum RestoredAnalysisAssemblyError {
         window_index: usize,
         source: RestoredAnnotationError,
     },
+    CompleteValidation(RestoredAnalysisValidationError),
 }
 
 impl fmt::Display for RestoredAnalysisAssemblyError {
@@ -514,6 +546,9 @@ impl fmt::Display for RestoredAnalysisAssemblyError {
                 formatter,
                 "restored transcript window at index {window_index} has an invalid persisted analysis: {source}"
             ),
+            Self::CompleteValidation(error) => {
+                write!(formatter, "assembled restored analysis is invalid: {error}")
+            }
         }
     }
 }
@@ -525,7 +560,34 @@ impl Error for RestoredAnalysisAssemblyError {
             Self::TaskConstruction(error) | Self::InvalidWindow { source: error, .. } => {
                 Some(error)
             }
+            Self::CompleteValidation(error) => Some(error),
             Self::WindowCountMismatch { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum RestoredAnalysisValidationError {
+    RestoredTranscript(RestoredWindowingError),
+    Passages(RestoredAnnotationError),
+}
+
+impl fmt::Display for RestoredAnalysisValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RestoredTranscript(error) => {
+                write!(formatter, "invalid restored transcript: {error}")
+            }
+            Self::Passages(error) => write!(formatter, "invalid lecture passages: {error}"),
+        }
+    }
+}
+
+impl Error for RestoredAnalysisValidationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::RestoredTranscript(error) => Some(error),
+            Self::Passages(error) => Some(error),
         }
     }
 }

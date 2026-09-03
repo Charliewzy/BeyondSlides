@@ -331,7 +331,7 @@ fn restored_span_text(span: &RestoredTranscriptSpan) -> Option<&str> {
     }
 }
 
-fn validate_restored_transcript(
+pub(crate) fn validate_restored_transcript(
     sources: &ValidatedSources,
     restored_transcript: &RestoredTranscript,
 ) -> Result<(), RestoredWindowingError> {

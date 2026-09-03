@@ -111,7 +111,11 @@ pub(crate) fn checkpoint_path(run_directory: &Path, window_number: usize) -> Pat
 }
 
 pub(crate) fn open_run_model_trace(run_directory: &Path) -> Result<ModelExchangeTrace, io::Error> {
-    ModelExchangeTrace::open(run_directory.join(MODEL_TRACE_FILE))
+    ModelExchangeTrace::open(model_trace_path(run_directory))
+}
+
+pub(crate) fn model_trace_path(run_directory: &Path) -> PathBuf {
+    run_directory.join(MODEL_TRACE_FILE)
 }
 
 pub(crate) fn open_output_model_trace(output_path: &Path) -> Result<ModelExchangeTrace, io::Error> {

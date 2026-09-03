@@ -1,6 +1,7 @@
 use std::{
     error::Error,
     fmt, io,
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
@@ -56,6 +57,7 @@ pub struct ChatCompletionsConfig {
     max_search_results: usize,
     max_output_tokens: u32,
     max_provider_retries: usize,
+    minimum_request_interval: Duration,
     extra_body: Option<Value>,
     model_trace: Option<ModelExchangeTrace>,
 }
@@ -99,6 +101,7 @@ impl ChatCompletionsConfig {
             max_search_results: DEFAULT_MAX_SEARCH_RESULTS,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             max_provider_retries: 0,
+            minimum_request_interval: Duration::ZERO,
             extra_body: None,
             model_trace: None,
         })
@@ -152,6 +155,12 @@ impl ChatCompletionsConfig {
 
     pub const fn with_max_provider_retries(mut self, max_provider_retries: usize) -> Self {
         self.max_provider_retries = max_provider_retries;
+        self
+    }
+
+    /// Sets the minimum time between HTTP request starts across this client.
+    pub const fn with_minimum_request_interval(mut self, interval: Duration) -> Self {
+        self.minimum_request_interval = interval;
         self
     }
 
@@ -224,6 +233,8 @@ pub struct ChatCompletionsClient {
     max_final_answer_repairs: usize,
     max_search_results: usize,
     max_provider_retries: usize,
+    minimum_request_interval: Duration,
+    next_request_at: Mutex<Option<Instant>>,
     endpoint: String,
     model: String,
     model_trace: Option<ModelExchangeTrace>,
@@ -255,6 +266,8 @@ impl ChatCompletionsClient {
             max_final_answer_repairs: config.max_final_answer_repairs,
             max_search_results: config.max_search_results,
             max_provider_retries: config.max_provider_retries,
+            minimum_request_interval: config.minimum_request_interval,
+            next_request_at: Mutex::new(None),
             endpoint,
             model,
             model_trace: config.model_trace,
@@ -490,6 +503,7 @@ impl ChatCompletionsClient {
         };
         let mut retries = 0;
         loop {
+            self.wait_for_request_slot().await;
             let provider_attempt = retries;
             let exchange_id = self
                 .model_trace
@@ -553,6 +567,23 @@ impl ChatCompletionsClient {
                 }
             }
         }
+    }
+
+    async fn wait_for_request_slot(&self) {
+        if self.minimum_request_interval.is_zero() {
+            return;
+        }
+        let now = Instant::now();
+        let delay = {
+            let mut next_request_at = self
+                .next_request_at
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let scheduled_at = next_request_at.map_or(now, |next| next.max(now));
+            *next_request_at = scheduled_at.checked_add(self.minimum_request_interval);
+            scheduled_at.saturating_duration_since(now)
+        };
+        tokio::time::sleep(delay).await;
     }
 
     fn record_validation(

@@ -24,7 +24,7 @@ use crate::run_support::{
     read_json_with_hash, sha256, window_progress_bar, write_json_atomically, write_text_atomically,
 };
 
-const ANALYSIS_RUN_FORMAT_VERSION: u32 = 3;
+const ANALYSIS_RUN_FORMAT_VERSION: u32 = 4;
 const MAX_OWNED_CHARACTERS: usize = 400;
 const MAX_OWNED_DURATION_SECONDS: u64 = 60;
 const CONTEXT_CHARACTERS: usize = 150;
@@ -32,6 +32,7 @@ const MAX_CONCURRENT_WINDOWS: usize = 4;
 const MAX_TOOL_ROUNDS: usize = 4;
 const MAX_FINAL_ANSWER_REPAIRS: usize = 2;
 const MAX_PROVIDER_RETRIES: usize = 5;
+const MINIMUM_REQUEST_INTERVAL_SECONDS: u64 = 5;
 const MAX_SEARCH_RESULTS: usize = 5;
 const MAX_OUTPUT_TOKENS: u32 = 16_384;
 const DENSE_MODEL: &str = "BAAI/bge-small-zh-v1.5";
@@ -267,6 +268,7 @@ fn analysis_client(
         .with_max_tool_rounds(MAX_TOOL_ROUNDS)?
         .with_max_final_answer_repairs(MAX_FINAL_ANSWER_REPAIRS)?
         .with_max_provider_retries(MAX_PROVIDER_RETRIES)
+        .with_minimum_request_interval(Duration::from_secs(MINIMUM_REQUEST_INTERVAL_SECONDS))
         .with_max_search_results(MAX_SEARCH_RESULTS)?
         .with_max_output_tokens(MAX_OUTPUT_TOKENS)?;
     Ok(ChatCompletionsClient::new(config))
@@ -293,6 +295,7 @@ struct AnalysisRunManifest {
     max_tool_rounds: usize,
     max_final_answer_repairs: usize,
     max_provider_retries: usize,
+    minimum_request_interval_seconds: u64,
     max_search_results: usize,
     max_output_tokens: u32,
 }
@@ -311,7 +314,7 @@ impl AnalysisRunManifest {
             restored_transcript_sha256,
             annotation_prompt_sha256: sha256(include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/prompts/annotation.md"
+                "/prompts/restored_annotation.md"
             ))),
             api_base_url: provider.base_url().into(),
             model: provider.model().into(),
@@ -325,6 +328,7 @@ impl AnalysisRunManifest {
             max_tool_rounds: MAX_TOOL_ROUNDS,
             max_final_answer_repairs: MAX_FINAL_ANSWER_REPAIRS,
             max_provider_retries: MAX_PROVIDER_RETRIES,
+            minimum_request_interval_seconds: MINIMUM_REQUEST_INTERVAL_SECONDS,
             max_search_results: MAX_SEARCH_RESULTS,
             max_output_tokens: MAX_OUTPUT_TOKENS,
         }

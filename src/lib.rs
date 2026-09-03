@@ -54,9 +54,10 @@ pub use restoration::{
     validate_window_restoration,
 };
 pub use restored_annotation::{
-    ProposedLecturePassage, ProposedTranscriptWindowAnalysis, RestoredAnnotationError,
-    RestoredAnnotationMessage, RestoredTranscriptWindowAnalysis, RestoredTranscriptWindowTask,
-    build_restored_annotation_tasks, project_window_analysis,
+    ProposedLecturePassage, ProposedTranscriptWindowAnalysis, RestoredAnalysisAssemblyError,
+    RestoredAnnotationError, RestoredAnnotationMessage, RestoredTranscriptWindowAnalysis,
+    RestoredTranscriptWindowTask, ValidatedRestoredAnalysis, assemble_restored_window_analyses,
+    build_restored_annotation_tasks, project_window_analysis, validate_restored_window_analysis,
 };
 pub use retrieval::{
     DenseSlideScorer, HybridSlideScorer, LexicalSlideScorer, SearchError, SlideScore, SlideScorer,

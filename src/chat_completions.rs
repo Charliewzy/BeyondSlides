@@ -1252,6 +1252,10 @@ fn restored_analysis_error_category(error: &RestoredAnnotationError) -> &'static
         | RestoredAnnotationError::EmptyOwnedText { .. }
         | RestoredAnnotationError::UnknownSlidePosition { .. }
         | RestoredAnnotationError::MissingSourceProvenance { .. }
+        | RestoredAnnotationError::EmptyTrustedPassage { .. }
+        | RestoredAnnotationError::TrustedTextMismatch { .. }
+        | RestoredAnnotationError::UncoveredOwnedText { .. }
+        | RestoredAnnotationError::SourceProvenanceMismatch { .. }
         | RestoredAnnotationError::PassageProjection(
             PassageProjectionError::EmptySource
             | PassageProjectionError::NonMonotonicProjection { .. },

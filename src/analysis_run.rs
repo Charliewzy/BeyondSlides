@@ -8,20 +8,21 @@ use std::{
 
 use beyond_slides::{
     AnnotationDiagnostics, ChatCompletionsClient, DenseSlideScorer, HybridSlideScorer,
-    LectureAnalysisConfig, LectureAnalysisProgressError, LectureAnalysisSession, LecturePassage,
-    LexicalSlideScorer, ModelExchangeTrace, SlideDeck, SlideId, Transcript, ValidatedSources,
-    WindowingConfig,
+    LectureAnalysisConfig, LectureAnalysisProgressError, LectureAnalysisSession,
+    LexicalSlideScorer, ModelExchangeTrace, PassageProjectionDiagnostics, RestoredLecturePassage,
+    RestoredTranscript, SlideDeck, SlideId, Transcript, ValidatedSources, WindowingConfig,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::restoration_run;
 use crate::run_support::{
     ProviderSettings, checkpoint_path, display_token_count, initialize_run_directory,
     open_output_model_trace, open_run_model_trace, read_json, read_json_with_hash, sha256,
     window_progress_bar, write_json_atomically,
 };
 
-const ANALYSIS_RUN_FORMAT_VERSION: u32 = 2;
+const ANALYSIS_RUN_FORMAT_VERSION: u32 = 3;
 const MAX_OWNED_CHARACTERS: usize = 400;
 const MAX_OWNED_DURATION_SECONDS: u64 = 60;
 const CONTEXT_CHARACTERS: usize = 150;
@@ -33,6 +34,7 @@ const MAX_OUTPUT_TOKENS: u32 = 16_384;
 const DENSE_MODEL: &str = "BAAI/bge-small-zh-v1.5";
 const RETRIEVAL_MODE: &str = "hybrid-rrf";
 const ANALYSIS_FILE: &str = "analysis.json";
+const RESTORATION_DIRECTORY: &str = "restoration";
 
 pub async fn run_canary(
     transcript_path: &OsStr,
@@ -43,8 +45,18 @@ pub async fn run_canary(
     let slides_path = PathBuf::from(slides_path);
     let output_path = PathBuf::from(output_path);
     let provider = ProviderSettings::from_environment()?;
+    let restoration_directory = output_path.with_extension("restoration");
+    restoration_run::run_complete(
+        transcript_path.as_os_str(),
+        restoration_directory.as_os_str(),
+    )
+    .await?;
     let transcript: Transcript = read_json(&transcript_path, "transcript")?;
     let slide_deck: SlideDeck = read_json(&slides_path, "slides")?;
+    let restored_transcript: RestoredTranscript = read_json(
+        &restoration_directory.join(restoration_run::RESTORED_TRANSCRIPT_FILE),
+        "restored transcript",
+    )?;
     let sources = ValidatedSources::new(transcript, slide_deck)?;
 
     eprintln!(
@@ -57,8 +69,13 @@ pub async fn run_canary(
     let client = analysis_client(&provider, open_output_model_trace(&output_path)?)?;
 
     eprintln!("Preparing the lecture and scoring every transcript window...");
-    let mut session =
-        LectureAnalysisSession::prepare(&client, sources, &hybrid, lecture_config()?)?;
+    let mut session = LectureAnalysisSession::prepare(
+        &client,
+        sources,
+        restored_transcript,
+        &hybrid,
+        lecture_config()?,
+    )?;
     eprintln!("Sending transcript window 1 as the canary...");
     let canary = session.analyze_canary().await?.ok_or_else(|| {
         io::Error::new(
@@ -89,9 +106,24 @@ pub async fn run_complete(
     let slides_path = PathBuf::from(slides_path);
     let run_directory = PathBuf::from(run_directory);
     let provider = ProviderSettings::from_environment()?;
+    let restoration_directory = run_directory.join(RESTORATION_DIRECTORY);
+    restoration_run::run_complete(
+        transcript_path.as_os_str(),
+        restoration_directory.as_os_str(),
+    )
+    .await?;
     let (transcript, transcript_hash) = read_json_with_hash(&transcript_path, "transcript")?;
     let (slide_deck, slides_hash) = read_json_with_hash(&slides_path, "slides")?;
-    let manifest = AnalysisRunManifest::new(&provider, transcript_hash, slides_hash);
+    let (restored_transcript, restored_transcript_hash) = read_json_with_hash(
+        &restoration_directory.join(restoration_run::RESTORED_TRANSCRIPT_FILE),
+        "restored transcript",
+    )?;
+    let manifest = AnalysisRunManifest::new(
+        &provider,
+        transcript_hash,
+        slides_hash,
+        restored_transcript_hash,
+    );
     initialize_run_directory(&run_directory, &manifest, "analysis")?;
     let sources = ValidatedSources::new(transcript, slide_deck)?;
 
@@ -105,8 +137,13 @@ pub async fn run_complete(
     let client = analysis_client(&provider, open_run_model_trace(&run_directory)?)?;
 
     eprintln!("Preparing the lecture and scoring every transcript window...");
-    let mut session =
-        LectureAnalysisSession::prepare(&client, sources, &hybrid, lecture_config()?)?;
+    let mut session = LectureAnalysisSession::prepare(
+        &client,
+        sources,
+        restored_transcript,
+        &hybrid,
+        lecture_config()?,
+    )?;
     restore_checkpoints(&mut session, &run_directory)?;
 
     let progress = window_progress_bar(session.window_count(), session.completed_window_count())?;
@@ -129,14 +166,15 @@ pub async fn run_complete(
     progress.set_message("analyzing transcript windows");
     let result = session
         .complete_analysis_with_progress(|event| {
+            let window_number = event.window_index + 1;
             write_json_atomically(
-                &checkpoint_path(&run_directory, event.window_number),
+                &checkpoint_path(&run_directory, window_number),
                 event.result,
                 "window checkpoint",
             )
             .map_err(|error| Box::new(error) as LectureAnalysisProgressError)?;
             progress.set_position(event.completed_windows as u64);
-            progress.set_message(format!("completed window {}", event.window_number));
+            progress.set_message(format!("completed window {window_number}"));
             Ok(())
         })
         .await;
@@ -149,9 +187,11 @@ pub async fn run_complete(
     };
 
     let output = CompleteAnalysisOutput {
+        restored_transcript: result.analysis().restored_transcript(),
         passages: result.analysis().passages(),
         slide_positions: result.slide_positions(),
         window_diagnostics: result.window_diagnostics(),
+        window_projections: result.window_projections(),
     };
     let output_path = run_directory.join(ANALYSIS_FILE);
     write_json_atomically(&output_path, &output, "complete analysis")?;
@@ -183,6 +223,7 @@ struct AnalysisRunManifest {
     format_version: u32,
     transcript_sha256: String,
     slides_sha256: String,
+    restored_transcript_sha256: String,
     annotation_prompt_sha256: String,
     api_base_url: String,
     model: String,
@@ -201,11 +242,17 @@ struct AnalysisRunManifest {
 }
 
 impl AnalysisRunManifest {
-    fn new(provider: &ProviderSettings, transcript_sha256: String, slides_sha256: String) -> Self {
+    fn new(
+        provider: &ProviderSettings,
+        transcript_sha256: String,
+        slides_sha256: String,
+        restored_transcript_sha256: String,
+    ) -> Self {
         Self {
             format_version: ANALYSIS_RUN_FORMAT_VERSION,
             transcript_sha256,
             slides_sha256,
+            restored_transcript_sha256,
             annotation_prompt_sha256: sha256(include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/prompts/annotation.md"
@@ -229,9 +276,11 @@ impl AnalysisRunManifest {
 
 #[derive(Serialize)]
 struct CompleteAnalysisOutput<'a> {
-    passages: &'a [LecturePassage],
+    restored_transcript: &'a RestoredTranscript,
+    passages: &'a [RestoredLecturePassage],
     slide_positions: &'a [SlideId],
     window_diagnostics: &'a [AnnotationDiagnostics],
+    window_projections: &'a [PassageProjectionDiagnostics],
 }
 
 fn lecture_config() -> Result<LectureAnalysisConfig, Box<dyn Error>> {
@@ -281,7 +330,12 @@ mod tests {
             "secret-not-persisted",
             "test-model",
         );
-        let manifest = AnalysisRunManifest::new(&provider, "transcript".into(), "slides".into());
+        let manifest = AnalysisRunManifest::new(
+            &provider,
+            "transcript".into(),
+            "slides".into(),
+            "restored".into(),
+        );
 
         initialize_run_directory(directory.path(), &manifest, "analysis")?;
         initialize_run_directory(directory.path(), &manifest, "analysis")?;
@@ -297,6 +351,7 @@ mod tests {
             ),
             "transcript".into(),
             "slides".into(),
+            "restored".into(),
         );
         let error = initialize_run_directory(directory.path(), &different, "analysis")
             .expect_err("a changed model must not reuse existing checkpoints");

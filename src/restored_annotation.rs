@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     PassageProjection, PassageProjectionError, RestoredLecturePassage, RestoredTranscriptSpan,
-    RestoredTranscriptWindow, Score5, Slide, SlideId, ValidatedSources, project_passage_boundaries,
+    RestoredTranscriptWindow, RestoredWindowingError, Score5, Slide, SlideId, ValidatedSources,
+    WindowingConfig, build_restored_windows, project_passage_boundaries,
 };
 
 const SLIDE_NEIGHBORHOOD_RADIUS: usize = 3;
@@ -94,6 +95,32 @@ pub struct ProposedTranscriptWindowAnalysis {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct RestoredTranscriptWindowAnalysis {
     pub passages: Vec<RestoredLecturePassage>,
+}
+
+/// A complete restored transcript analysis accepted at every deterministic seam.
+#[derive(Debug)]
+pub struct ValidatedRestoredAnalysis {
+    sources: ValidatedSources,
+    restored_transcript: crate::RestoredTranscript,
+    passages: Vec<RestoredLecturePassage>,
+}
+
+impl ValidatedRestoredAnalysis {
+    pub fn transcript(&self) -> &crate::Transcript {
+        self.sources.transcript()
+    }
+
+    pub fn restored_transcript(&self) -> &crate::RestoredTranscript {
+        &self.restored_transcript
+    }
+
+    pub fn slide_deck(&self) -> &crate::SlideDeck {
+        self.sources.slide_deck()
+    }
+
+    pub fn passages(&self) -> &[RestoredLecturePassage] {
+        &self.passages
+    }
 }
 
 /// Builds one restored-transcript annotation task per inferred slide position.
@@ -186,6 +213,89 @@ pub fn project_window_analysis(
     Ok((RestoredTranscriptWindowAnalysis { passages }, projection))
 }
 
+/// Revalidates one persisted, source-backed annotation result.
+pub fn validate_restored_window_analysis(
+    sources: &ValidatedSources,
+    task: &RestoredTranscriptWindowTask<'_>,
+    analysis: &RestoredTranscriptWindowAnalysis,
+) -> Result<(), RestoredAnnotationError> {
+    let source = task.window.owned_text();
+    let mut next_byte = 0;
+
+    for (passage_index, passage) in analysis.passages.iter().enumerate() {
+        if passage.text.is_empty() {
+            return Err(RestoredAnnotationError::EmptyTrustedPassage { passage_index });
+        }
+        let Some(remaining_source) = source.get(next_byte..) else {
+            return Err(RestoredAnnotationError::TrustedTextMismatch { passage_index });
+        };
+        if !remaining_source.starts_with(&passage.text) {
+            return Err(RestoredAnnotationError::TrustedTextMismatch { passage_index });
+        }
+
+        let passage_range = next_byte..next_byte + passage.text.len();
+        let (expected_start, expected_end) =
+            source_provenance(task.window.owned_region(), &passage_range)
+                .ok_or(RestoredAnnotationError::MissingSourceProvenance { passage_index })?;
+        if passage.source_start != expected_start || passage.source_end != expected_end {
+            return Err(RestoredAnnotationError::SourceProvenanceMismatch {
+                passage_index,
+                expected_start,
+                expected_end,
+                actual_start: passage.source_start,
+                actual_end: passage.source_end,
+            });
+        }
+        validate_related_slides(sources, passage_index, &passage.related_slides)?;
+        next_byte = passage_range.end;
+    }
+
+    if next_byte != source.len() {
+        return Err(RestoredAnnotationError::UncoveredOwnedText { byte: next_byte });
+    }
+    Ok(())
+}
+
+/// Joins source-backed restored-window analyses into one complete lecture analysis.
+pub fn assemble_restored_window_analyses(
+    sources: ValidatedSources,
+    restored_transcript: crate::RestoredTranscript,
+    windowing: WindowingConfig,
+    slide_positions: &[SlideId],
+    window_analyses: Vec<RestoredTranscriptWindowAnalysis>,
+) -> Result<ValidatedRestoredAnalysis, RestoredAnalysisAssemblyError> {
+    let passages = {
+        let windows = build_restored_windows(&sources, &restored_transcript, windowing)
+            .map_err(RestoredAnalysisAssemblyError::Windowing)?;
+        let tasks = build_restored_annotation_tasks(&sources, &windows, slide_positions)
+            .map_err(RestoredAnalysisAssemblyError::TaskConstruction)?;
+        if window_analyses.len() != tasks.len() {
+            return Err(RestoredAnalysisAssemblyError::WindowCountMismatch {
+                expected: tasks.len(),
+                actual: window_analyses.len(),
+            });
+        }
+
+        let mut passages = Vec::new();
+        for (task, analysis) in tasks.iter().zip(window_analyses) {
+            validate_restored_window_analysis(&sources, task, &analysis).map_err(|source| {
+                RestoredAnalysisAssemblyError::InvalidWindow {
+                    window_index: task.window_index,
+                    source,
+                }
+            })?;
+            passages.extend(analysis.passages);
+        }
+        passages
+    };
+
+    Ok(ValidatedRestoredAnalysis {
+        sources,
+        restored_transcript,
+        passages,
+    })
+}
+
 fn validate_related_slides(
     sources: &ValidatedSources,
     passage_index: usize,
@@ -267,6 +377,22 @@ pub enum RestoredAnnotationError {
         passage_index: usize,
         slide: SlideId,
     },
+    EmptyTrustedPassage {
+        passage_index: usize,
+    },
+    TrustedTextMismatch {
+        passage_index: usize,
+    },
+    UncoveredOwnedText {
+        byte: usize,
+    },
+    SourceProvenanceMismatch {
+        passage_index: usize,
+        expected_start: crate::TranscriptSegmentId,
+        expected_end: crate::TranscriptSegmentId,
+        actual_start: crate::TranscriptSegmentId,
+        actual_end: crate::TranscriptSegmentId,
+    },
 }
 
 impl fmt::Display for RestoredAnnotationError {
@@ -309,6 +435,28 @@ impl fmt::Display for RestoredAnnotationError {
                 "projected lecture passage {passage_index} references slide {} more than once",
                 slide.0
             ),
+            Self::EmptyTrustedPassage { passage_index } => {
+                write!(formatter, "lecture passage {passage_index} has empty text")
+            }
+            Self::TrustedTextMismatch { passage_index } => write!(
+                formatter,
+                "lecture passage {passage_index} does not continue the authoritative owned text"
+            ),
+            Self::UncoveredOwnedText { byte } => write!(
+                formatter,
+                "lecture passages leave authoritative owned text uncovered from byte {byte}"
+            ),
+            Self::SourceProvenanceMismatch {
+                passage_index,
+                expected_start,
+                expected_end,
+                actual_start,
+                actual_end,
+            } => write!(
+                formatter,
+                "lecture passage {passage_index} should cite source segments {} through {} but cites {} through {}",
+                expected_start.0, expected_end.0, actual_start.0, actual_end.0
+            ),
         }
     }
 }
@@ -322,7 +470,62 @@ impl Error for RestoredAnnotationError {
             | Self::UnknownSlidePosition { .. }
             | Self::MissingSourceProvenance { .. }
             | Self::UnknownRelatedSlide { .. }
-            | Self::DuplicateRelatedSlide { .. } => None,
+            | Self::DuplicateRelatedSlide { .. }
+            | Self::EmptyTrustedPassage { .. }
+            | Self::TrustedTextMismatch { .. }
+            | Self::UncoveredOwnedText { .. }
+            | Self::SourceProvenanceMismatch { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum RestoredAnalysisAssemblyError {
+    Windowing(RestoredWindowingError),
+    TaskConstruction(RestoredAnnotationError),
+    WindowCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    InvalidWindow {
+        window_index: usize,
+        source: RestoredAnnotationError,
+    },
+}
+
+impl fmt::Display for RestoredAnalysisAssemblyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Windowing(error) => write!(formatter, "could not window restored text: {error}"),
+            Self::TaskConstruction(error) => {
+                write!(
+                    formatter,
+                    "could not build restored annotation tasks: {error}"
+                )
+            }
+            Self::WindowCountMismatch { expected, actual } => write!(
+                formatter,
+                "analysis expected {expected} restored transcript window responses but received {actual}"
+            ),
+            Self::InvalidWindow {
+                window_index,
+                source,
+            } => write!(
+                formatter,
+                "restored transcript window at index {window_index} has an invalid persisted analysis: {source}"
+            ),
+        }
+    }
+}
+
+impl Error for RestoredAnalysisAssemblyError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Windowing(error) => Some(error),
+            Self::TaskConstruction(error) | Self::InvalidWindow { source: error, .. } => {
+                Some(error)
+            }
+            Self::WindowCountMismatch { .. } => None,
         }
     }
 }

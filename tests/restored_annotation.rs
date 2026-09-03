@@ -3,8 +3,8 @@ use std::{error::Error, time::Duration};
 use beyond_slides::{
     ProposedTranscriptWindowAnalysis, RestoredAnnotationError, RestoredTranscript,
     RestoredTranscriptSpan, Slide, SlideDeck, SlideId, Transcript, TranscriptSegment,
-    TranscriptSegmentId, ValidatedSources, WindowingConfig, build_restored_annotation_tasks,
-    build_restored_windows, project_window_analysis,
+    TranscriptSegmentId, ValidatedSources, WindowingConfig, assemble_restored_window_analyses,
+    build_restored_annotation_tasks, build_restored_windows, project_window_analysis,
 };
 
 #[test]
@@ -126,6 +126,61 @@ fn related_slide_evidence_is_validated_after_text_projection() -> Result<(), Box
             passage_index: 0,
             slide: SlideId(1),
         }
+    );
+    Ok(())
+}
+
+#[test]
+fn projected_window_analyses_assemble_into_one_readable_lecture() -> Result<(), Box<dyn Error>> {
+    let sources = sources();
+    let restored = RestoredTranscript {
+        spans: vec![
+            RestoredTranscriptSpan::Text {
+                source_start: TranscriptSegmentId(0),
+                source_end: TranscriptSegmentId(0),
+                text: "所有权负责资源管理。".into(),
+            },
+            RestoredTranscriptSpan::Text {
+                source_start: TranscriptSegmentId(1),
+                source_end: TranscriptSegmentId(1),
+                text: "借用让函数临时访问数据。".into(),
+            },
+        ],
+    };
+    let config = WindowingConfig::new(12, Duration::from_secs(60), 0)?;
+    let windows = build_restored_windows(&sources, &restored, config)?;
+    let tasks = build_restored_annotation_tasks(&sources, &windows, &[SlideId(0), SlideId(1)])?;
+    let mut analyses = Vec::new();
+    for task in &tasks {
+        let proposed: ProposedTranscriptWindowAnalysis =
+            serde_json::from_value(serde_json::json!({
+                "passages": [{
+                    "text": task.window().owned_text(),
+                    "novelty": 2,
+                    "connection_strength": 2,
+                    "importance": 4,
+                    "related_slides": [task.slide_position()]
+                }]
+            }))?;
+        analyses.push(project_window_analysis(&sources, task, proposed)?.0);
+    }
+
+    let analysis = assemble_restored_window_analyses(
+        sources,
+        restored,
+        config,
+        &[SlideId(0), SlideId(1)],
+        analyses,
+    )?;
+
+    assert_eq!(analysis.passages().len(), 2);
+    assert_eq!(
+        analysis
+            .passages()
+            .iter()
+            .map(|passage| passage.text.as_str())
+            .collect::<String>(),
+        analysis.restored_transcript().text()
     );
     Ok(())
 }

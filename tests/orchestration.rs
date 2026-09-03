@@ -2,9 +2,9 @@ use std::{error::Error, time::Duration};
 
 use beyond_slides::{
     ChatCompletionsClient, ChatCompletionsConfig, LectureAnalysisConfig,
-    LectureAnalysisConfigError, LectureAnalysisError, LectureAnalysisSession, SearchError, Slide,
-    SlideDeck, SlideId, SlideScore, SlideScorer, Transcript, TranscriptSegment,
-    TranscriptSegmentId, ValidatedSources, WindowingConfig,
+    LectureAnalysisConfigError, LectureAnalysisError, LectureAnalysisSession, RestoredTranscript,
+    RestoredTranscriptSpan, SearchError, Slide, SlideDeck, SlideId, SlideScore, SlideScorer,
+    Transcript, TranscriptSegment, TranscriptSegmentId, ValidatedSources, WindowingConfig,
 };
 use serde_json::{Value, json};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate, matchers::any};
@@ -34,8 +34,13 @@ async fn lecture_analysis_runs_a_canary_then_assembles_every_window() -> Result<
     })
     .await;
     let client = client(&api)?;
-    let mut session =
-        LectureAnalysisSession::prepare(&client, sources()?, &FixedScorer, config(2)?)?;
+    let mut session = LectureAnalysisSession::prepare(
+        &client,
+        sources()?,
+        restored_transcript(),
+        &FixedScorer,
+        config(2)?,
+    )?;
     assert!(
         api.received_requests()
             .await
@@ -47,7 +52,10 @@ async fn lecture_analysis_runs_a_canary_then_assembles_every_window() -> Result<
         .analyze_canary()
         .await?
         .expect("the nonempty transcript has a canary");
-    assert_eq!(canary.analysis.passages[0].start, TranscriptSegmentId(0));
+    assert_eq!(
+        canary.analysis.passages[0].source_start,
+        TranscriptSegmentId(0)
+    );
     assert_eq!(canary.diagnostics.prompt_tokens, Some(10));
     assert!(session.analyze_canary().await?.is_some());
 
@@ -56,7 +64,7 @@ async fn lecture_analysis_runs_a_canary_then_assembles_every_window() -> Result<
         .await
         .expect("mock request recording is enabled");
     assert_eq!(canary_requests.len(), 1);
-    assert_eq!(window_number(&canary_requests[0]), 1);
+    assert_eq!(owned_text(&canary_requests[0]), "甲乙");
 
     let result = session.complete_analysis().await?;
 
@@ -70,7 +78,7 @@ async fn lecture_analysis_runs_a_canary_then_assembles_every_window() -> Result<
             .analysis()
             .passages()
             .iter()
-            .map(|passage| (passage.start, passage.end))
+            .map(|passage| (passage.source_start, passage.source_end))
             .collect::<Vec<_>>(),
         vec![
             (TranscriptSegmentId(0), TranscriptSegmentId(0)),
@@ -84,7 +92,7 @@ async fn lecture_analysis_runs_a_canary_then_assembles_every_window() -> Result<
         .await
         .expect("mock request recording is enabled");
     assert_eq!(requests.len(), 3);
-    assert_eq!(window_number(&requests[0]), 1);
+    assert_eq!(owned_text(&requests[0]), "甲乙");
     Ok(())
 }
 
@@ -95,8 +103,13 @@ async fn an_invalid_canary_prevents_later_window_requests() -> Result<(), Box<dy
     })
     .await;
     let client = client(&api)?;
-    let mut session =
-        LectureAnalysisSession::prepare(&client, sources()?, &FixedScorer, config(2)?)?;
+    let mut session = LectureAnalysisSession::prepare(
+        &client,
+        sources()?,
+        restored_transcript(),
+        &FixedScorer,
+        config(2)?,
+    )?;
 
     let error = session
         .analyze_canary()
@@ -105,14 +118,17 @@ async fn an_invalid_canary_prevents_later_window_requests() -> Result<(), Box<dy
 
     assert!(matches!(
         error,
-        LectureAnalysisError::WindowAnnotation { window: 1, .. }
+        LectureAnalysisError::WindowAnnotation {
+            window_index: 0,
+            ..
+        }
     ));
     let requests = api
         .received_requests()
         .await
         .expect("mock request recording is enabled");
     assert_eq!(requests.len(), 3);
-    assert!(requests.iter().all(|request| window_number(request) == 1));
+    assert!(requests.iter().all(|request| owned_text(request) == "甲乙"));
     Ok(())
 }
 
@@ -123,7 +139,13 @@ async fn lecture_analysis_cannot_complete_before_the_canary() -> Result<(), Box<
     })
     .await;
     let client = client(&api)?;
-    let session = LectureAnalysisSession::prepare(&client, sources()?, &FixedScorer, config(2)?)?;
+    let session = LectureAnalysisSession::prepare(
+        &client,
+        sources()?,
+        restored_transcript(),
+        &FixedScorer,
+        config(2)?,
+    )?;
 
     let error = session
         .complete_analysis()
@@ -146,18 +168,23 @@ async fn lecture_analysis_reports_new_windows_in_completion_order() -> Result<()
     })
     .await;
     let client = client(&api)?;
-    let mut session =
-        LectureAnalysisSession::prepare(&client, sources()?, &FixedScorer, config(2)?)?;
+    let mut session = LectureAnalysisSession::prepare(
+        &client,
+        sources()?,
+        restored_transcript(),
+        &FixedScorer,
+        config(2)?,
+    )?;
     session.analyze_canary().await?;
 
     let mut progress = Vec::new();
     session
         .complete_analysis_with_progress(|event| {
             progress.push((
-                event.window_number,
+                event.window_index,
                 event.completed_windows,
                 event.total_windows,
-                event.result.analysis.passages[0].start,
+                event.result.analysis.passages[0].source_start,
             ));
             Ok(())
         })
@@ -166,8 +193,8 @@ async fn lecture_analysis_reports_new_windows_in_completion_order() -> Result<()
     assert_eq!(
         progress,
         vec![
-            (3, 2, 3, TranscriptSegmentId(2)),
-            (2, 3, 3, TranscriptSegmentId(1)),
+            (2, 2, 3, TranscriptSegmentId(2)),
+            (1, 3, 3, TranscriptSegmentId(1)),
         ]
     );
     Ok(())
@@ -180,8 +207,13 @@ async fn restored_canary_is_validated_and_not_sent_again() -> Result<(), Box<dyn
     })
     .await;
     let client = client(&api)?;
-    let mut initial =
-        LectureAnalysisSession::prepare(&client, sources()?, &FixedScorer, config(2)?)?;
+    let mut initial = LectureAnalysisSession::prepare(
+        &client,
+        sources()?,
+        restored_transcript(),
+        &FixedScorer,
+        config(2)?,
+    )?;
     let canary = initial
         .analyze_canary()
         .await?
@@ -189,9 +221,14 @@ async fn restored_canary_is_validated_and_not_sent_again() -> Result<(), Box<dyn
         .clone();
 
     let mut invalid = canary.clone();
-    invalid.analysis.passages[0].start = TranscriptSegmentId(1);
-    let mut invalid_resume =
-        LectureAnalysisSession::prepare(&client, sources()?, &FixedScorer, config(2)?)?;
+    invalid.analysis.passages[0].source_start = TranscriptSegmentId(1);
+    let mut invalid_resume = LectureAnalysisSession::prepare(
+        &client,
+        sources()?,
+        restored_transcript(),
+        &FixedScorer,
+        config(2)?,
+    )?;
     let error = invalid_resume
         .restore_window_result(0, invalid)
         .expect_err("a checkpoint must still partition its original owned region");
@@ -200,8 +237,13 @@ async fn restored_canary_is_validated_and_not_sent_again() -> Result<(), Box<dyn
         LectureAnalysisError::InvalidRestoredWindow { index: 0, .. }
     ));
 
-    let mut resumed =
-        LectureAnalysisSession::prepare(&client, sources()?, &FixedScorer, config(2)?)?;
+    let mut resumed = LectureAnalysisSession::prepare(
+        &client,
+        sources()?,
+        restored_transcript(),
+        &FixedScorer,
+        config(2)?,
+    )?;
     assert_eq!(resumed.window_count(), 3);
     assert_eq!(resumed.completed_window_count(), 0);
     resumed.restore_window_result(0, canary)?;
@@ -215,10 +257,10 @@ async fn restored_canary_is_validated_and_not_sent_again() -> Result<(), Box<dyn
         .await
         .expect("mock request recording is enabled");
     assert_eq!(requests.len(), 3);
-    assert_eq!(window_number(&requests[0]), 1);
-    let mut resumed_windows = requests[1..].iter().map(window_number).collect::<Vec<_>>();
+    assert_eq!(owned_text(&requests[0]), "甲乙");
+    let mut resumed_windows = requests[1..].iter().map(owned_text).collect::<Vec<_>>();
     resumed_windows.sort_unstable();
-    assert_eq!(resumed_windows, vec![2, 3]);
+    assert_eq!(resumed_windows, vec!["丙丁", "戊己"]);
     Ok(())
 }
 
@@ -274,6 +316,24 @@ fn sources() -> Result<ValidatedSources, Box<dyn Error>> {
     )?)
 }
 
+fn restored_transcript() -> RestoredTranscript {
+    RestoredTranscript {
+        spans: vec![
+            restored_span(0, "甲乙"),
+            restored_span(1, "丙丁"),
+            restored_span(2, "戊己"),
+        ],
+    }
+}
+
+fn restored_span(source: u32, text: &str) -> RestoredTranscriptSpan {
+    RestoredTranscriptSpan::Text {
+        source_start: TranscriptSegmentId(source),
+        source_end: TranscriptSegmentId(source),
+        text: text.into(),
+    }
+}
+
 fn segment(id: u32, start_ms: u64, end_ms: u64, text: &str) -> TranscriptSegment {
     TranscriptSegment {
         id: TranscriptSegmentId(id),
@@ -308,29 +368,21 @@ impl Respond for WindowAnalysisResponder {
             .and_then(|message| message["content"].as_str())
             .expect("request contains user input");
         let task: Value = serde_json::from_str(input).expect("user input is task JSON");
-        let window_number = task["window_number"]
-            .as_u64()
-            .expect("window number is an integer");
-        let owned_region = task["owned_region"]
-            .as_array()
-            .expect("owned region is an array");
-        let start = owned_region
-            .first()
-            .and_then(|segment| segment["id"].as_u64())
-            .expect("owned region has a first segment");
-        let end = owned_region
-            .last()
-            .and_then(|segment| segment["id"].as_u64())
-            .expect("owned region has a last segment");
-        let related_slide = if self.reject_canary && window_number == 1 {
+        let owned_text = task["owned_text"].as_str().expect("owned text is a string");
+        let window_index = match owned_text {
+            "甲乙" => 0,
+            "丙丁" => 1,
+            "戊己" => 2,
+            other => panic!("unexpected owned text {other:?}"),
+        };
+        let related_slide = if self.reject_canary && window_index == 0 {
             99
         } else {
             0
         };
         let content = json!({
             "passages": [{
-                "start": start,
-                "end": end,
+                "text": owned_text,
                 "novelty": 2,
                 "connection_strength": 1,
                 "importance": 3,
@@ -340,7 +392,7 @@ impl Respond for WindowAnalysisResponder {
         .to_string();
 
         let response = ResponseTemplate::new(200).set_body_json(json!({
-            "id": format!("chat-{window_number}"),
+            "id": format!("chat-{window_index}"),
             "choices": [{
                 "finish_reason": "stop",
                 "message": {
@@ -353,7 +405,7 @@ impl Respond for WindowAnalysisResponder {
                 "completion_tokens": 5
             }
         }));
-        if !self.reject_canary && window_number == 2 {
+        if !self.reject_canary && window_index == 1 {
             response.set_delay(Duration::from_millis(50))
         } else {
             response
@@ -361,7 +413,7 @@ impl Respond for WindowAnalysisResponder {
     }
 }
 
-fn window_number(request: &Request) -> u64 {
+fn owned_text(request: &Request) -> String {
     let request_body: Value = request.body_json().expect("request body is valid JSON");
     let input = request_body["messages"]
         .as_array()
@@ -370,7 +422,9 @@ fn window_number(request: &Request) -> u64 {
         .find(|message| message["role"] == "user")
         .and_then(|message| message["content"].as_str())
         .expect("request contains user input");
-    serde_json::from_str::<Value>(input).expect("user input is task JSON")["window_number"]
-        .as_u64()
-        .expect("window number is an integer")
+    let task: Value = serde_json::from_str(input).expect("user input is task JSON");
+    task["owned_text"]
+        .as_str()
+        .expect("owned text is a string")
+        .to_owned()
 }

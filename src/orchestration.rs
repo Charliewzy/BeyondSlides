@@ -3,11 +3,12 @@ use std::{error::Error, fmt, num::NonZeroUsize};
 use futures::{StreamExt, TryStreamExt, stream};
 
 use crate::{
-    AnalysisAssemblyError, AnnotationDiagnostics, AnnotationResult, AnnotationTaskError,
-    ChatCompletionsClient, ChatCompletionsError, SearchError, SlideAlignmentError, SlideId,
-    SlideScorer, TranscriptWindow, TranscriptWindowAnalysis, ValidatedAnalysis, ValidatedSources,
-    WindowingConfig, assemble_window_analyses, build_annotation_tasks, build_windows,
-    infer_slide_positions, validate_window_analysis,
+    AnnotationDiagnostics, ChatCompletionsClient, ChatCompletionsError,
+    PassageProjectionDiagnostics, RestoredAnalysisAssemblyError, RestoredAnnotationError,
+    RestoredAnnotationResult, RestoredTranscript, RestoredWindowingError, SearchError,
+    SlideAlignmentError, SlideId, SlideScorer, ValidatedRestoredAnalysis, ValidatedSources,
+    WindowingConfig, assemble_restored_window_analyses, build_restored_annotation_tasks,
+    build_restored_windows, infer_slide_positions, validate_restored_window_analysis,
 };
 
 pub type LectureAnalysisProgressError = Box<dyn Error + Send + Sync>;
@@ -61,21 +62,22 @@ impl Error for LectureAnalysisConfigError {}
 /// though non-canary windows may complete out of order.
 #[derive(Debug)]
 pub struct LectureAnalysisResult {
-    analysis: ValidatedAnalysis,
+    analysis: ValidatedRestoredAnalysis,
     slide_positions: Vec<SlideId>,
     window_diagnostics: Vec<AnnotationDiagnostics>,
+    window_projections: Vec<PassageProjectionDiagnostics>,
 }
 
 /// One newly completed transcript window and the overall run progress.
 pub struct LectureAnalysisProgress<'a> {
-    pub window_number: usize,
+    pub window_index: usize,
     pub completed_windows: usize,
     pub total_windows: usize,
-    pub result: &'a AnnotationResult,
+    pub result: &'a RestoredAnnotationResult,
 }
 
 impl LectureAnalysisResult {
-    pub fn analysis(&self) -> &ValidatedAnalysis {
+    pub fn analysis(&self) -> &ValidatedRestoredAnalysis {
         &self.analysis
     }
 
@@ -87,7 +89,11 @@ impl LectureAnalysisResult {
         &self.window_diagnostics
     }
 
-    pub fn into_analysis(self) -> ValidatedAnalysis {
+    pub fn window_projections(&self) -> &[PassageProjectionDiagnostics] {
+        &self.window_projections
+    }
+
+    pub fn into_analysis(self) -> ValidatedRestoredAnalysis {
         self.analysis
     }
 }
@@ -102,9 +108,10 @@ pub struct LectureAnalysisSession<'a> {
     client: &'a ChatCompletionsClient,
     scorer: &'a dyn SlideScorer,
     sources: ValidatedSources,
+    restored_transcript: RestoredTranscript,
     config: LectureAnalysisConfig,
     slide_positions: Vec<SlideId>,
-    window_results: Vec<Option<AnnotationResult>>,
+    window_results: Vec<Option<RestoredAnnotationResult>>,
 }
 
 impl<'a> LectureAnalysisSession<'a> {
@@ -112,25 +119,27 @@ impl<'a> LectureAnalysisSession<'a> {
     pub fn prepare(
         client: &'a ChatCompletionsClient,
         sources: ValidatedSources,
+        restored_transcript: RestoredTranscript,
         scorer: &'a dyn SlideScorer,
         config: LectureAnalysisConfig,
     ) -> Result<Self, LectureAnalysisError> {
-        let windows = build_windows(&sources, config.windowing);
+        let windows = build_restored_windows(&sources, &restored_transcript, config.windowing)
+            .map_err(LectureAnalysisError::Windowing)?;
         let score_rows = windows
             .iter()
             .enumerate()
             .map(|(position, window)| {
-                scorer
-                    .score_slides(&window_query(window))
-                    .map_err(|source| LectureAnalysisError::Scoring {
-                        window: position + 1,
+                scorer.score_slides(&window.owned_text()).map_err(|source| {
+                    LectureAnalysisError::Scoring {
+                        window_index: position,
                         source,
-                    })
+                    }
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
         let slide_positions =
             infer_slide_positions(&score_rows).map_err(LectureAnalysisError::Alignment)?;
-        let tasks = build_annotation_tasks(&sources, &windows, &slide_positions)
+        let tasks = build_restored_annotation_tasks(&sources, &windows, &slide_positions)
             .map_err(LectureAnalysisError::TaskConstruction)?;
         let window_results = vec![None; tasks.len()];
 
@@ -138,6 +147,7 @@ impl<'a> LectureAnalysisSession<'a> {
             client,
             scorer,
             sources,
+            restored_transcript,
             config,
             slide_positions,
             window_results,
@@ -158,7 +168,7 @@ impl<'a> LectureAnalysisSession<'a> {
     pub fn restore_window_result(
         &mut self,
         window_index: usize,
-        result: AnnotationResult,
+        result: RestoredAnnotationResult,
     ) -> Result<(), LectureAnalysisError> {
         let Some(stored_result) = self.window_results.get(window_index) else {
             return Err(LectureAnalysisError::UnknownWindowIndex {
@@ -172,15 +182,19 @@ impl<'a> LectureAnalysisSession<'a> {
             });
         }
 
-        let windows = build_windows(&self.sources, self.config.windowing);
-        let tasks = build_annotation_tasks(&self.sources, &windows, &self.slide_positions)
+        let windows = build_restored_windows(
+            &self.sources,
+            &self.restored_transcript,
+            self.config.windowing,
+        )
+        .map_err(LectureAnalysisError::Windowing)?;
+        let tasks = build_restored_annotation_tasks(&self.sources, &windows, &self.slide_positions)
             .map_err(LectureAnalysisError::TaskConstruction)?;
-        validate_window_analysis(&self.sources, &tasks[window_index], &result.analysis).map_err(
-            |source| LectureAnalysisError::InvalidRestoredWindow {
+        validate_restored_window_analysis(&self.sources, &tasks[window_index], &result.analysis)
+            .map_err(|source| LectureAnalysisError::InvalidRestoredWindow {
                 index: window_index,
                 source,
-            },
-        )?;
+            })?;
         self.window_results[window_index] = Some(result);
         Ok(())
     }
@@ -191,24 +205,30 @@ impl<'a> LectureAnalysisSession<'a> {
     /// first window again. An empty transcript has no canary and returns `None`.
     pub async fn analyze_canary(
         &mut self,
-    ) -> Result<Option<&AnnotationResult>, LectureAnalysisError> {
+    ) -> Result<Option<&RestoredAnnotationResult>, LectureAnalysisError> {
         let Some(canary_result) = self.window_results.first() else {
             return Ok(None);
         };
         if canary_result.is_none() {
             let result = {
-                let windows = build_windows(&self.sources, self.config.windowing);
-                let tasks = build_annotation_tasks(&self.sources, &windows, &self.slide_positions)
-                    .map_err(LectureAnalysisError::TaskConstruction)?;
+                let windows = build_restored_windows(
+                    &self.sources,
+                    &self.restored_transcript,
+                    self.config.windowing,
+                )
+                .map_err(LectureAnalysisError::Windowing)?;
+                let tasks =
+                    build_restored_annotation_tasks(&self.sources, &windows, &self.slide_positions)
+                        .map_err(LectureAnalysisError::TaskConstruction)?;
                 let Some(canary) = tasks.first() else {
                     return Ok(None);
                 };
 
                 self.client
-                    .annotate_window(&self.sources, self.scorer, canary)
+                    .annotate_restored_window(&self.sources, self.scorer, canary)
                     .await
                     .map_err(|source| LectureAnalysisError::WindowAnnotation {
-                        window: canary.window_number,
+                        window_index: canary.window_index(),
                         source,
                     })?
             };
@@ -236,12 +256,14 @@ impl<'a> LectureAnalysisSession<'a> {
             client,
             scorer,
             sources,
+            restored_transcript,
             config,
             slide_positions,
             window_results: stored_results,
         } = self;
-        let windows = build_windows(&sources, config.windowing);
-        let tasks = build_annotation_tasks(&sources, &windows, &slide_positions)
+        let windows = build_restored_windows(&sources, &restored_transcript, config.windowing)
+            .map_err(LectureAnalysisError::Windowing)?;
+        let tasks = build_restored_annotation_tasks(&sources, &windows, &slide_positions)
             .map_err(LectureAnalysisError::TaskConstruction)?;
 
         let mut window_results = Vec::with_capacity(tasks.len());
@@ -249,8 +271,8 @@ impl<'a> LectureAnalysisSession<'a> {
         let mut completed_windows = stored_results.iter().flatten().count();
         for (task, result) in tasks.iter().copied().zip(stored_results) {
             if let Some(result) = result {
-                window_results.push((task.window_number, result));
-            } else if task.window_number == 1 {
+                window_results.push((task.window_index(), result));
+            } else if task.window_index() == 0 {
                 return Err(LectureAnalysisError::CanaryNotAnalyzed);
             } else {
                 pending_tasks.push(task);
@@ -262,67 +284,70 @@ impl<'a> LectureAnalysisSession<'a> {
             let remaining_results = stream::iter(pending_tasks)
                 .map(move |task| async move {
                     client
-                        .annotate_window(sources_ref, scorer, &task)
+                        .annotate_restored_window(sources_ref, scorer, &task)
                         .await
-                        .map(|result| (task.window_number, result))
+                        .map(|result| (task.window_index(), result))
                         .map_err(|source| LectureAnalysisError::WindowAnnotation {
-                            window: task.window_number,
+                            window_index: task.window_index(),
                             source,
                         })
                 })
                 .buffer_unordered(config.max_concurrent_windows.get());
             futures::pin_mut!(remaining_results);
-            while let Some((window_number, result)) = remaining_results.try_next().await? {
+            while let Some((window_index, result)) = remaining_results.try_next().await? {
                 completed_windows += 1;
                 report_progress(LectureAnalysisProgress {
-                    window_number,
+                    window_index,
                     completed_windows,
                     total_windows: tasks.len(),
                     result: &result,
                 })
                 .map_err(LectureAnalysisError::Progress)?;
-                window_results.push((window_number, result));
+                window_results.push((window_index, result));
             }
         }
 
-        window_results.sort_unstable_by_key(|(window, _)| *window);
-        let (window_analyses, window_diagnostics) = window_results
-            .into_iter()
-            .map(|(_, result)| (result.analysis, result.diagnostics))
-            .unzip::<_, _, Vec<TranscriptWindowAnalysis>, Vec<AnnotationDiagnostics>>();
+        window_results.sort_unstable_by_key(|(window_index, _)| *window_index);
+        let mut window_analyses = Vec::with_capacity(window_results.len());
+        let mut window_diagnostics = Vec::with_capacity(window_results.len());
+        let mut window_projections = Vec::with_capacity(window_results.len());
+        for (_, result) in window_results {
+            window_analyses.push(result.analysis);
+            window_diagnostics.push(result.diagnostics);
+            window_projections.push(result.projection);
+        }
 
         drop(tasks);
         drop(windows);
-        let analysis = assemble_window_analyses(sources, config.windowing, window_analyses)
-            .map_err(LectureAnalysisError::Assembly)?;
+        let analysis = assemble_restored_window_analyses(
+            sources,
+            restored_transcript,
+            config.windowing,
+            &slide_positions,
+            window_analyses,
+        )
+        .map_err(LectureAnalysisError::Assembly)?;
 
         Ok(LectureAnalysisResult {
             analysis,
             slide_positions,
             window_diagnostics,
+            window_projections,
         })
     }
 }
 
-fn window_query(window: &TranscriptWindow<'_>) -> String {
-    window
-        .owned_region()
-        .iter()
-        .map(|segment| segment.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 #[derive(Debug)]
 pub enum LectureAnalysisError {
+    Windowing(RestoredWindowingError),
     Scoring {
-        window: usize,
+        window_index: usize,
         source: SearchError,
     },
     Alignment(SlideAlignmentError),
-    TaskConstruction(AnnotationTaskError),
+    TaskConstruction(RestoredAnnotationError),
     WindowAnnotation {
-        window: usize,
+        window_index: usize,
         source: ChatCompletionsError,
     },
     UnknownWindowIndex {
@@ -334,48 +359,55 @@ pub enum LectureAnalysisError {
     },
     InvalidRestoredWindow {
         index: usize,
-        source: AnalysisAssemblyError,
+        source: RestoredAnnotationError,
     },
     CanaryNotAnalyzed,
     Progress(LectureAnalysisProgressError),
-    Assembly(AnalysisAssemblyError),
+    Assembly(RestoredAnalysisAssemblyError),
 }
 
 impl fmt::Display for LectureAnalysisError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Scoring { window, source } => {
+            Self::Windowing(error) => write!(formatter, "could not window restored text: {error}"),
+            Self::Scoring {
+                window_index,
+                source,
+            } => {
                 write!(
                     formatter,
-                    "could not score slides for transcript window {window}: {source}"
+                    "could not score slides for restored transcript window at index {window_index}: {source}"
                 )
             }
             Self::Alignment(error) => write!(formatter, "could not infer slide positions: {error}"),
             Self::TaskConstruction(error) => {
                 write!(formatter, "could not build annotation tasks: {error}")
             }
-            Self::WindowAnnotation { window, source } => {
+            Self::WindowAnnotation {
+                window_index,
+                source,
+            } => {
                 write!(
                     formatter,
-                    "could not annotate transcript window {window}: {source}"
+                    "could not annotate restored transcript window at index {window_index}: {source}"
                 )
             }
             Self::UnknownWindowIndex { index, count } => {
                 write!(
                     formatter,
-                    "transcript window index {index} does not exist; the lecture has {count} windows"
+                    "restored transcript window index {index} does not exist; the lecture has {count} windows"
                 )
             }
             Self::WindowAlreadyCompleted { index } => {
                 write!(
                     formatter,
-                    "transcript window index {index} already has a result"
+                    "restored transcript window index {index} already has a result"
                 )
             }
             Self::InvalidRestoredWindow { index, source } => {
                 write!(
                     formatter,
-                    "persisted result for transcript window index {index} is invalid: {source}"
+                    "persisted result for restored transcript window index {index} is invalid: {source}"
                 )
             }
             Self::CanaryNotAnalyzed => {
@@ -390,7 +422,7 @@ impl fmt::Display for LectureAnalysisError {
             Self::Assembly(error) => {
                 write!(
                     formatter,
-                    "could not assemble transcript-window analyses: {error}"
+                    "could not assemble restored-transcript-window analyses: {error}"
                 )
             }
         }
@@ -400,6 +432,7 @@ impl fmt::Display for LectureAnalysisError {
 impl Error for LectureAnalysisError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Windowing(error) => Some(error),
             Self::Scoring { source, .. } => Some(source),
             Self::Alignment(error) => Some(error),
             Self::TaskConstruction(error) => Some(error),

@@ -259,6 +259,9 @@ pub fn build_restored_windows<'a>(
     validate_restored_transcript(sources, restored_transcript)?;
 
     let spans = &restored_transcript.spans;
+    if spans.iter().all(|span| restored_span_text(span).is_none()) {
+        return Ok(Vec::new());
+    }
     let segments = &sources.transcript().segments;
     let mut windows = Vec::new();
     let mut owned_start = 0;

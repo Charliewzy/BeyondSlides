@@ -115,6 +115,23 @@ fn leading_omissions_stay_with_the_first_readable_span_even_when_it_is_oversized
 }
 
 #[test]
+fn an_all_disfluency_transcript_has_no_annotation_windows() -> Result<(), Box<dyn Error>> {
+    let sources = sources(3);
+    let restored = RestoredTranscript {
+        spans: vec![omitted_span(0, 0), omitted_span(1, 2)],
+    };
+
+    let windows = build_restored_windows(
+        &sources,
+        &restored,
+        WindowingConfig::new(100, Duration::from_secs(60), 0)?,
+    )?;
+
+    assert!(windows.is_empty());
+    Ok(())
+}
+
+#[test]
 fn invalid_restored_provenance_is_rejected_before_windowing() {
     let sources = sources(3);
     let restored = RestoredTranscript {

@@ -264,6 +264,38 @@ async fn restored_canary_is_validated_and_not_sent_again() -> Result<(), Box<dyn
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn an_all_disfluency_restoration_completes_without_model_requests()
+-> Result<(), Box<dyn Error>> {
+    let api = mock_api(WindowAnalysisResponder {
+        reject_canary: false,
+    })
+    .await;
+    let client = client(&api)?;
+    let restored = RestoredTranscript {
+        spans: vec![RestoredTranscriptSpan::OmittedDisfluency {
+            source_start: TranscriptSegmentId(0),
+            source_end: TranscriptSegmentId(2),
+        }],
+    };
+    let mut session =
+        LectureAnalysisSession::prepare(&client, sources()?, restored, &FixedScorer, config(2)?)?;
+
+    assert_eq!(session.window_count(), 0);
+    assert!(session.analyze_canary().await?.is_none());
+    let result = session.complete_analysis().await?;
+
+    assert!(result.analysis().passages().is_empty());
+    assert!(result.window_diagnostics().is_empty());
+    assert!(
+        api.received_requests()
+            .await
+            .expect("mock request recording is enabled")
+            .is_empty()
+    );
+    Ok(())
+}
+
 #[test]
 fn lecture_analysis_requires_nonzero_concurrency() -> Result<(), Box<dyn Error>> {
     let error = LectureAnalysisConfig::new(windowing()?, 0)

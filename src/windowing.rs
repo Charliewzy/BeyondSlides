@@ -1,6 +1,9 @@
 use std::{error::Error, fmt, num::NonZeroUsize, time::Duration};
 
-use crate::{TranscriptSegment, TranscriptSegmentId, ValidatedSources};
+use crate::{
+    RestoredTranscript, RestoredTranscriptSpan, TranscriptSegment, TranscriptSegmentId,
+    ValidatedSources,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowingConfig {
@@ -71,6 +74,37 @@ impl<'a> TranscriptWindow<'a> {
 
     pub fn right_context(&self) -> &'a [TranscriptSegment] {
         self.right_context
+    }
+}
+
+/// One annotation view over complete restored transcript spans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RestoredTranscriptWindow<'a> {
+    left_context: &'a [RestoredTranscriptSpan],
+    owned_region: &'a [RestoredTranscriptSpan],
+    right_context: &'a [RestoredTranscriptSpan],
+}
+
+impl<'a> RestoredTranscriptWindow<'a> {
+    pub fn left_context(&self) -> &'a [RestoredTranscriptSpan] {
+        self.left_context
+    }
+
+    pub fn owned_region(&self) -> &'a [RestoredTranscriptSpan] {
+        self.owned_region
+    }
+
+    pub fn right_context(&self) -> &'a [RestoredTranscriptSpan] {
+        self.right_context
+    }
+
+    /// Concatenates readable owned text while retaining omission provenance in
+    /// `owned_region` for callers that need it.
+    pub fn owned_text(&self) -> String {
+        self.owned_region
+            .iter()
+            .filter_map(restored_span_text)
+            .collect()
     }
 }
 
@@ -211,3 +245,234 @@ pub fn build_windows(
 
     windows
 }
+
+/// Builds annotation windows without splitting restored transcript spans.
+///
+/// Character budgets count only readable restored text. Omitted disfluencies
+/// remain in an adjacent owned region so the window sequence still preserves
+/// complete transcript-segment provenance.
+pub fn build_restored_windows<'a>(
+    sources: &ValidatedSources,
+    restored_transcript: &'a RestoredTranscript,
+    config: WindowingConfig,
+) -> Result<Vec<RestoredTranscriptWindow<'a>>, RestoredWindowingError> {
+    validate_restored_transcript(sources, restored_transcript)?;
+
+    let spans = &restored_transcript.spans;
+    let segments = &sources.transcript().segments;
+    let mut windows = Vec::new();
+    let mut owned_start = 0;
+
+    while owned_start < spans.len() {
+        let first_source = spans[owned_start].source_start().index();
+        let mut owned_end = owned_start;
+        let mut character_count = 0_usize;
+        let mut contains_text = false;
+        while let Some(span) = spans.get(owned_end) {
+            let span_text = restored_span_text(span);
+            let next_character_count =
+                character_count.saturating_add(span_text.map_or(0, |text| text.chars().count()));
+            let next_duration = Duration::from_millis(
+                segments[span.source_end().index()]
+                    .end_ms
+                    .saturating_sub(segments[first_source].start_ms),
+            );
+            let exceeds_budget = next_character_count > config.max_owned_characters.get()
+                || next_duration > config.max_owned_duration;
+            if span_text.is_some() && contains_text && exceeds_budget {
+                break;
+            }
+            character_count = next_character_count;
+            contains_text |= span_text.is_some();
+            owned_end += 1;
+        }
+
+        let mut visible_start = owned_start;
+        let mut left_context_characters = 0_usize;
+        while visible_start > 0 {
+            let next_character_count = left_context_characters.saturating_add(
+                restored_span_text(&spans[visible_start - 1])
+                    .map_or(0, |text| text.chars().count()),
+            );
+            if next_character_count > config.context_characters {
+                break;
+            }
+            left_context_characters = next_character_count;
+            visible_start -= 1;
+        }
+
+        let mut visible_end = owned_end;
+        let mut right_context_characters = 0_usize;
+        while let Some(span) = spans.get(visible_end) {
+            let next_character_count = right_context_characters
+                .saturating_add(restored_span_text(span).map_or(0, |text| text.chars().count()));
+            if next_character_count > config.context_characters {
+                break;
+            }
+            right_context_characters = next_character_count;
+            visible_end += 1;
+        }
+
+        windows.push(RestoredTranscriptWindow {
+            left_context: &spans[visible_start..owned_start],
+            owned_region: &spans[owned_start..owned_end],
+            right_context: &spans[owned_end..visible_end],
+        });
+        owned_start = owned_end;
+    }
+
+    Ok(windows)
+}
+
+fn restored_span_text(span: &RestoredTranscriptSpan) -> Option<&str> {
+    match span {
+        RestoredTranscriptSpan::Text { text, .. } => Some(text),
+        RestoredTranscriptSpan::OmittedDisfluency { .. } => None,
+    }
+}
+
+fn validate_restored_transcript(
+    sources: &ValidatedSources,
+    restored_transcript: &RestoredTranscript,
+) -> Result<(), RestoredWindowingError> {
+    let segments = &sources.transcript().segments;
+    let mut next_source = 0;
+
+    for (span_index, span) in restored_transcript.spans.iter().enumerate() {
+        let source_start = span.source_start();
+        let source_end = span.source_end();
+        if source_end.index() < source_start.index() {
+            return Err(RestoredWindowingError::SpanEndBeforeStart {
+                span_index,
+                source_start,
+                source_end,
+            });
+        }
+        if source_start.index() >= segments.len() || source_end.index() >= segments.len() {
+            return Err(RestoredWindowingError::SpanOutsideTranscript {
+                span_index,
+                source_start,
+                source_end,
+                segment_count: segments.len(),
+            });
+        }
+        let Some(expected) = segments.get(next_source) else {
+            return Err(RestoredWindowingError::UnexpectedSpan {
+                span_index,
+                source_start,
+            });
+        };
+        if source_start != expected.id {
+            return Err(RestoredWindowingError::CoverageMismatch {
+                span_index,
+                expected: expected.id,
+                actual: source_start,
+            });
+        }
+        if let Some(text) = restored_span_text(span)
+            && text.trim().is_empty()
+        {
+            return Err(RestoredWindowingError::EmptyText {
+                span_index,
+                source_start,
+            });
+        }
+        next_source = source_end.index() + 1;
+    }
+
+    if let Some(expected) = segments.get(next_source) {
+        return Err(RestoredWindowingError::UncoveredTranscriptTail {
+            expected: expected.id,
+        });
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestoredWindowingError {
+    SpanEndBeforeStart {
+        span_index: usize,
+        source_start: TranscriptSegmentId,
+        source_end: TranscriptSegmentId,
+    },
+    SpanOutsideTranscript {
+        span_index: usize,
+        source_start: TranscriptSegmentId,
+        source_end: TranscriptSegmentId,
+        segment_count: usize,
+    },
+    CoverageMismatch {
+        span_index: usize,
+        expected: TranscriptSegmentId,
+        actual: TranscriptSegmentId,
+    },
+    UnexpectedSpan {
+        span_index: usize,
+        source_start: TranscriptSegmentId,
+    },
+    UncoveredTranscriptTail {
+        expected: TranscriptSegmentId,
+    },
+    EmptyText {
+        span_index: usize,
+        source_start: TranscriptSegmentId,
+    },
+}
+
+impl fmt::Display for RestoredWindowingError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SpanEndBeforeStart {
+                span_index,
+                source_start,
+                source_end,
+            } => write!(
+                formatter,
+                "restored transcript span {span_index} ends at source segment {} before it starts at {}",
+                source_end.0, source_start.0
+            ),
+            Self::SpanOutsideTranscript {
+                span_index,
+                source_start,
+                source_end,
+                segment_count,
+            } => write!(
+                formatter,
+                "restored transcript span {span_index} covers source segments {} through {}, outside a transcript containing {segment_count} segments",
+                source_start.0, source_end.0
+            ),
+            Self::CoverageMismatch {
+                span_index,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "restored transcript span {span_index} should begin at source segment {} but begins at {}",
+                expected.0, actual.0
+            ),
+            Self::UnexpectedSpan {
+                span_index,
+                source_start,
+            } => write!(
+                formatter,
+                "restored transcript span {span_index} unexpectedly begins at source segment {} after the transcript is already covered",
+                source_start.0
+            ),
+            Self::UncoveredTranscriptTail { expected } => write!(
+                formatter,
+                "restored transcript leaves source segment {} and the remaining transcript tail uncovered",
+                expected.0
+            ),
+            Self::EmptyText {
+                span_index,
+                source_start,
+            } => write!(
+                formatter,
+                "restored transcript span {span_index} starting at source segment {} has empty text",
+                source_start.0
+            ),
+        }
+    }
+}
+
+impl Error for RestoredWindowingError {}

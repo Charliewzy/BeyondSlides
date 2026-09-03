@@ -39,13 +39,18 @@ _Avoid_: Annotation group, segment group
 ## Windowing
 
 **Transcript window**:
-The part of a transcript visible during one analysis task, consisting of one
+The part of a transcript visible during one restoration task, consisting of one
 owned region and its optional left and right context.
 _Avoid_: Chunk, annotatable window
 
+**Restored transcript window**:
+The part of a restored transcript visible during one analysis task. Its regions
+contain complete restored transcript spans so their provenance remains intact.
+_Avoid_: Restored chunk, cleaned window
+
 **Owned region**:
-A contiguous range of transcript segments for which exactly one transcript
-window is responsible. All owned regions together partition the transcript.
+A contiguous range for which exactly one window is responsible. The owned
+regions of a window sequence together partition its transcript representation.
 _Avoid_: Owned window, annotation span
 
 ## Analysis

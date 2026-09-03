@@ -54,4 +54,7 @@ pub use retrieval::{
     DenseSlideScorer, HybridSlideScorer, LexicalSlideScorer, SearchError, SlideScore, SlideScorer,
 };
 pub use validation::{ValidatedAnalysis, ValidatedSources, ValidationError};
-pub use windowing::{TranscriptWindow, WindowingConfig, WindowingConfigError, build_windows};
+pub use windowing::{
+    RestoredTranscriptWindow, RestoredWindowingError, TranscriptWindow, WindowingConfig,
+    WindowingConfigError, build_restored_windows, build_windows,
+};

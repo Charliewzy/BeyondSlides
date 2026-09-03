@@ -6,6 +6,7 @@ pub mod evaluation;
 pub mod ingestion;
 mod model_trace;
 mod orchestration;
+mod passage_projection;
 mod ranking;
 mod report;
 mod restoration;
@@ -36,6 +37,9 @@ pub use orchestration::{
     LectureAnalysisConfig, LectureAnalysisConfigError, LectureAnalysisError,
     LectureAnalysisProgress, LectureAnalysisProgressError, LectureAnalysisResult,
     LectureAnalysisSession,
+};
+pub use passage_projection::{
+    PassageProjection, PassageProjectionError, project_passage_boundaries,
 };
 pub use ranking::rank_oral_additions;
 pub use report::render_report;

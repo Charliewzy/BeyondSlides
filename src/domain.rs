@@ -151,3 +151,17 @@ pub struct LecturePassage {
 pub struct LecturePassages {
     pub passages: Vec<LecturePassage>,
 }
+
+/// A lecture passage over authoritative restored text with raw-source provenance.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct RestoredLecturePassage {
+    pub text: String,
+    pub source_start: TranscriptSegmentId,
+    pub source_end: TranscriptSegmentId,
+    pub novelty: Score5,
+    pub connection_strength: Score5,
+    pub importance: Score5,
+    pub related_slides: Vec<SlideId>,
+    pub summary: Option<String>,
+    pub comparison_note: Option<String>,
+}

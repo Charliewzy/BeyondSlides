@@ -10,6 +10,7 @@ mod passage_projection;
 mod ranking;
 mod report;
 mod restoration;
+mod restored_annotation;
 mod retrieval;
 mod validation;
 mod windowing;
@@ -26,8 +27,9 @@ pub use chat_completions::{
     TranscriptWindowRestorationResult,
 };
 pub use domain::{
-    LecturePassage, LecturePassages, RestoredTranscript, RestoredTranscriptSpan, Score5,
-    ScoreOutOfRange, Slide, SlideDeck, SlideId, Transcript, TranscriptSegment, TranscriptSegmentId,
+    LecturePassage, LecturePassages, RestoredLecturePassage, RestoredTranscript,
+    RestoredTranscriptSpan, Score5, ScoreOutOfRange, Slide, SlideDeck, SlideId, Transcript,
+    TranscriptSegment, TranscriptSegmentId,
 };
 pub use model_trace::{
     MODEL_TRACE_FORMAT_VERSION, ModelExchangeTrace, ModelProviderError, ModelRequestKind,
@@ -49,6 +51,11 @@ pub use restoration::{
     TranscriptRestorationConfigError, TranscriptRestorationSession, TranscriptRestorationTask,
     TranscriptWindowRestoration, assemble_restored_transcript, build_restoration_tasks,
     validate_window_restoration,
+};
+pub use restored_annotation::{
+    ProposedLecturePassage, ProposedTranscriptWindowAnalysis, RestoredAnnotationError,
+    RestoredAnnotationMessage, RestoredTranscriptWindowAnalysis, RestoredTranscriptWindowTask,
+    build_restored_annotation_tasks, project_window_analysis,
 };
 pub use retrieval::{
     DenseSlideScorer, HybridSlideScorer, LexicalSlideScorer, SearchError, SlideScore, SlideScorer,

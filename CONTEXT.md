@@ -32,8 +32,9 @@ sentence or several grammatical sentences.
 _Avoid_: Restored sentence, paraphrase
 
 **Lecture passage**:
-A contiguous part of the transcript evaluated as one meaningful unit. Every
-transcript segment belongs to exactly one lecture passage after analysis.
+A contiguous part of the readable restored transcript evaluated as one
+meaningful unit. It retains the transcript-segment range supporting its text,
+even when that source range is coarser than the passage boundary.
 _Avoid_: Annotation group, segment group
 
 ## Windowing

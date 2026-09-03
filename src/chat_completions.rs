@@ -347,13 +347,13 @@ impl ChatCompletionsClient {
     where
         W: ConversationWorkflow,
     {
-        let tools_enabled = request.tools.is_some();
         let mut diagnostics = ConversationDiagnostics::default();
         let mut conversation_turn = 0;
         let mut request_kind = ModelRequestKind::Initial;
 
         loop {
             let trace_context = workflow.trace_context(conversation_turn, request_kind);
+            let tools_enabled = request.tools.is_some();
             let (response, provider_retries, exchange_id) = self
                 .chat(request.clone(), tools_enabled, trace_context)
                 .await?;
@@ -408,6 +408,9 @@ impl ChatCompletionsClient {
                 request = request
                     .append_message(tool_calls)
                     .append_message(tool_responses);
+                if diagnostics.tool_rounds == self.max_tool_rounds {
+                    request.tools = None;
+                }
                 conversation_turn += 1;
                 request_kind = ModelRequestKind::ToolFollowUp;
                 continue;

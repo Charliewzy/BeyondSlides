@@ -490,6 +490,39 @@ async fn tool_round_limit_stops_an_unproductive_conversation() -> Result<(), Box
             .expect("system instructions are text")
             .contains("最多可以进行 1 轮工具调用")
     );
+    let final_request: Value = requests[1].body_json()?;
+    assert!(final_request.get("tools").is_none());
+    assert!(final_request.get("tool_choice").is_none());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn last_tool_round_forces_a_tool_free_final_response() -> Result<(), Box<dyn Error>> {
+    let api = mock_api(vec![
+        tool_response(
+            "chat-1",
+            vec![tool_call("call-1", "inspect_slide", r#"{"slide_id":4}"#)],
+        ),
+        final_response("chat-2", analysis_json()),
+    ])
+    .await;
+    let config = ChatCompletionsConfig::new(base_url(&api), "test-key", "test-model")?
+        .with_max_tool_rounds(1)?;
+    let client = beyond_slides::ChatCompletionsClient::new(config);
+    let sources = sources()?;
+    let task = task(&sources)?;
+    let scorer = FixedScorer(scores([0.0; 6]));
+
+    let result = client.annotate_window(&sources, &scorer, &task).await?;
+
+    assert_eq!(result.diagnostics.tool_rounds, 1);
+    let requests = api
+        .received_requests()
+        .await
+        .expect("mock request recording is enabled");
+    let final_request: Value = requests[1].body_json()?;
+    assert!(final_request.get("tools").is_none());
+    assert!(final_request.get("tool_choice").is_none());
     Ok(())
 }
 

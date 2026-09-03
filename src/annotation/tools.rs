@@ -19,10 +19,18 @@ impl<'a> AnnotationToolSession<'a> {
         scorer: &'a dyn SlideScorer,
         task: &TranscriptWindowTask<'_>,
     ) -> Self {
+        Self::for_nearby_slides(sources, scorer, task.nearby_slides)
+    }
+
+    pub(crate) fn for_nearby_slides(
+        sources: &'a ValidatedSources,
+        scorer: &'a dyn SlideScorer,
+        nearby_slides: &[Slide],
+    ) -> Self {
         Self {
             sources,
             scorer,
-            visible_slides: task.nearby_slides.iter().map(|slide| slide.id).collect(),
+            visible_slides: nearby_slides.iter().map(|slide| slide.id).collect(),
         }
     }
 

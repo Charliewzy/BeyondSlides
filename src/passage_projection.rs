@@ -1,5 +1,6 @@
 use std::{error::Error, fmt, ops::Range};
 
+use serde::{Deserialize, Serialize};
 use similar::{Algorithm, DiffTag, capture_diff_slices};
 
 const MAX_CHANGED_PERCENT: usize = 5;
@@ -37,6 +38,30 @@ impl PassageProjection {
 
     pub const fn is_exact(&self) -> bool {
         self.changed_characters == 0
+    }
+
+    pub const fn diagnostics(&self) -> PassageProjectionDiagnostics {
+        PassageProjectionDiagnostics {
+            changed_characters: self.changed_characters,
+            compared_characters: self.compared_characters,
+        }
+    }
+}
+
+/// Persistable quality measurements for one accepted passage projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PassageProjectionDiagnostics {
+    pub changed_characters: usize,
+    pub compared_characters: usize,
+}
+
+impl PassageProjectionDiagnostics {
+    pub const fn is_exact(self) -> bool {
+        self.changed_characters == 0
+    }
+
+    pub fn error_ratio(self) -> f64 {
+        self.changed_characters as f64 / self.compared_characters as f64
     }
 }
 

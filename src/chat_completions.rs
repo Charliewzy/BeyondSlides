@@ -19,8 +19,8 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::{
-    ModelExchangeTrace, ModelProviderError, ModelRequestKind, ModelWorkflow, SlideId, SlideScorer,
-    ValidatedSources,
+    ModelExchangeTrace, ModelProviderError, ModelRequestKind, ModelWorkflow,
+    PassageProjectionDiagnostics, PassageProjectionError, SlideId, SlideScorer, ValidatedSources,
     annotation::{
         AnalysisAssemblyError, AnnotationToolError, AnnotationToolSession,
         TranscriptWindowAnalysis, TranscriptWindowTask, validate_window_analysis,
@@ -29,6 +29,10 @@ use crate::{
     restoration::{
         RestorationError, TranscriptRestorationTask, TranscriptWindowRestoration,
         validate_window_restoration,
+    },
+    restored_annotation::{
+        ProposedTranscriptWindowAnalysis, RestoredAnnotationError,
+        RestoredTranscriptWindowAnalysis, RestoredTranscriptWindowTask, project_window_analysis,
     },
 };
 
@@ -267,13 +271,7 @@ impl ChatCompletionsClient {
         let message = task
             .message()
             .map_err(ChatCompletionsError::SerializeTask)?;
-        let instructions = format!(
-            "{}\n\n工具调用预算：最多可以进行 {} 轮工具调用。一轮可以同时调用多个工具。收到最后一轮的工具结果后，必须直接返回最终 JSON，不得继续调用工具。",
-            message.instructions, self.max_tool_rounds
-        );
-        let request = ChatRequest::from_user(message.input)
-            .with_system(instructions)
-            .with_tools(tool_definitions(self.max_search_results));
+        let request = self.annotation_request(message.instructions, message.input);
         let outcome = self
             .run_conversation(
                 request,
@@ -285,6 +283,41 @@ impl ChatCompletionsClient {
             analysis: outcome.output,
             diagnostics: AnnotationDiagnostics::from(outcome.diagnostics),
         })
+    }
+
+    /// Annotates readable restored text and projects model boundaries onto it.
+    pub async fn annotate_restored_window(
+        &self,
+        sources: &ValidatedSources,
+        scorer: &dyn SlideScorer,
+        task: &RestoredTranscriptWindowTask<'_>,
+    ) -> Result<RestoredAnnotationResult, ChatCompletionsError> {
+        let message = task
+            .message()
+            .map_err(ChatCompletionsError::SerializeTask)?;
+        let request = self.annotation_request(message.instructions, message.input);
+        let outcome = self
+            .run_conversation(
+                request,
+                RestoredAnnotationWorkflow::new(sources, scorer, task, self.max_search_results),
+            )
+            .await?;
+
+        Ok(RestoredAnnotationResult {
+            analysis: outcome.output.analysis,
+            projection: outcome.output.projection,
+            diagnostics: AnnotationDiagnostics::from(outcome.diagnostics),
+        })
+    }
+
+    fn annotation_request(&self, instructions: &str, input: String) -> ChatRequest {
+        let instructions = format!(
+            "{instructions}\n\n工具调用预算：最多可以进行 {} 轮工具调用。一轮可以同时调用多个工具。收到最后一轮的工具结果后，必须直接返回最终 JSON，不得继续调用工具。",
+            self.max_tool_rounds
+        );
+        ChatRequest::from_user(input)
+            .with_system(instructions)
+            .with_tools(tool_definitions(self.max_search_results))
     }
 
     /// Restores one transcript window without exposing annotation tools.
@@ -598,56 +631,72 @@ impl<'sources, 'task> AnnotationWorkflow<'sources, 'task> {
             max_search_results,
         }
     }
+}
 
-    fn execute_tool_call(&mut self, tool_call: &ToolCall) -> Result<String, ChatCompletionsError> {
-        match tool_call.fn_name.as_str() {
-            "inspect_slide" => {
-                let arguments = match serde_json::from_value::<InspectSlideArguments>(
-                    tool_call.fn_arguments.clone(),
-                ) {
-                    Ok(arguments) => arguments,
-                    Err(error) => return invalid_arguments("inspect_slide", error),
-                };
-                match self.session.inspect_slide(arguments.slide_id) {
-                    Ok(evidence) => serde_json::to_string(&evidence)
-                        .map_err(ChatCompletionsError::SerializeTool),
-                    Err(AnnotationToolError::UnknownSlide { slide }) => {
-                        tool_error("unknown_slide", format!("slide {} does not exist", slide.0))
-                    }
-                    Err(error) => Err(ChatCompletionsError::Tool(error)),
+fn execute_annotation_tool_call(
+    session: &mut AnnotationToolSession<'_>,
+    max_search_results: usize,
+    tool_call: &ToolCall,
+) -> Result<String, ChatCompletionsError> {
+    match tool_call.fn_name.as_str() {
+        "inspect_slide" => {
+            let arguments = match serde_json::from_value::<InspectSlideArguments>(
+                tool_call.fn_arguments.clone(),
+            ) {
+                Ok(arguments) => arguments,
+                Err(error) => return invalid_arguments("inspect_slide", error),
+            };
+            match session.inspect_slide(arguments.slide_id) {
+                Ok(evidence) => {
+                    serde_json::to_string(&evidence).map_err(ChatCompletionsError::SerializeTool)
                 }
+                Err(AnnotationToolError::UnknownSlide { slide }) => {
+                    tool_error("unknown_slide", format!("slide {} does not exist", slide.0))
+                }
+                Err(error) => Err(ChatCompletionsError::Tool(error)),
             }
-            "search_slides" => {
-                let arguments = match serde_json::from_value::<SearchSlidesArguments>(
-                    tool_call.fn_arguments.clone(),
-                ) {
-                    Ok(arguments) => arguments,
-                    Err(error) => return invalid_arguments("search_slides", error),
-                };
-                if arguments.query.trim().is_empty() {
-                    return tool_error("invalid_arguments", "search query cannot be empty");
-                }
-                if arguments.max_results == 0 || arguments.max_results > self.max_search_results {
-                    return tool_error(
-                        "invalid_arguments",
-                        format!(
-                            "max_results must be between 1 and {}",
-                            self.max_search_results
-                        ),
-                    );
-                }
-                let evidence = self
-                    .session
-                    .search_slides(&arguments.query, arguments.max_results)
-                    .map_err(ChatCompletionsError::Tool)?;
-                serde_json::to_string(&evidence).map_err(ChatCompletionsError::SerializeTool)
-            }
-            name => tool_error(
-                "unknown_tool",
-                format!("unknown tool {name:?}; expected inspect_slide or search_slides"),
-            ),
         }
+        "search_slides" => {
+            let arguments = match serde_json::from_value::<SearchSlidesArguments>(
+                tool_call.fn_arguments.clone(),
+            ) {
+                Ok(arguments) => arguments,
+                Err(error) => return invalid_arguments("search_slides", error),
+            };
+            if arguments.query.trim().is_empty() {
+                return tool_error("invalid_arguments", "search query cannot be empty");
+            }
+            if arguments.max_results == 0 || arguments.max_results > max_search_results {
+                return tool_error(
+                    "invalid_arguments",
+                    format!("max_results must be between 1 and {}", max_search_results),
+                );
+            }
+            let evidence = session
+                .search_slides(&arguments.query, arguments.max_results)
+                .map_err(ChatCompletionsError::Tool)?;
+            serde_json::to_string(&evidence).map_err(ChatCompletionsError::SerializeTool)
+        }
+        name => tool_error(
+            "unknown_tool",
+            format!("unknown tool {name:?}; expected inspect_slide or search_slides"),
+        ),
     }
+}
+
+fn annotation_tool_responses(
+    session: &mut AnnotationToolSession<'_>,
+    max_search_results: usize,
+    tool_calls: &[ToolCall],
+) -> Result<Option<Vec<ToolResponse>>, ChatCompletionsError> {
+    tool_calls
+        .iter()
+        .map(|tool_call| {
+            execute_annotation_tool_call(session, max_search_results, tool_call)
+                .map(|content| ToolResponse::from_tool_call(tool_call, content))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
 }
 
 impl ConversationWorkflow for AnnotationWorkflow<'_, '_> {
@@ -670,14 +719,7 @@ impl ConversationWorkflow for AnnotationWorkflow<'_, '_> {
         &mut self,
         tool_calls: &[ToolCall],
     ) -> Result<Option<Vec<ToolResponse>>, ChatCompletionsError> {
-        tool_calls
-            .iter()
-            .map(|tool_call| {
-                self.execute_tool_call(tool_call)
-                    .map(|content| ToolResponse::from_tool_call(tool_call, content))
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(Some)
+        annotation_tool_responses(&mut self.session, self.max_search_results, tool_calls)
     }
 
     fn parse_and_validate(
@@ -693,6 +735,84 @@ impl ConversationWorkflow for AnnotationWorkflow<'_, '_> {
 
     fn repair_instruction(&self, error: &ChatCompletionsError) -> String {
         analysis_repair_instruction(error)
+    }
+}
+
+struct ProjectedAnnotation {
+    analysis: RestoredTranscriptWindowAnalysis,
+    projection: PassageProjectionDiagnostics,
+}
+
+struct RestoredAnnotationWorkflow<'sources, 'task> {
+    sources: &'sources ValidatedSources,
+    task: RestoredTranscriptWindowTask<'task>,
+    session: AnnotationToolSession<'sources>,
+    max_search_results: usize,
+}
+
+impl<'sources, 'task> RestoredAnnotationWorkflow<'sources, 'task> {
+    fn new(
+        sources: &'sources ValidatedSources,
+        scorer: &'sources dyn SlideScorer,
+        task: &RestoredTranscriptWindowTask<'task>,
+        max_search_results: usize,
+    ) -> Self {
+        Self {
+            sources,
+            task: *task,
+            session: AnnotationToolSession::for_nearby_slides(
+                sources,
+                scorer,
+                task.nearby_slides(),
+            ),
+            max_search_results,
+        }
+    }
+}
+
+impl ConversationWorkflow for RestoredAnnotationWorkflow<'_, '_> {
+    type Output = ProjectedAnnotation;
+
+    fn trace_context(
+        &self,
+        conversation_turn: usize,
+        request_kind: ModelRequestKind,
+    ) -> ModelTraceContext {
+        ModelTraceContext {
+            workflow: ModelWorkflow::Annotation,
+            window_index: self.task.window_index(),
+            conversation_turn,
+            request_kind,
+        }
+    }
+
+    fn tool_responses(
+        &mut self,
+        tool_calls: &[ToolCall],
+    ) -> Result<Option<Vec<ToolResponse>>, ChatCompletionsError> {
+        annotation_tool_responses(&mut self.session, self.max_search_results, tool_calls)
+    }
+
+    fn parse_and_validate(
+        &self,
+        content: &str,
+    ) -> Result<(Self::Output, bool), ChatCompletionsError> {
+        parse_restored_analysis(content).and_then(|(proposed, accepted_json_fence)| {
+            let (analysis, projection) =
+                project_window_analysis(self.sources, &self.task, proposed)
+                    .map_err(ChatCompletionsError::InvalidRestoredWindowAnalysis)?;
+            Ok((
+                ProjectedAnnotation {
+                    analysis,
+                    projection: projection.diagnostics(),
+                },
+                accepted_json_fence,
+            ))
+        })
+    }
+
+    fn repair_instruction(&self, error: &ChatCompletionsError) -> String {
+        restored_analysis_repair_instruction(error)
     }
 }
 
@@ -779,6 +899,13 @@ impl ConversationDiagnostics {
 pub struct AnnotationResult {
     pub analysis: TranscriptWindowAnalysis,
     pub diagnostics: AnnotationDiagnostics,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct RestoredAnnotationResult {
+    pub analysis: RestoredTranscriptWindowAnalysis,
+    pub diagnostics: AnnotationDiagnostics,
+    pub projection: PassageProjectionDiagnostics,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -884,6 +1011,8 @@ pub enum ChatCompletionsError {
     SerializeTool(serde_json::Error),
     InvalidAnalysisJson(serde_json::Error),
     InvalidWindowAnalysis(AnalysisAssemblyError),
+    InvalidRestoredAnalysisJson(serde_json::Error),
+    InvalidRestoredWindowAnalysis(RestoredAnnotationError),
     InvalidRestorationJson(serde_json::Error),
     InvalidWindowRestoration(RestorationError),
 }
@@ -944,6 +1073,14 @@ impl fmt::Display for ChatCompletionsError {
                     "the model returned an invalid transcript-window analysis: {error}"
                 )
             }
+            Self::InvalidRestoredAnalysisJson(error) => write!(
+                formatter,
+                "the model's final content is not a ProposedTranscriptWindowAnalysis JSON object: {error}"
+            ),
+            Self::InvalidRestoredWindowAnalysis(error) => write!(
+                formatter,
+                "the model returned an invalid restored-transcript-window analysis: {error}"
+            ),
             Self::InvalidRestorationJson(error) => write!(
                 formatter,
                 "the model's final content is not a TranscriptWindowRestoration JSON object: {error}"
@@ -965,9 +1102,11 @@ impl Error for ChatCompletionsError {
             Self::SerializeTask(error)
             | Self::SerializeTool(error)
             | Self::InvalidAnalysisJson(error)
+            | Self::InvalidRestoredAnalysisJson(error)
             | Self::InvalidRestorationJson(error) => Some(error),
             Self::Tool(error) => Some(error),
             Self::InvalidWindowAnalysis(error) => Some(error),
+            Self::InvalidRestoredWindowAnalysis(error) => Some(error),
             Self::InvalidWindowRestoration(error) => Some(error),
             Self::FinalAnswerRepairLimit { source, .. } => Some(source.as_ref()),
             Self::Provider(_)
@@ -1084,10 +1223,39 @@ fn model_web_error(error: &genai::webc::Error) -> ModelProviderError {
 fn trace_error_category(error: &ChatCompletionsError) -> &'static str {
     match error {
         ChatCompletionsError::InvalidAnalysisJson(_)
+        | ChatCompletionsError::InvalidRestoredAnalysisJson(_)
         | ChatCompletionsError::InvalidRestorationJson(_) => "malformed_json",
         ChatCompletionsError::InvalidWindowRestoration(error) => restoration_error_category(error),
         ChatCompletionsError::InvalidWindowAnalysis(error) => analysis_error_category(error),
+        ChatCompletionsError::InvalidRestoredWindowAnalysis(error) => {
+            restored_analysis_error_category(error)
+        }
         _ => "structured_response",
+    }
+}
+
+fn restored_analysis_error_category(error: &RestoredAnnotationError) -> &'static str {
+    match error {
+        RestoredAnnotationError::PassageProjection(
+            PassageProjectionError::DifferenceTooLarge { .. },
+        ) => "passage_text_difference",
+        RestoredAnnotationError::PassageProjection(PassageProjectionError::NoPassages) => {
+            "no_passages"
+        }
+        RestoredAnnotationError::PassageProjection(
+            PassageProjectionError::EmptyProposedPassage { .. }
+            | PassageProjectionError::EmptyProjectedPassage { .. },
+        ) => "empty_passage",
+        RestoredAnnotationError::UnknownRelatedSlide { .. } => "unknown_related_slide",
+        RestoredAnnotationError::DuplicateRelatedSlide { .. } => "duplicate_related_slide",
+        RestoredAnnotationError::SlidePositionCountMismatch { .. }
+        | RestoredAnnotationError::EmptyOwnedText { .. }
+        | RestoredAnnotationError::UnknownSlidePosition { .. }
+        | RestoredAnnotationError::MissingSourceProvenance { .. }
+        | RestoredAnnotationError::PassageProjection(
+            PassageProjectionError::EmptySource
+            | PassageProjectionError::NonMonotonicProjection { .. },
+        ) => "invalid_restored_analysis",
     }
 }
 
@@ -1167,6 +1335,12 @@ fn parse_analysis(content: &str) -> Result<(TranscriptWindowAnalysis, bool), Cha
     parse_json_content(content).map_err(ChatCompletionsError::InvalidAnalysisJson)
 }
 
+fn parse_restored_analysis(
+    content: &str,
+) -> Result<(ProposedTranscriptWindowAnalysis, bool), ChatCompletionsError> {
+    parse_json_content(content).map_err(ChatCompletionsError::InvalidRestoredAnalysisJson)
+}
+
 fn parse_restoration(
     content: &str,
 ) -> Result<(TranscriptWindowRestoration, bool), ChatCompletionsError> {
@@ -1189,6 +1363,12 @@ fn parse_json_content<T: DeserializeOwned>(content: &str) -> Result<(T, bool), s
 fn analysis_repair_instruction(error: &ChatCompletionsError) -> String {
     format!(
         "你上一条最终答案未通过验证：{error}\n请返回修正后的完整 TranscriptWindowAnalysis JSON 对象，不要只返回局部修改，也不要调用工具。每个 passage 都必须包含全部必需字段；如果没有相关幻灯片，related_slides 使用空数组 []。"
+    )
+}
+
+fn restored_analysis_repair_instruction(error: &ChatCompletionsError) -> String {
+    format!(
+        "你上一条最终答案未通过验证：{error}\n请返回修正后的完整 ProposedTranscriptWindowAnalysis JSON 对象，不要调用工具。所有 passage.text 按顺序直接拼接后必须与 owned_text 逐字符完全相同；不得修正文句、空白或代码。每个 passage 都必须包含全部必需字段；如果没有相关幻灯片，related_slides 使用空数组 []。"
     )
 }
 

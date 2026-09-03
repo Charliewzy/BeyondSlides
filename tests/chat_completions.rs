@@ -2,10 +2,11 @@ use std::{collections::VecDeque, error::Error, sync::Mutex, time::Duration};
 
 use beyond_slides::{
     AnalysisAssemblyError, ChatCompletionsConfig, ChatCompletionsError, ModelExchangeTrace,
-    ModelRequestKind, ModelTraceEvent, SearchError, Slide, SlideDeck, SlideId, SlideScore,
-    SlideScorer, Transcript, TranscriptSegment, TranscriptSegmentId, TranscriptWindowTask,
-    ValidatedSources, ValidationError, WindowingConfig, build_annotation_tasks,
-    build_restoration_tasks, build_windows, read_model_trace,
+    ModelRequestKind, ModelTraceEvent, RestoredTranscript, RestoredTranscriptSpan, SearchError,
+    Slide, SlideDeck, SlideId, SlideScore, SlideScorer, Transcript, TranscriptSegment,
+    TranscriptSegmentId, TranscriptWindowTask, ValidatedSources, ValidationError, WindowingConfig,
+    build_annotation_tasks, build_restoration_tasks, build_restored_annotation_tasks,
+    build_restored_windows, build_windows, read_model_trace,
 };
 use serde_json::{Value, json};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate, matchers::any};
@@ -67,6 +68,97 @@ async fn annotation_uses_the_configured_openai_compatible_endpoint() -> Result<(
     assert_eq!(tool_names, ["inspect_slide", "search_slides"]);
     assert_eq!(request["messages"][0]["role"], "system");
     assert_eq!(request["messages"][1]["role"], "user");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restored_annotation_accepts_small_copying_errors_without_a_model_repair()
+-> Result<(), Box<dyn Error>> {
+    let sources = sources()?;
+    let restored = restored_transcript();
+    let task = restored_task(&sources, &restored)?;
+    let proposed_text = "二分查找通过不断缩小搜索区间来定位目标，并用循环不变式解释算法为何正确。";
+    let api = mock_api(vec![final_response(
+        "chat-1",
+        restored_analysis_json(proposed_text),
+    )])
+    .await;
+    let client = beyond_slides::ChatCompletionsClient::new(ChatCompletionsConfig::new(
+        base_url(&api),
+        "test-key",
+        "test-model",
+    )?);
+    let scorer = FixedScorer(scores([0.0; 6]));
+
+    let result = client
+        .annotate_restored_window(&sources, &scorer, &task)
+        .await?;
+
+    assert_eq!(result.analysis.passages[0].text, restored.text());
+    assert_eq!(result.projection.changed_characters, 1);
+    assert!(!result.projection.is_exact());
+    assert_eq!(result.diagnostics.final_answer_repairs, 0);
+
+    let requests = api
+        .received_requests()
+        .await
+        .expect("mock request recording is enabled");
+    let request: Value = requests[0].body_json()?;
+    assert_eq!(request["tool_choice"], "auto");
+    assert!(
+        request["messages"][0]["content"]
+            .as_str()
+            .expect("system instructions are text")
+            .contains("逐字符完全相同")
+    );
+    assert_eq!(
+        request["messages"][1]["content"]
+            .as_str()
+            .and_then(|content| serde_json::from_str::<Value>(content).ok())
+            .expect("user message is JSON")["owned_text"],
+        restored.text()
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restored_annotation_repairs_text_beyond_the_five_percent_limit()
+-> Result<(), Box<dyn Error>> {
+    let sources = sources()?;
+    let restored = restored_transcript();
+    let task = restored_task(&sources, &restored)?;
+    let invalid = restored_analysis_json("这段回答已经完全改写，不能作为原文分界依据。");
+    let api = mock_api(vec![
+        final_response("chat-1", invalid.clone()),
+        final_response("chat-2", restored_analysis_json(&restored.text())),
+    ])
+    .await;
+    let client = beyond_slides::ChatCompletionsClient::new(ChatCompletionsConfig::new(
+        base_url(&api),
+        "test-key",
+        "test-model",
+    )?);
+    let scorer = FixedScorer(scores([0.0; 6]));
+
+    let result = client
+        .annotate_restored_window(&sources, &scorer, &task)
+        .await?;
+
+    assert!(result.projection.is_exact());
+    assert_eq!(result.diagnostics.final_answer_repairs, 1);
+    let requests = api
+        .received_requests()
+        .await
+        .expect("mock request recording is enabled");
+    assert_eq!(requests.len(), 2);
+    let repair_request: Value = requests[1].body_json()?;
+    assert_eq!(repair_request["messages"][2]["content"], invalid);
+    assert!(
+        repair_request["messages"][3]["content"]
+            .as_str()
+            .expect("repair instruction is text")
+            .contains("逐字符完全相同")
+    );
     Ok(())
 }
 
@@ -625,6 +717,30 @@ fn restoration_json() -> String {
     .to_string()
 }
 
+fn restored_analysis_json(text: &str) -> String {
+    json!({
+        "passages": [{
+            "text": text,
+            "novelty": 2,
+            "connection_strength": 3,
+            "importance": 4,
+            "related_slides": [0]
+        }]
+    })
+    .to_string()
+}
+
+fn restored_transcript() -> RestoredTranscript {
+    RestoredTranscript {
+        spans: vec![RestoredTranscriptSpan::Text {
+            source_start: TranscriptSegmentId(0),
+            source_end: TranscriptSegmentId(0),
+            text: "二分查找通过不断缩小搜索区间来定位目标，并使用循环不变式解释算法为何正确。"
+                .into(),
+        }],
+    }
+}
+
 fn sources() -> Result<ValidatedSources, Box<dyn Error>> {
     Ok(ValidatedSources::new(
         Transcript {
@@ -657,6 +773,23 @@ fn task(sources: &ValidatedSources) -> Result<TranscriptWindowTask<'_>, Box<dyn 
         .into_iter()
         .next()
         .expect("the transcript creates one annotation task"))
+}
+
+fn restored_task<'a>(
+    sources: &'a ValidatedSources,
+    restored: &'a RestoredTranscript,
+) -> Result<beyond_slides::RestoredTranscriptWindowTask<'a>, Box<dyn Error>> {
+    let windows = build_restored_windows(
+        sources,
+        restored,
+        WindowingConfig::new(100, Duration::from_secs(60), 20)?,
+    )?;
+    Ok(
+        build_restored_annotation_tasks(sources, &windows, &[SlideId(0)])?
+            .into_iter()
+            .next()
+            .expect("the restored transcript creates one annotation task"),
+    )
 }
 
 fn slide(id: u32, text: &str) -> Slide {

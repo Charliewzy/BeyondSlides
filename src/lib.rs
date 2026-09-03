@@ -24,7 +24,7 @@ pub use annotation::{
 pub use chat_completions::{
     AnnotationDiagnostics, AnnotationResult, ChatCompletionsClient, ChatCompletionsConfig,
     ChatCompletionsConfigError, ChatCompletionsError, RestorationDiagnostics,
-    TranscriptWindowRestorationResult,
+    RestoredAnnotationResult, TranscriptWindowRestorationResult,
 };
 pub use domain::{
     LecturePassage, LecturePassages, RestoredLecturePassage, RestoredTranscript,
@@ -41,7 +41,8 @@ pub use orchestration::{
     LectureAnalysisSession,
 };
 pub use passage_projection::{
-    PassageProjection, PassageProjectionError, project_passage_boundaries,
+    PassageProjection, PassageProjectionDiagnostics, PassageProjectionError,
+    project_passage_boundaries,
 };
 pub use ranking::rank_oral_additions;
 pub use report::render_report;

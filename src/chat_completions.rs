@@ -271,23 +271,59 @@ impl ChatCompletionsClient {
             "{}\n\n工具调用预算：最多可以进行 {} 轮工具调用。一轮可以同时调用多个工具。收到最后一轮的工具结果后，必须直接返回最终 JSON，不得继续调用工具。",
             message.instructions, self.max_tool_rounds
         );
-        let mut request = ChatRequest::from_user(message.input)
+        let request = ChatRequest::from_user(message.input)
             .with_system(instructions)
             .with_tools(tool_definitions(self.max_search_results));
-        let mut session = AnnotationToolSession::for_task(sources, scorer, task);
-        let mut diagnostics = AnnotationDiagnostics::default();
+        let outcome = self
+            .run_conversation(
+                request,
+                AnnotationWorkflow::new(sources, scorer, task, self.max_search_results),
+            )
+            .await?;
+
+        Ok(AnnotationResult {
+            analysis: outcome.output,
+            diagnostics: AnnotationDiagnostics::from(outcome.diagnostics),
+        })
+    }
+
+    /// Restores one transcript window without exposing annotation tools.
+    pub async fn restore_window(
+        &self,
+        task: &TranscriptRestorationTask<'_>,
+    ) -> Result<TranscriptWindowRestorationResult, ChatCompletionsError> {
+        let message = task
+            .message()
+            .map_err(ChatCompletionsError::SerializeTask)?;
+        let request = ChatRequest::from_user(message.input).with_system(message.instructions);
+        let outcome = self
+            .run_conversation(request, RestorationWorkflow { task: *task })
+            .await?;
+
+        Ok(TranscriptWindowRestorationResult {
+            restoration: outcome.output,
+            diagnostics: RestorationDiagnostics::from(outcome.diagnostics),
+        })
+    }
+
+    async fn run_conversation<W>(
+        &self,
+        mut request: ChatRequest,
+        mut workflow: W,
+    ) -> Result<ConversationOutcome<W::Output>, ChatCompletionsError>
+    where
+        W: ConversationWorkflow,
+    {
+        let tools_enabled = request.tools.is_some();
+        let mut diagnostics = ConversationDiagnostics::default();
         let mut conversation_turn = 0;
         let mut request_kind = ModelRequestKind::Initial;
 
         loop {
-            let trace_context = ModelTraceContext {
-                workflow: ModelWorkflow::Annotation,
-                window_index: task.window_number.saturating_sub(1),
-                conversation_turn,
-                request_kind,
-            };
-            let (response, provider_retries, exchange_id) =
-                self.chat(request.clone(), true, trace_context).await?;
+            let trace_context = workflow.trace_context(conversation_turn, request_kind);
+            let (response, provider_retries, exchange_id) = self
+                .chat(request.clone(), tools_enabled, trace_context)
+                .await?;
             if let Err(error) = ensure_one_choice(&response) {
                 return self.processing_failure(exchange_id, trace_context, "choice_count", error);
             }
@@ -315,17 +351,17 @@ impl ChatCompletionsClient {
                         error,
                     );
                 }
-                diagnostics.tool_rounds += 1;
-
-                let tool_responses = tool_calls
-                    .iter()
-                    .map(|tool_call| {
-                        self.execute_tool_call(&mut session, tool_call)
-                            .map(|content| ToolResponse::from_tool_call(tool_call, content))
-                    })
-                    .collect::<Result<Vec<_>, _>>();
-                let tool_responses = match tool_responses {
-                    Ok(tool_responses) => tool_responses,
+                let tool_responses = match workflow.tool_responses(&tool_calls) {
+                    Ok(Some(tool_responses)) => tool_responses,
+                    Ok(None) => {
+                        let error = unexpected_finish_reason(&response, true);
+                        return self.processing_failure(
+                            exchange_id,
+                            trace_context,
+                            "unexpected_finish_reason",
+                            error,
+                        );
+                    }
                     Err(error) => {
                         return self.processing_failure(
                             exchange_id,
@@ -335,6 +371,7 @@ impl ChatCompletionsClient {
                         );
                     }
                 };
+                diagnostics.tool_rounds += 1;
                 request = request
                     .append_message(tool_calls)
                     .append_message(tool_responses);
@@ -376,17 +413,12 @@ impl ChatCompletionsClient {
                     error,
                 );
             };
-            let candidate = parse_analysis(content).and_then(|(analysis, accepted_json_fence)| {
-                validate_window_analysis(sources, task, &analysis)
-                    .map_err(ChatCompletionsError::InvalidWindowAnalysis)?;
-                Ok((analysis, accepted_json_fence))
-            });
-            match candidate {
-                Ok((analysis, accepted_json_fence)) => {
+            match workflow.parse_and_validate(content) {
+                Ok((output, accepted_json_fence)) => {
                     self.record_validation(exchange_id, trace_context, None)?;
                     diagnostics.accepted_json_fence = accepted_json_fence;
-                    return Ok(AnnotationResult {
-                        analysis,
+                    return Ok(ConversationOutcome {
+                        output,
                         diagnostics,
                     });
                 }
@@ -401,111 +433,7 @@ impl ChatCompletionsClient {
                     diagnostics.final_answer_repairs += 1;
                     request = request
                         .append_message(ChatMessage::assistant(content.to_owned()))
-                        .append_message(ChatMessage::user(repair_instruction(&error)));
-                    conversation_turn += 1;
-                    request_kind = ModelRequestKind::Repair;
-                }
-            }
-        }
-    }
-
-    /// Restores one transcript window without exposing annotation tools.
-    pub async fn restore_window(
-        &self,
-        task: &TranscriptRestorationTask<'_>,
-    ) -> Result<TranscriptWindowRestorationResult, ChatCompletionsError> {
-        let message = task
-            .message()
-            .map_err(ChatCompletionsError::SerializeTask)?;
-        let mut request = ChatRequest::from_user(message.input).with_system(message.instructions);
-        let mut diagnostics = RestorationDiagnostics::default();
-        let mut conversation_turn = 0;
-        let mut request_kind = ModelRequestKind::Initial;
-
-        loop {
-            let trace_context = ModelTraceContext {
-                workflow: ModelWorkflow::Restoration,
-                window_index: task.window_index,
-                conversation_turn,
-                request_kind,
-            };
-            let (response, provider_retries, exchange_id) =
-                self.chat(request.clone(), false, trace_context).await?;
-            if let Err(error) = ensure_one_choice(&response) {
-                return self.processing_failure(exchange_id, trace_context, "choice_count", error);
-            }
-            diagnostics.record(&response, provider_retries);
-            let has_tool_calls = response.tool_calls().into_iter().next().is_some();
-            if has_tool_calls {
-                let error = unexpected_finish_reason(&response, true);
-                return self.processing_failure(
-                    exchange_id,
-                    trace_context,
-                    "unexpected_finish_reason",
-                    error,
-                );
-            }
-
-            match response.stop_reason.as_ref() {
-                Some(StopReason::Completed(_)) => {}
-                Some(StopReason::MaxTokens(_)) => {
-                    let error = ChatCompletionsError::OutputTruncated;
-                    return self.processing_failure(
-                        exchange_id,
-                        trace_context,
-                        "output_truncated",
-                        error,
-                    );
-                }
-                _ => {
-                    let error = unexpected_finish_reason(&response, false);
-                    return self.processing_failure(
-                        exchange_id,
-                        trace_context,
-                        "unexpected_finish_reason",
-                        error,
-                    );
-                }
-            }
-            let Some(content) = response
-                .first_text()
-                .filter(|content| !content.trim().is_empty())
-            else {
-                let error = ChatCompletionsError::MissingAssistantContent;
-                return self.processing_failure(
-                    exchange_id,
-                    trace_context,
-                    "missing_assistant_content",
-                    error,
-                );
-            };
-            let candidate =
-                parse_restoration(content).and_then(|(restoration, accepted_json_fence)| {
-                    validate_window_restoration(task, &restoration)
-                        .map_err(ChatCompletionsError::InvalidWindowRestoration)?;
-                    Ok((restoration, accepted_json_fence))
-                });
-            match candidate {
-                Ok((restoration, accepted_json_fence)) => {
-                    self.record_validation(exchange_id, trace_context, None)?;
-                    diagnostics.accepted_json_fence = accepted_json_fence;
-                    return Ok(TranscriptWindowRestorationResult {
-                        restoration,
-                        diagnostics,
-                    });
-                }
-                Err(error) => {
-                    self.record_validation(exchange_id, trace_context, Some(&error))?;
-                    if diagnostics.final_answer_repairs == self.max_final_answer_repairs {
-                        return Err(ChatCompletionsError::FinalAnswerRepairLimit {
-                            limit: self.max_final_answer_repairs,
-                            source: Box::new(error),
-                        });
-                    }
-                    diagnostics.final_answer_repairs += 1;
-                    request = request
-                        .append_message(ChatMessage::assistant(content.to_owned()))
-                        .append_message(ChatMessage::user(restoration_repair_instruction(&error)));
+                        .append_message(ChatMessage::user(workflow.repair_instruction(&error)));
                     conversation_turn += 1;
                     request_kind = ModelRequestKind::Repair;
                 }
@@ -625,12 +553,53 @@ impl ChatCompletionsClient {
         }
         Err(error)
     }
+}
 
-    fn execute_tool_call(
+trait ConversationWorkflow {
+    type Output;
+
+    fn trace_context(
         &self,
-        session: &mut AnnotationToolSession<'_>,
-        tool_call: &ToolCall,
-    ) -> Result<String, ChatCompletionsError> {
+        conversation_turn: usize,
+        request_kind: ModelRequestKind,
+    ) -> ModelTraceContext;
+
+    fn tool_responses(
+        &mut self,
+        tool_calls: &[ToolCall],
+    ) -> Result<Option<Vec<ToolResponse>>, ChatCompletionsError>;
+
+    fn parse_and_validate(
+        &self,
+        content: &str,
+    ) -> Result<(Self::Output, bool), ChatCompletionsError>;
+
+    fn repair_instruction(&self, error: &ChatCompletionsError) -> String;
+}
+
+struct AnnotationWorkflow<'sources, 'task> {
+    sources: &'sources ValidatedSources,
+    task: TranscriptWindowTask<'task>,
+    session: AnnotationToolSession<'sources>,
+    max_search_results: usize,
+}
+
+impl<'sources, 'task> AnnotationWorkflow<'sources, 'task> {
+    fn new(
+        sources: &'sources ValidatedSources,
+        scorer: &'sources dyn SlideScorer,
+        task: &TranscriptWindowTask<'task>,
+        max_search_results: usize,
+    ) -> Self {
+        Self {
+            sources,
+            task: *task,
+            session: AnnotationToolSession::for_task(sources, scorer, task),
+            max_search_results,
+        }
+    }
+
+    fn execute_tool_call(&mut self, tool_call: &ToolCall) -> Result<String, ChatCompletionsError> {
         match tool_call.fn_name.as_str() {
             "inspect_slide" => {
                 let arguments = match serde_json::from_value::<InspectSlideArguments>(
@@ -639,7 +608,7 @@ impl ChatCompletionsClient {
                     Ok(arguments) => arguments,
                     Err(error) => return invalid_arguments("inspect_slide", error),
                 };
-                match session.inspect_slide(arguments.slide_id) {
+                match self.session.inspect_slide(arguments.slide_id) {
                     Ok(evidence) => serde_json::to_string(&evidence)
                         .map_err(ChatCompletionsError::SerializeTool),
                     Err(AnnotationToolError::UnknownSlide { slide }) => {
@@ -667,7 +636,8 @@ impl ChatCompletionsClient {
                         ),
                     );
                 }
-                let evidence = session
+                let evidence = self
+                    .session
                     .search_slides(&arguments.query, arguments.max_results)
                     .map_err(ChatCompletionsError::Tool)?;
                 serde_json::to_string(&evidence).map_err(ChatCompletionsError::SerializeTool)
@@ -677,6 +647,131 @@ impl ChatCompletionsClient {
                 format!("unknown tool {name:?}; expected inspect_slide or search_slides"),
             ),
         }
+    }
+}
+
+impl ConversationWorkflow for AnnotationWorkflow<'_, '_> {
+    type Output = TranscriptWindowAnalysis;
+
+    fn trace_context(
+        &self,
+        conversation_turn: usize,
+        request_kind: ModelRequestKind,
+    ) -> ModelTraceContext {
+        ModelTraceContext {
+            workflow: ModelWorkflow::Annotation,
+            window_index: self.task.window_number.saturating_sub(1),
+            conversation_turn,
+            request_kind,
+        }
+    }
+
+    fn tool_responses(
+        &mut self,
+        tool_calls: &[ToolCall],
+    ) -> Result<Option<Vec<ToolResponse>>, ChatCompletionsError> {
+        tool_calls
+            .iter()
+            .map(|tool_call| {
+                self.execute_tool_call(tool_call)
+                    .map(|content| ToolResponse::from_tool_call(tool_call, content))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some)
+    }
+
+    fn parse_and_validate(
+        &self,
+        content: &str,
+    ) -> Result<(Self::Output, bool), ChatCompletionsError> {
+        parse_analysis(content).and_then(|(analysis, accepted_json_fence)| {
+            validate_window_analysis(self.sources, &self.task, &analysis)
+                .map_err(ChatCompletionsError::InvalidWindowAnalysis)?;
+            Ok((analysis, accepted_json_fence))
+        })
+    }
+
+    fn repair_instruction(&self, error: &ChatCompletionsError) -> String {
+        analysis_repair_instruction(error)
+    }
+}
+
+struct RestorationWorkflow<'task> {
+    task: TranscriptRestorationTask<'task>,
+}
+
+impl ConversationWorkflow for RestorationWorkflow<'_> {
+    type Output = TranscriptWindowRestoration;
+
+    fn trace_context(
+        &self,
+        conversation_turn: usize,
+        request_kind: ModelRequestKind,
+    ) -> ModelTraceContext {
+        ModelTraceContext {
+            workflow: ModelWorkflow::Restoration,
+            window_index: self.task.window_index,
+            conversation_turn,
+            request_kind,
+        }
+    }
+
+    fn tool_responses(
+        &mut self,
+        _tool_calls: &[ToolCall],
+    ) -> Result<Option<Vec<ToolResponse>>, ChatCompletionsError> {
+        Ok(None)
+    }
+
+    fn parse_and_validate(
+        &self,
+        content: &str,
+    ) -> Result<(Self::Output, bool), ChatCompletionsError> {
+        parse_restoration(content).and_then(|(restoration, accepted_json_fence)| {
+            validate_window_restoration(&self.task, &restoration)
+                .map_err(ChatCompletionsError::InvalidWindowRestoration)?;
+            Ok((restoration, accepted_json_fence))
+        })
+    }
+
+    fn repair_instruction(&self, error: &ChatCompletionsError) -> String {
+        restoration_repair_instruction(error)
+    }
+}
+
+struct ConversationOutcome<T> {
+    output: T,
+    diagnostics: ConversationDiagnostics,
+}
+
+struct ConversationDiagnostics {
+    provider_retries: usize,
+    tool_rounds: usize,
+    final_answer_repairs: usize,
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+    accepted_json_fence: bool,
+}
+
+impl Default for ConversationDiagnostics {
+    fn default() -> Self {
+        Self {
+            provider_retries: 0,
+            tool_rounds: 0,
+            final_answer_repairs: 0,
+            prompt_tokens: Some(0),
+            completion_tokens: Some(0),
+            accepted_json_fence: false,
+        }
+    }
+}
+
+impl ConversationDiagnostics {
+    fn record(&mut self, response: &ChatResponse, provider_retries: usize) {
+        self.provider_retries = self.provider_retries.saturating_add(provider_retries);
+        self.prompt_tokens = add_token_count(self.prompt_tokens, response.usage.prompt_tokens);
+        self.completion_tokens =
+            add_token_count(self.completion_tokens, response.usage.completion_tokens);
     }
 }
 
@@ -709,22 +804,19 @@ pub struct RestorationDiagnostics {
 
 impl Default for RestorationDiagnostics {
     fn default() -> Self {
-        Self {
-            provider_retries: 0,
-            final_answer_repairs: 0,
-            prompt_tokens: Some(0),
-            completion_tokens: Some(0),
-            accepted_json_fence: false,
-        }
+        ConversationDiagnostics::default().into()
     }
 }
 
-impl RestorationDiagnostics {
-    fn record(&mut self, response: &ChatResponse, provider_retries: usize) {
-        self.provider_retries = self.provider_retries.saturating_add(provider_retries);
-        self.prompt_tokens = add_token_count(self.prompt_tokens, response.usage.prompt_tokens);
-        self.completion_tokens =
-            add_token_count(self.completion_tokens, response.usage.completion_tokens);
+impl From<ConversationDiagnostics> for RestorationDiagnostics {
+    fn from(diagnostics: ConversationDiagnostics) -> Self {
+        Self {
+            provider_retries: diagnostics.provider_retries,
+            final_answer_repairs: diagnostics.final_answer_repairs,
+            prompt_tokens: diagnostics.prompt_tokens,
+            completion_tokens: diagnostics.completion_tokens,
+            accepted_json_fence: diagnostics.accepted_json_fence,
+        }
     }
 }
 
@@ -746,23 +838,20 @@ pub struct AnnotationDiagnostics {
 
 impl Default for AnnotationDiagnostics {
     fn default() -> Self {
-        Self {
-            provider_retries: 0,
-            tool_rounds: 0,
-            final_answer_repairs: 0,
-            prompt_tokens: Some(0),
-            completion_tokens: Some(0),
-            accepted_json_fence: false,
-        }
+        ConversationDiagnostics::default().into()
     }
 }
 
-impl AnnotationDiagnostics {
-    fn record(&mut self, response: &ChatResponse, provider_retries: usize) {
-        self.provider_retries = self.provider_retries.saturating_add(provider_retries);
-        self.prompt_tokens = add_token_count(self.prompt_tokens, response.usage.prompt_tokens);
-        self.completion_tokens =
-            add_token_count(self.completion_tokens, response.usage.completion_tokens);
+impl From<ConversationDiagnostics> for AnnotationDiagnostics {
+    fn from(diagnostics: ConversationDiagnostics) -> Self {
+        Self {
+            provider_retries: diagnostics.provider_retries,
+            tool_rounds: diagnostics.tool_rounds,
+            final_answer_repairs: diagnostics.final_answer_repairs,
+            prompt_tokens: diagnostics.prompt_tokens,
+            completion_tokens: diagnostics.completion_tokens,
+            accepted_json_fence: diagnostics.accepted_json_fence,
+        }
     }
 }
 
@@ -1097,7 +1186,7 @@ fn parse_json_content<T: DeserializeOwned>(content: &str) -> Result<(T, bool), s
     }
 }
 
-fn repair_instruction(error: &ChatCompletionsError) -> String {
+fn analysis_repair_instruction(error: &ChatCompletionsError) -> String {
     format!(
         "你上一条最终答案未通过验证：{error}\n请返回修正后的完整 TranscriptWindowAnalysis JSON 对象，不要只返回局部修改，也不要调用工具。每个 passage 都必须包含全部必需字段；如果没有相关幻灯片，related_slides 使用空数组 []。"
     )

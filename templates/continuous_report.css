@@ -43,9 +43,9 @@ h1, h2, p { margin-top: 0; }
 }
 
 h1 {
-  max-width: 15ch;
+  max-width: 18ch;
   margin-bottom: .8rem;
-  font-size: clamp(2.7rem, 7vw, 5.5rem);
+  font-size: clamp(2.6rem, 4.5vw, 4rem);
   font-weight: 720;
   letter-spacing: -.055em;
   line-height: .98;
@@ -75,18 +75,18 @@ dd { margin: .2rem 0 0; font-size: 1.35rem; font-weight: 850; }
 .legend-scale b { font-size: 1.35rem; }
 .legend-scale small { color: var(--muted); font-size: .65rem; white-space: nowrap; }
 .importance-scale [data-score="0"] b, .passage[data-importance="0"] { font-weight: 350; }
-.importance-scale [data-score="1"] b, .passage[data-importance="1"] { font-weight: 450; }
-.importance-scale [data-score="2"] b, .passage[data-importance="2"] { font-weight: 550; }
-.importance-scale [data-score="3"] b, .passage[data-importance="3"] { font-weight: 650; }
-.importance-scale [data-score="4"] b, .passage[data-importance="4"] { font-weight: 760; }
+.importance-scale [data-score="1"] b, .passage[data-importance="1"] { font-weight: 400; }
+.importance-scale [data-score="2"] b, .passage[data-importance="2"] { font-weight: 470; }
+.importance-scale [data-score="3"] b, .passage[data-importance="3"] { font-weight: 560; }
+.importance-scale [data-score="4"] b, .passage[data-importance="4"] { font-weight: 720; }
 .importance-scale [data-score="5"] b, .passage[data-importance="5"] { font-weight: 900; }
 .novelty-scale b { text-decoration: underline var(--underline); text-underline-offset: .22em; text-decoration-skip-ink: none; }
-.novelty-scale [data-score="0"] b, .passage[data-novelty="0"] { text-decoration-thickness: .45px; }
-.novelty-scale [data-score="1"] b, .passage[data-novelty="1"] { text-decoration-thickness: 1.15px; }
-.novelty-scale [data-score="2"] b, .passage[data-novelty="2"] { text-decoration-thickness: 1.85px; }
-.novelty-scale [data-score="3"] b, .passage[data-novelty="3"] { text-decoration-thickness: 2.55px; }
-.novelty-scale [data-score="4"] b, .passage[data-novelty="4"] { text-decoration-thickness: 3.25px; }
-.novelty-scale [data-score="5"] b, .passage[data-novelty="5"] { text-decoration-thickness: 3.95px; }
+.novelty-scale [data-score="0"] b, .passage[data-novelty="0"] { text-decoration-thickness: .4px; }
+.novelty-scale [data-score="1"] b, .passage[data-novelty="1"] { text-decoration-thickness: .75px; }
+.novelty-scale [data-score="2"] b, .passage[data-novelty="2"] { text-decoration-thickness: 1.25px; }
+.novelty-scale [data-score="3"] b, .passage[data-novelty="3"] { text-decoration-thickness: 2px; }
+.novelty-scale [data-score="4"] b, .passage[data-novelty="4"] { text-decoration-thickness: 3px; }
+.novelty-scale [data-score="5"] b, .passage[data-novelty="5"] { text-decoration-thickness: 4.2px; }
 
 .transcript-card {
   padding: clamp(1.4rem, 4vw, 3.5rem);

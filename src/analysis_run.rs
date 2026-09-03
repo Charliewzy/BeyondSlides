@@ -31,6 +31,7 @@ const CONTEXT_CHARACTERS: usize = 150;
 const MAX_CONCURRENT_WINDOWS: usize = 4;
 const MAX_TOOL_ROUNDS: usize = 4;
 const MAX_FINAL_ANSWER_REPAIRS: usize = 2;
+const MAX_PROVIDER_RETRIES: usize = 5;
 const MAX_SEARCH_RESULTS: usize = 5;
 const MAX_OUTPUT_TOKENS: u32 = 16_384;
 const DENSE_MODEL: &str = "BAAI/bge-small-zh-v1.5";
@@ -265,6 +266,7 @@ fn analysis_client(
         .with_model_trace(model_trace)
         .with_max_tool_rounds(MAX_TOOL_ROUNDS)?
         .with_max_final_answer_repairs(MAX_FINAL_ANSWER_REPAIRS)?
+        .with_max_provider_retries(MAX_PROVIDER_RETRIES)
         .with_max_search_results(MAX_SEARCH_RESULTS)?
         .with_max_output_tokens(MAX_OUTPUT_TOKENS)?;
     Ok(ChatCompletionsClient::new(config))
@@ -290,6 +292,7 @@ struct AnalysisRunManifest {
     max_concurrent_windows: usize,
     max_tool_rounds: usize,
     max_final_answer_repairs: usize,
+    max_provider_retries: usize,
     max_search_results: usize,
     max_output_tokens: u32,
 }
@@ -321,6 +324,7 @@ impl AnalysisRunManifest {
             max_concurrent_windows: MAX_CONCURRENT_WINDOWS,
             max_tool_rounds: MAX_TOOL_ROUNDS,
             max_final_answer_repairs: MAX_FINAL_ANSWER_REPAIRS,
+            max_provider_retries: MAX_PROVIDER_RETRIES,
             max_search_results: MAX_SEARCH_RESULTS,
             max_output_tokens: MAX_OUTPUT_TOKENS,
         }

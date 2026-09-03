@@ -549,7 +549,7 @@ impl ChatCompletionsClient {
                         return Err(provider_error(error));
                     }
                     retries += 1;
-                    tokio::time::sleep(provider_retry_delay(retries)).await;
+                    tokio::time::sleep(provider_retry_delay(&error, retries)).await;
                 }
             }
         }
@@ -1149,8 +1149,45 @@ fn is_retryable_status(status: u16) -> bool {
     status == 408 || status == 429 || (500..=599).contains(&status)
 }
 
-fn provider_retry_delay(retry: usize) -> Duration {
+fn provider_retry_delay(error: &genai::Error, retry: usize) -> Duration {
+    if let Some(delay) = retry_after_delay(error) {
+        return delay;
+    }
+    if provider_error_status(error) == Some(429) {
+        let exponent = u32::try_from(retry.saturating_sub(1).min(4)).unwrap_or(4);
+        return Duration::from_secs(5_u64.saturating_mul(2_u64.pow(exponent)));
+    }
     Duration::from_secs(retry.min(5) as u64)
+}
+
+fn retry_after_delay(error: &genai::Error) -> Option<Duration> {
+    let web_error = match error {
+        genai::Error::WebAdapterCall { webc_error, .. }
+        | genai::Error::WebModelCall { webc_error, .. } => webc_error,
+        _ => return None,
+    };
+    let genai::webc::Error::ResponseFailedStatus { headers, .. } = web_error else {
+        return None;
+    };
+    let seconds = headers
+        .get("retry-after")?
+        .to_str()
+        .ok()?
+        .parse::<u64>()
+        .ok()?;
+    Some(Duration::from_secs(seconds.min(120)))
+}
+
+fn provider_error_status(error: &genai::Error) -> Option<u16> {
+    match error {
+        genai::Error::WebAdapterCall { webc_error, .. }
+        | genai::Error::WebModelCall { webc_error, .. } => match webc_error {
+            genai::webc::Error::ResponseFailedStatus { status, .. } => Some(status.as_u16()),
+            _ => None,
+        },
+        genai::Error::HttpError { status, .. } => Some(status.as_u16()),
+        _ => None,
+    }
 }
 
 fn model_provider_error(error: &genai::Error) -> ModelProviderError {

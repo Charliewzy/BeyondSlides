@@ -377,6 +377,35 @@ async fn trace_records_each_provider_retry_attempt() -> Result<(), Box<dyn Error
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn rate_limits_are_retried_using_the_provider_delay() -> Result<(), Box<dyn Error>> {
+    let api = MockServer::builder().start().await;
+    Mock::given(any())
+        .respond_with(RateLimitOnceThenRespond {
+            failed: Mutex::new(false),
+            response: final_response("chat-2", restoration_json()),
+        })
+        .mount(&api)
+        .await;
+    let config = ChatCompletionsConfig::new(base_url(&api), "test-key", "test-model")?
+        .with_max_provider_retries(1);
+    let client = beyond_slides::ChatCompletionsClient::new(config);
+    let sources = sources()?;
+    let windows = build_windows(
+        &sources,
+        WindowingConfig::new(100, Duration::from_secs(60), 20)?,
+    );
+    let task = build_restoration_tasks(&windows)
+        .into_iter()
+        .next()
+        .expect("the transcript creates one restoration task");
+
+    let result = client.restore_window(&task).await?;
+
+    assert_eq!(result.diagnostics.provider_retries, 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn tool_results_and_correctable_errors_are_replayed_by_call_id() -> Result<(), Box<dyn Error>>
 {
     let api = mock_api(vec![
@@ -881,6 +910,25 @@ impl Respond for FailOnceThenRespond {
         if !*failed {
             *failed = true;
             ResponseTemplate::new(503).set_body_json(json!({ "error": "temporarily unavailable" }))
+        } else {
+            ResponseTemplate::new(200).set_body_json(self.response.clone())
+        }
+    }
+}
+
+struct RateLimitOnceThenRespond {
+    failed: Mutex<bool>,
+    response: Value,
+}
+
+impl Respond for RateLimitOnceThenRespond {
+    fn respond(&self, _request: &Request) -> ResponseTemplate {
+        let mut failed = self.failed.lock().expect("lock mock provider state");
+        if !*failed {
+            *failed = true;
+            ResponseTemplate::new(429)
+                .insert_header("Retry-After", "0")
+                .set_body_json(json!({ "error": "rate limited" }))
         } else {
             ResponseTemplate::new(200).set_body_json(self.response.clone())
         }

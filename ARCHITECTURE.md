@@ -1,156 +1,100 @@
 # BeyondSlides Architecture
 
-Status: Draft for review
+Status: Working architecture
 
 ## 1. Product goal
 
 BeyondSlides finds the useful information a lecturer contributes orally beyond
-the course's written sources.
-
-It is not a general lecture summarizer. Given a timestamped lecture transcript
-and the associated slide deck, it should identify and rank explanations,
+the course's written sources. It is not a general lecture summarizer. Given a
+timestamped transcript and a slide deck, it identifies explanations,
 intuitions, caveats, examples, practical advice, and conceptual connections
 that are valuable to a learner but are not already explicit in the slides.
 
-Every retained result must be internally traceable from both directions:
+The system preserves two kinds of evidence:
 
-- what the lecturer said: an exact transcript span and timestamps;
-- what written-source content was considered: the related slides.
+- readable lecture text remains backed by the raw transcript-segment range from
+  which it was restored;
+- semantic judgments may cite related slides from the immutable slide deck.
 
-An optional comparison note may be retained for logging, debugging, and
-evaluation. It is not required for a valid analysis or in the user-facing
-report.
+Novelty, connection strength, and importance are graded from 0 through 5. They
+remain uncertain semantic judgments, not objective facts. Optional comparison
+notes support debugging and evaluation but are neither required nor shown to a
+learner by default.
 
-The central operation is therefore a semantic difference:
+## 2. Current user experience
 
-```text
-useful lecture content - what the slides already communicate
-    = oral additions worth the learner's time
-```
+The end-to-end command accepts normalized `transcript.json` and `slides.json`
+and writes a resumable run directory. It first restores readable lecture text,
+then analyzes that restored text against the slides.
 
-## 2. MVP user experience
+The primary report preserves lecture order. Importance controls character
+weight; novelty controls underline thickness. A reader can therefore follow
+the lecture continuously while visually locating high-value oral additions.
+Selecting a passage reveals its scores, time range, and raw source range.
 
-The first useful version accepts two normalized files:
+The completed analysis is also a standalone, validated JSON artifact. Reports
+and quality summaries can be regenerated from saved artifacts without another
+model request. A legacy raw-transcript annotation renderer remains available
+for comparison while the restored-text experience is evaluated.
 
-- `transcript.json`: ordered, timestamped segments;
-- `slides.json`: ordered slide texts.
+The initial language target is Simplified Chinese, including Latin technical
+terms, formulas, and identifiers commonly mixed into Chinese course material.
 
-It produces:
-
-- `annotations.json`: validated, evidence-bearing judgments over the complete
-  transcript;
-- `result.html`: a self-contained report with two views.
-
-The report's primary view is a ranked list of high-value oral additions. Each
-item shows its score, timestamp, transcript evidence, and related slides. An
-optional summary may provide a shorter user-facing description when available.
-
-The secondary view preserves the complete transcript and overlays its scores.
-This view makes the analysis inspectable and lets a learner browse lower-ranked
-material without losing the lecture's original context.
-
-### Initial inclusion rule
-
-The ranked view initially includes a group when:
-
-```text
-importance >= 3
-and (novelty >= 2 or connection_strength >= 3)
-```
-
-This is a configurable presentation rule, not part of the meaning of the
-scores. Evaluation on real lectures may change the default.
-
-## 3. MVP scope
-
-The first vertical slice starts from hand-authored JSON fixtures. It includes:
-
-- typed Rust domain models;
-- strict input and annotation validation;
-- ranking and filtering;
-- self-contained HTML rendering;
-- a small synthetic lecture used as an integration fixture.
-
-The following are deliberately deferred:
-
-- audio/video transcription and speaker diarization;
-- PDF, PPTX, OCR, or textbook ingestion;
-- monotonic slide alignment;
-- LLM or agent API calls;
-- a server, database, or frontend framework;
-- user accounts, collaboration, and deployment.
-
-The initial language target is Simplified Chinese, including the Latin
-technical terms, formulas, and identifiers commonly mixed into Chinese course
-material. General multilingual support and foreign-student export are outside
-the initial scope.
-
-Deferring these features lets the first slice validate the output contract and
-product experience before adding expensive or uncertain machinery.
-
-## 4. Architectural principles
+## 3. Architectural principles
 
 ### Preserve sources
 
-Transcript and slide content are immutable source records. Later stages refer
-to canonical typed IDs rather than copying or rewriting source text.
+Raw transcript and slide content are immutable source records. Restoration
+creates a derived readable representation with explicit provenance; it never
+silently replaces the source transcript.
 
-### Evidence-backed analysis
+### Prefer deterministic structure around probabilistic judgment
 
-Every novelty judgment internally records its transcript span and relevant
-slide references. It may also include a concise comparison note for logging,
-debugging, and evaluation. The note is a short justification of the structured
-judgment, not a request for the model's private chain of thought.
+Normalization, window ownership, retrieval, slide-path decoding, projection,
+schema validation, checkpoint validation, assembly, and rendering are
+deterministic Rust stages. Models restore speech and make semantic judgments.
 
-### Grade, do not force a binary answer
+### Expose the right precision
 
-Material can be explicit, paraphrased, implied, meaningfully elaborated, or
-genuinely absent from the slides. A `0..5` novelty score represents this
-continuum.
+A lecture passage may begin inside a restored transcript span. Its readable
+text boundary is precise, while its raw transcript provenance remains the
+coarser source range of the supporting restored spans. Adjacent passages may
+therefore cite the same raw range. The system does not invent finer timestamp
+or source precision.
 
 ### Separate chronological position from semantic relevance
 
-Monotonic alignment will answer, "Where are we in the slide sequence?" Global
-retrieval will answer, "Where else do the slides discuss this idea?" An aligned
-slide neighborhood is a prior for the agent, not proof of relevance.
+A slide position is an approximate chronological location inferred by dynamic
+programming. A related slide is semantic evidence for a judgment. The former
+supplies local context and never proves the latter.
 
-### Make expensive stages resumable
+### Make expensive stages resumable and observable
 
-Each major stage writes a readable artifact. Rendering or prompt changes must
-not require transcription, embedding, or earlier LLM work to run again.
+Restoration and annotation each persist validated window checkpoints before
+counting them complete. Run manifests bind checkpoints to source identities,
+prompts, models, and deterministic configuration. Complete model exchanges are
+recorded without credentials.
 
-### Prefer deterministic structure around probabilistic judgments
+### Keep presentation downstream
 
-Window construction, alignment, schema validation, coverage checks, ranking,
-and rendering are deterministic Rust stages. The model is reserved for semantic
-comparison and annotation.
+HTML generation consumes only validated artifacts. Prompt, model, and
+retrieval work must not be repeated to change typography or interaction.
 
-### Build one vertical slice at a time
+## 4. Domain model
 
-BeyondSlides begins as one Rust crate with small modules. It should not become a
-workspace, distributed service, or plugin system without a demonstrated need.
+The canonical vocabulary is defined in `CONTEXT.md`; ADRs under `docs/adr/`
+record resolved decisions.
 
-## 5. Domain model
-
-The examples below describe the intended model, not a frozen Rust API.
-
-### Canonical source identifiers
+### Source coordinates
 
 ```rust
 struct TranscriptSegmentId(u32);
 struct SlideId(u32);
 ```
 
-Transcript segment and slide IDs are typed, zero-based collection positions. For every
-normalized source, `segments[i].id == TranscriptSegmentId(i)` and
-`slides[i].id == SlideId(i)`. They remain stable within that normalized source
-snapshot; changing normalization invalidates downstream artifacts. If later
-ingestion requires identity across normalization runs, it must add a separate
-source reference rather than weakening this invariant. Human-facing slide and
-PDF page numbers may remain one-based and are not IDs. Timestamps are integer
-milliseconds.
-
-### Transcript
+Both IDs equal their zero-based collection position in one normalized source
+snapshot. Human-facing page numbers may be one-based but are not IDs. Changing
+normalization invalidates downstream artifacts.
 
 ```rust
 struct TranscriptSegment {
@@ -160,88 +104,47 @@ struct TranscriptSegment {
     text: String,
 }
 
-struct Transcript {
-    segments: Vec<TranscriptSegment>,
-}
-```
-
-Required invariants:
-
-- each ID equals the segment's zero-based collection position;
-- text is non-empty;
-- `start_ms <= end_ms`;
-- segment times are nondecreasing;
-- transcript order agrees with timestamp order.
-
-### Slides
-
-```rust
 struct Slide {
     id: SlideId,
     text: String,
 }
+```
 
-struct SlideDeck {
-    slides: Vec<Slide>,
+`ValidatedSources` establishes ID, ordering, timestamp, and source-text
+invariants once. Downstream code can use direct indexed lookup without treating
+collection indices as unrelated identities.
+
+### Restored transcript
+
+```rust
+enum RestoredTranscriptSpan {
+    Text {
+        source_start: TranscriptSegmentId,
+        source_end: TranscriptSegmentId,
+        text: String,
+    },
+    OmittedDisfluency {
+        source_start: TranscriptSegmentId,
+        source_end: TranscriptSegmentId,
+    },
+}
+
+struct RestoredTranscript {
+    spans: Vec<RestoredTranscriptSpan>,
 }
 ```
 
-Required invariants:
-
-- each ID equals the slide's zero-based collection position;
-- slide order is stable;
-- empty extracted text is allowed because image-only slides may exist later.
-
-### Scores
-
-All three scores use a validated inclusive `0..5` type.
-
-`novelty` asks how much useful content in the span is absent from the entire
-slide deck:
-
-| Score | Meaning |
-| --- | --- |
-| 0 | Directly stated in the slides |
-| 1 | Essentially a paraphrase |
-| 2 | A meaningful elaboration, but mostly implied |
-| 3 | Substantial additional explanation or detail |
-| 4 | Largely absent from the slides |
-| 5 | Genuinely new and non-obvious relative to the slides |
-
-`connection_strength` asks how strongly the span makes a useful conceptual
-connection to material elsewhere in the slide deck:
-
-| Score | Meaning |
-| --- | --- |
-| 0 | No meaningful connection |
-| 1 | Weak or incidental relationship |
-| 2 | Relevant relationship with limited learning value |
-| 3 | Clear, useful connection |
-| 4 | Strong connection that improves understanding |
-| 5 | Major synthesis across concepts or topics |
-
-This score intentionally has no connection direction or type.
-
-`importance` asks how valuable the spoken material is for understanding or
-applying the course:
-
-| Score | Meaning |
-| --- | --- |
-| 0 | Filler or irrelevant material |
-| 1 | Minor detail or low-value anecdote |
-| 2 | Helpful but nonessential detail |
-| 3 | Clearly useful explanation or advice |
-| 4 | Important conceptual or practical insight |
-| 5 | Central insight with high leverage for learning or application |
+Restored spans partition the entire raw transcript. Text spans add punctuation,
+join speech fragments, and minimally regularize speech. Omitted spans preserve
+the provenance of pure disfluencies. Neither form may summarize or add meaning.
 
 ### Lecture passages
 
-A lecture passage covers a contiguous, inclusive segment range:
-
 ```rust
-struct LecturePassage {
-    start: TranscriptSegmentId,
-    end: TranscriptSegmentId,
+struct RestoredLecturePassage {
+    text: String,
+    source_start: TranscriptSegmentId,
+    source_end: TranscriptSegmentId,
     novelty: Score5,
     connection_strength: Score5,
     importance: Score5,
@@ -251,182 +154,85 @@ struct LecturePassage {
 }
 ```
 
-`summary` is an optional user-facing description of a lecture passage. Its
-absence does not make a passage invalid; a renderer can use the source
-transcript instead. `comparison_note` briefly compares the span with the closest
-written source when such a note is useful. It is optional, stored in
-`annotations.json` for internal logging, debugging, and evaluation, and not
-rendered in the user-facing report.
+Lecture passages partition the readable restored transcript in chronological
+order. Their `text` is authoritative restored text, never trusted model copy.
+All scores are validated inclusive `0..5` values. Related slide IDs must exist
+and contain no duplicates. Summary and comparison note remain optional.
 
-The source evidence for a passage is the referenced segment range itself. Its
-written-source evidence is `related_slides`; an optional `comparison_note` may
-supplement it. A later schema may add exact slide excerpts if evaluation shows
-that slide-level references are not sufficiently auditable.
-
-Required invariants:
-
-- start and end IDs exist and follow transcript order;
-- all scores are valid;
-- all related slide IDs exist;
-- related slide IDs contain no duplicates.
-
-## 6. Window ownership
-
-Long transcripts are analyzed in windows. Each window has overlapping context
-but owns a non-overlapping transcript region:
+## 5. Pipeline
 
 ```text
-              visible to the model
-     +------------------------------------+
-     | left context | owned | right context |
-     +------------------------------------+
-                      ^^^^^
-              only this region is annotated
+video/audio             slide PDF
+    |                        |
+    v                        v
+transcript adapter       PDF text adapter
+    |                        |
+    +-----> validated normalized sources <-----+
+                         |
+                         v
+                 raw transcript windows
+                         |
+                         v
+                model restoration stage
+                         |
+                         v
+                  restored transcript
+                         |
+                         v
+                restored-text windows
+                         |
+              +----------+----------+
+              |                     |
+              v                     v
+       all-slide scoring      slide-path decoder
+              |                     |
+              +----------+----------+
+                         v
+            model annotation + slide tools
+                         |
+                         v
+             fuzzy boundary projection
+                         |
+                         v
+             validation and assembly
+                         |
+                         v
+              artifact and HTML report
 ```
 
-Owned regions partition the transcript. The model must partition its entire
-owned region into contiguous lecture passages. Context segments may influence
-the judgment but may not appear in that window's output.
+### 5.1 Ingestion and normalization
 
-For every owned region, validation enforces:
+The FunASR TSV adapter converts each nonblank timestamped row into one
+zero-based transcript segment. It preserves ASR evidence instead of inventing
+grammatical boundaries. The PDF adapter uses Poppler `pdftotext` in raw reading
+order, preserves one slide per page, removes only rigorously detected repeated
+page furniture, and reports sparse text or suspicious glyphs rather than
+silently invoking OCR.
 
-- the first passage starts at the first owned segment;
-- the last passage ends at the last owned segment;
-- consecutive passages are adjacent;
-- no segment is skipped or covered twice.
+The original video is not required by the product. When available, FFmpeg,
+Poppler, and MSSIM can build a visual slide/time reference for evaluating
+semantic alignment; that reference is not an input to production alignment.
 
-Consequently, after all windows finish, every transcript segment belongs to
-exactly one lecture passage. No overlap-merging stage is needed.
+### 5.2 Restoration windowing
 
-## 7. Intended pipeline
+Raw transcript windows own nonoverlapping ranges and may expose left and right
+context. Owned regions partition the raw transcript. Character and duration
+budgets greedily include complete transcript segments; one oversized segment
+remains intact.
 
-The complete system is organized as the following stages:
+The restoration model may only emit spans over the owned region. Validation
+requires exact source-range coverage with no gaps, overlap, or context claims.
+Accepted window restorations assemble directly in source order.
 
-```text
-recording             slide deck
-    |                      |
-    v                      v
-transcription         text extraction
-    |                      |
-    +------> normalized sources <------+
-                       |
-                       v
-              transcript windowing
-                       |
-                       v
-              transcript restoration
-                       |
-          +------------+-------------+
-          |                          |
-          v                          v
-  all-slide scoring         semantic alignment
-          |                          |
-          +------------+-------------+
-                       v
-              agent annotation
-          local slide prior + global search
-                       |
-                       v
-              validate and assemble
-                       |
-                       v
-                rank and render
-```
+### 5.3 Restored-text windowing
 
-### 7.1 Source normalization
+Annotation uses a second window sequence over restored spans. Character budgets
+count readable text; duration comes from each span's raw source range. A
+restored span is never split by a window, and omitted-disfluency spans remain in
+an adjacent owned region so provenance is not lost. Owned regions together
+partition the restored transcript.
 
-Adapters convert external formats into `Transcript` and `SlideDeck`. The core
-pipeline depends only on these normalized source data structures. The initial
-fixture bypasses all adapters. `ValidatedSources` accepts the normalized
-transcript and slide deck after enforcing their invariants, allowing windowing
-and other pre-annotation stages to operate on trusted sources.
-
-The FunASR TSV adapter preserves evidence rather than inventing grammatical
-boundaries: every nonblank `start`, `end`, `text` row becomes one transcript
-segment with a sequential zero-based ID. It converts decimal seconds exactly to
-milliseconds, trims surrounding text whitespace, and rejects malformed,
-reversed, or overlapping rows. Transcript restoration remains a separate
-transformation so the normalized source evidence is never silently replaced.
-
-The first PDF adapter uses Poppler's `pdftotext` in raw reading order. Every PDF
-page becomes one slide with a canonical zero-based ID, including pages whose
-extracted text is empty. Human-facing page numbers in warnings remain one-based.
-The adapter removes only a trailing line whose page-counter-normalized form
-occurs on a strict majority and at least three pages. It reports sparse text and
-aggregates suspicious glyphs per page; these warnings do not trigger OCR or
-silently drop source evidence. Plain-text sufficiency remains an evaluation
-decision outside the adapter.
-
-### 7.2 Windowing
-
-The transcript is divided into owned regions with left and right context. The
-current policy greedily adds complete transcript segments while both a text
-character budget and a wall-clock duration budget permit it. A single segment
-that exceeds either budget remains intact in its own owned region. Left and
-right context also contain only complete segments and each has its own
-character budget. A later agent adapter may translate its model-specific token
-budget into these model-independent source-window limits; the correctness
-contract remains based on segment ownership rather than token counts.
-
-### 7.3 Transcript restoration
-
-Each transcript window produces a `TranscriptWindowRestoration`. The model may
-add punctuation, merge speech fragments, minimally regularize spoken wording,
-and explicitly omit pure disfluencies, but it may neither summarize nor add
-meaning. Left and right context are read-only evidence. A window edge is not a
-grammatical boundary, so its first or last restored span may remain a sentence
-fragment whose text joins directly with the neighboring window's result.
-
-Every `RestoredTranscriptSpan` references a contiguous, inclusive source range.
-The spans from one response must partition only that window's owned region with
-no gaps or overlap. Assembly consumes the existing windows rather than
-rebuilding them, validates each response, and concatenates accepted spans in
-source order. Pure disfluencies remain traceable as explicit omitted spans.
-
-The OpenAI-compatible adapter requests JSON mode without advertising annotation
-tools. Invalid JSON or invalid owned-region coverage is returned to the same
-conversation for a bounded number of repair attempts. A restoration run sends
-the first window alone as a canary, then processes remaining windows with
-bounded concurrency. Transient timeouts, rate limits, and server failures have
-a separate bounded transport-retry budget. Each accepted response is written as
-a resumable checkpoint. The completed run emits the evidence-preserving
-restored transcript as JSON, its directly concatenated readable text, and
-per-window diagnostics. Optional provider-specific Chat Completions fields are
-supplied as one explicit JSON object and recorded in the run manifest; for GLM
-restoration, disabling deep thinking avoids spending the gateway timeout on
-reasoning for a primarily editorial task.
-
-The offline `review-restoration` command renders accepted checkpoints as an
-evidence review. Each restored span sits beside the exact source transcript
-segments it references; window boundaries, explicit disfluency omissions,
-repair counts, provider retries, and token usage remain visible. The report
-therefore evaluates restoration quality without treating the readable text as
-an untraceable replacement for the transcript.
-
-### 7.4 Model exchange tracing
-
-Every model-backed CLI run records an append-only `model-trace.jsonl`. Each
-provider attempt writes its complete provider-neutral request and effective
-options before network I/O, then writes either the raw and normalized response
-or a structured provider error. Parsing, validation, and response-contract
-failures are separate events correlated to the provider exchange. Repair turns,
-tool follow-ups, and transport retries remain distinguishable. The writer
-serializes concurrent windows, flushes every JSONL event, and continues event
-and exchange identifiers when a run resumes.
-
-The trace is a sensitive run artifact because it contains transcript excerpts,
-slide evidence, and model output. It never contains the configured API key or
-authorization headers, and it remains excluded from version control with the
-rest of `run/`. A trace-write failure fails the model operation rather than
-silently claiming a complete audit trail. A final partial line left by a process
-crash is preserved and separated before valid events are appended on resume.
-The offline `summarize-trace` command tolerates malformed records, reports them
-by line number, and aggregates provider, validation, and response-contract
-failures by category and zero-based transcript-window index.
-
-### 7.5 Retrieval
-
-Slides are indexed once behind one interface:
+### 5.4 Retrieval and slide positions
 
 ```rust
 trait SlideScorer {
@@ -434,277 +240,186 @@ trait SlideScorer {
 }
 ```
 
-Every adapter returns exactly one score per slide in presentation order,
-including zero scores where it found no evidence. The result is fallible because
-local model loading and inference can fail. Such a failure must not be
-misrepresented as "no related slide found." Dynamic programming consumes the
-complete score rows. Callers that need search results sort a copy and truncate
-it; consequently, `max_results` belongs to the agent's search tool rather than
-the scoring interface.
+Every scorer returns one finite score per slide in presentation order:
 
-Three in-memory adapters currently implement this interface:
+- lexical scoring uses BM25, Unicode compatibility normalization, and Jieba
+  search-mode segmentation;
+- dense scoring uses `BAAI/bge-small-zh-v1.5`, applies the model's Chinese query
+  instruction, and brute-forces in-memory cosine similarity;
+- hybrid scoring combines complete rankings with equal-weight reciprocal-rank
+  fusion (`k = 60`).
 
-- lexical retrieval uses BM25, Unicode compatibility normalization, and
-  Jieba's Chinese search-mode segmentation. It preserves Latin technical terms,
-  numbers, and identifiers and omits slides with no matching term;
-- dense retrieval uses `BAAI/bge-small-zh-v1.5` through FastEmbed. It embeds
-  every non-empty slide once, adds the model's recommended Chinese retrieval
-  instruction only to queries, and brute-forces cosine similarity;
-- hybrid retrieval combines the complete lexical and dense rankings with
-  equal-weight reciprocal-rank fusion using `k = 60`. Rank fusion avoids
-  treating BM25 and cosine scores as though they shared a scale.
+Dynamic programming consumes one all-slide score row per restored window. It
+selects a soft, non-strictly-monotonic slide position path: nearby forward or
+backward moves are cheap, and large jumps remain possible with higher cost.
 
-All adapters return slides in presentation order; ranking is a caller-side
-operation. Model files are downloaded into FastEmbed's local cache on first use
-and reused afterward. The model identifier and scoring mode must eventually be
-recorded in the run manifest.
+### 5.5 Annotation conversation
 
-### 7.6 Semantic alignment
-
-Every transcript window is scored against every slide. Each row is normalized
-independently to `0..1`, preventing BM25, cosine, or reciprocal-rank-fusion
-scales from implicitly changing the transition policy. Dynamic programming then
-selects one slide position per window by maximizing semantic evidence minus
-transition costs.
-
-The path begins at the first slide for a complete lecture recording. Staying
-near the previous position is preferred: movement within three slides receives
-a small distance cost. Backward movement is allowed at the same cost as forward
-movement, and larger jumps remain possible with a larger soft penalty. Support
-for recordings that begin mid-lecture will require making the starting prior
-configurable.
-
-The resulting slide position supplies chronological context. It is not itself
-a claim that the selected slide is a related slide.
-
-A self-contained alignment visualization makes the complete score matrix
-inspectable. It renders transcript windows horizontally, slides vertically,
-normalized scores as a heatmap, and the inferred path as an overlay. Selecting
-a window reveals its transcript, highest semantic scores, and the inferred
-slide neighborhood. When optional visual reference evidence exists, the report
-adds a separate dotted path and mismatch markers; the production alignment does
-not consume that reference.
-
-### 7.7 Optional visual reference alignment
-
-BeyondSlides does not require the original lecture video. When it is available,
-visual matching can supply reference evidence for evaluating semantic slide
-positions. Poppler renders every PDF page at `320x180`; FFmpeg
-streams one grayscale video frame per second at the same dimensions; and Rust
-compares each frame with every page using MSSIM. The matcher records the best
-and runner-up slide and their scores for every sampled timestamp. Frames are
-processed as a stream rather than materialized as image files, and callers may
-receive processed and total video time for progress reporting.
-
-This first implementation deliberately preserves raw observations. It does not
-yet convert a small score margin into false confidence, smooth transient
-mismatches, or refine transition timestamps. A later temporal decoder may add
-those policies, but it must permit backward movement because lecturers can
-revisit earlier slides.
-
-Visual reference evidence is not fed into the production semantic alignment
-path. It measures whether inferred slide positions match what was displayed,
-while manually labeled related slides remain necessary to evaluate semantic
-retrieval.
-
-### 7.8 Agent annotation
-
-The core builds one provider-neutral `TranscriptWindowTask` per window after
-semantic alignment. A task preserves the window's left, owned, and right
-transcript regions, its inferred slide position, and a slide neighborhood of up
-to three positions in either direction. Neighborhoods are clamped at the ends
-of the deck. Task construction consumes the transcript windows already used for
-scoring and alignment rather than applying the windowing policy again.
-
-Rendering a task produces an `AnnotationMessage` with trusted instructions kept
-separate from the JSON source input. A future provider adapter maps those two
-parts to the model's appropriate instruction and user-input channels; provider
-SDK types do not enter the core annotation interface. The version-controlled
-instructions live in `prompts/annotation.md` and are embedded at compile time;
-they are product logic rather than runtime configuration.
-
-For each window, the message contains:
-
-- left, owned, and right transcript regions;
-- the inferred slide position and locally aligned slide neighborhood;
-- the score definitions and output schema.
-
-The instructions explicitly distinguish the inferred slide position from a
-semantically Related slide and require the response passages to partition only
-the owned region. `summary` and `comparison_note` remain optional.
-
-It may use a deliberately small tool set:
+The model receives left context, owned readable text, right context, inferred
+slide position, and a nearby slide neighborhood. It may call:
 
 ```text
 inspect_slide(slide_id)
 search_slides(query, max_results)
 ```
 
-Each transcript-window conversation owns an `AnnotationToolSession` seeded with
-the task's local slide neighborhood. `inspect_slide` rejects unknown canonical
-slide IDs. `search_slides` covers the entire deck so the agent can try to
-falsify an apparent novelty judgment. It requires one finite score per slide in
-presentation order, omits non-positive evidence, ranks the remaining results,
-and returns at most `max_results` slides. Retrieval scores remain internal
-because their scales depend on the scorer.
+Search covers the entire deck so the model can challenge an apparent novelty
+claim. A per-window tool session suppresses duplicate slide text after first
+exposure. Tool rounds are bounded. After the last permitted tool result, the
+client removes tool definitions and tool choice from the next request, forcing
+a final-answer attempt at the protocol level rather than trusting the model to
+count rounds.
 
-The first tool result that exposes a slide returns its ID and complete text.
-Later inspection or search results for the same slide return its ID with
-`already_visible` instead of repeating the text. Visibility state is local to
-one transcript window; independent windows have independent model contexts.
-Retrieval failure is reported as failure rather than an empty result. Tool
-rounds and calls are bounded.
+The model returns proposed passages containing copied text and judgments. It
+never supplies trusted offsets or raw source IDs.
 
-### 7.9 Validation and assembly
+### 5.6 Source-backed passage projection
 
-Model output is untrusted input. Rust code validates its schema, score ranges,
-IDs, owned-region partition, and evidence requirements before accepting it.
-Invalid output is returned to the model with the validation error for at most
-two final-answer repair attempts. Repair attempts reuse the same conversation
-and are independent of the tool-call budget. Persistent failure is recorded
-explicitly rather than silently patched into a plausible result.
-Each model response has the following shape:
+The proposed passage texts are concatenated and aligned to the authoritative
+owned restored text with a Unicode-scalar Myers diff. Proposed boundaries are
+projected through that alignment onto UTF-8 byte boundaries in the source.
 
-```rust
-struct TranscriptWindowAnalysis {
-    passages: Vec<LecturePassage>,
-}
-```
+An accepted projection must satisfy all of the following:
 
-Responses are supplied in transcript-window order. Assembly rebuilds the
-deterministic window assignments from the recorded `WindowingConfig`, requires
-exactly one response per window, and requires the response's lecture passages
-to partition exactly that window's owned region. A response cannot claim
-segments from its left or right context. Only after these window-local checks
-pass are all passages joined and subjected to lecture-wide source, related-slide,
-and coverage validation.
-`ValidatedAnalysis` combines already-validated sources with the accepted
-lecture passages, so source validation is not repeated after annotation.
+- proposed and projected passages are nonempty and ordered;
+- projected ranges exactly partition the authoritative owned text;
+- changed characters are strictly less than 5% of the larger source/proposed
+  character count.
 
-### 7.10 Ranking and rendering
+At 5% or above, validation returns the error to the same model conversation for
+a bounded final-answer repair. Below 5%, only boundary intent is accepted: the
+model's copy is discarded and every passage receives the corresponding exact
+source slice. Projection diagnostics record changed and compared character
+counts per accepted window.
 
-The initial ranked view sorts primarily by importance, then novelty, then
-connection strength. It should retain the component scores rather than collapse
-them into a pseudo-precise aggregate number.
+Each projected byte range is mapped to the first and last supporting restored
+span. Those spans supply the passage's coarse raw transcript provenance.
 
-Rendering is deterministic and consumes only normalized sources and validated
-annotations. The initial renderer uses plain HTML, CSS, and JavaScript and emits
-one portable file.
+### 5.7 Assembly and persisted artifacts
 
-## 8. Run artifacts and resumability
+Per-window checkpoints contain source-backed passages, model diagnostics, and
+projection diagnostics. Restoring a checkpoint reruns deterministic
+window-local validation before trusting it. Assembly orders window results,
+validates each partition again, then validates the complete restored transcript
+and lecture-wide passage partition through the same shared partition routine.
 
-Each real analysis run will use a directory such as:
+`analysis.json` is a `RestoredAnalysisArtifact` containing:
+
+- the complete restored transcript;
+- all chronological lecture passages;
+- inferred slide positions;
+- per-window model diagnostics;
+- per-window projection diagnostics.
+
+The offline `render-analysis` command revalidates that artifact against the raw
+transcript and slide deck before rendering. Metadata arrays must agree on their
+window count, slide positions must exist, and passage text/provenance must still
+match the restored transcript.
+
+### 5.8 Rendering and evaluation
+
+The self-contained continuous report renders authoritative passage text in
+lecture order. Importance maps to six font weights and novelty maps to six
+underline thicknesses. It embeds no remote assets. Hover, focus, or click
+reveals timestamps, raw source range, and component scores.
+
+`evaluate-analysis` combines accepted projection diagnostics with rejected
+partition validations from `model-trace.jsonl`. It reports exact accepted,
+fuzzy accepted, and rejected candidate-attempt rates, rejected affected
+windows, aggregate accepted copy differences, and final-answer repair turns.
+Exact/fuzzy outcomes describe final accepted windows; rejected counts describe
+earlier attempts that were repaired and therefore do not appear in the final
+artifact.
+
+## 6. Model transport and observability
+
+The model adapter targets an explicitly configured OpenAI-compatible Chat
+Completions endpoint through `genai`; model names are not used to infer a
+provider. JSON mode is requested, while deterministic schema and domain
+validation remain local.
+
+The first window of each stage runs alone as a canary. After it succeeds,
+remaining windows run with bounded concurrency. Annotation request starts are
+paced across concurrent conversations. Timeouts, HTTP 408/429, transport
+failures, and 5xx responses have a bounded retry policy; numeric `Retry-After`
+is respected, while 429 without that header uses longer exponential backoff.
+
+`BEYOND_SLIDES_CHAT_EXTRA_BODY` supplies optional provider-specific JSON.
+`BEYOND_SLIDES_RESTORATION_CHAT_EXTRA_BODY` and
+`BEYOND_SLIDES_ANNOTATION_CHAT_EXTRA_BODY` may override it per stage. This lets
+an editorial restoration pass disable expensive reasoning while semantic
+annotation retains it.
+
+Every provider attempt appends typed JSONL events for request, response,
+provider error, validation, or processing failure. Records correlate an
+exchange with workflow, zero-based window index, conversation turn, and request
+kind. API keys and authorization headers are never recorded. Complete records
+are flushed individually. On resume, a malformed non-newline-terminated crash
+tail is truncated; corruption in any completed line is rejected.
+
+## 7. Run layout and resumability
 
 ```text
-run/real-course-analysis/
+run/lecture-analysis/
 |-- manifest.json
+|-- model-trace.jsonl
 |-- window-0001.json
 |-- window-0002.json
 |-- ...
-`-- analysis.json
+|-- analysis.json
+|-- annotation-quality.json
+|-- report.html
+`-- restoration/
+    |-- manifest.json
+    |-- model-trace.jsonl
+    |-- window-0001.json
+    |-- ...
+    |-- restored-transcript.json
+    |-- restored-transcript.txt
+    `-- diagnostics.json
 ```
 
-`manifest.json` records SHA-256 identities for the normalized transcript,
-slides, and annotation prompt together with the run-format version, windowing,
-retrieval, model endpoint, model name, and model limits. Secrets are never
-written to the run directory. A run directory is reused only when its manifest
-exactly matches the requested run.
+Each stage has its own manifest, trace, and checkpoints. Manifests record source
+hashes, embedded prompt hash, endpoint and model identity, optional extra body,
+windowing, concurrency, retrieval, request pacing, retry limits, and output
+limits. Secrets are excluded. A directory resumes only when the requested
+configuration exactly matches its manifest.
 
-Every accepted transcript-window response is validated and atomically written
-before it counts as completed. Restarting the same command validates and
-restores matching window checkpoints, then sends only missing windows. The
-final `analysis.json` is written atomically only after all window results have
-been assembled into a complete `ValidatedAnalysis`; it also retains inferred
-slide positions and per-window model diagnostics.
+Window indices in core code are zero-based. Filenames and user-facing progress
+translate them to one-based window numbers only at the boundary.
 
-## 9. Error and uncertainty policy
+## 8. Testing and evaluation policy
 
-- Malformed normalized inputs fail before analysis begins.
-- Missing slide text is represented, not invented.
-- Invalid model output is rejected with actionable validation errors.
-- A failed window remains visibly failed; it is not treated as low novelty.
-- When present, comparison notes use calibrated language such as "not found in
-  the inspected slides" when the evidence does not justify an absolute absence
-  claim.
-- The UI always lets the user inspect the underlying transcript and referenced
-  slides.
+Synthetic fixtures test domain invariants, Chinese retrieval, restored
+windowing, exact and fuzzy projection, rejection at the 5% boundary, tool
+sessions, provider conversations, resumability, artifact validation, and HTML
+escaping. Mock endpoints verify tool-budget enforcement, structured repairs,
+rate-limit retry, request pacing, and trace records.
 
-## 10. Testing and evaluation
+Real-course evaluation separates uncertain components:
 
-### Synthetic fixture
+- visual reference versus semantic slide positions;
+- labeled slide retrieval recall;
+- restoration evidence review;
+- exact/fuzzy/rejected passage-partition rates;
+- human review of novelty, connection strength, and importance;
+- whether continuous score typography helps a learner locate useful oral
+  additions without destroying lecture context.
 
-The permanent `tiny_course` fixture should contain at least:
+Thresholds, retrieval fusion, transition penalties, and score prompts should be
+tuned from labeled evidence rather than one aesthetically pleasing report.
 
-- natural Simplified Chinese without artificial spaces between words;
-- mixed Latin technical terms or formulas;
-- direct repetition of a slide;
-- a valuable oral explanation absent from the slide wording;
-- a useful connection to an earlier slide;
-- a novel but unimportant anecdote;
-- adjacent segments that must be grouped together.
+## 9. Known limits and next decisions
 
-The first automated tests verify deserialization, domain invariants, complete
-annotation coverage, ranking behavior, and successful HTML generation.
-
-### Later component evaluation
-
-Once the deterministic slice works, evaluate each uncertain component
-separately:
-
-- alignment accuracy against manually paired windows and slides;
-- retrieval recall for known relevant slides;
-- novelty, connection, and importance agreement with human labels;
-- end-to-end usefulness: how much lecture time can a learner skip without
-  missing instructor-added value?
-
-Evaluation should use a manually annotated portion of a real lecture before
-prompts, thresholds, or alignment penalties are heavily tuned.
-
-The synthetic `retrieval_course` fixture provides a reproducible development
-comparison across semantic-paraphrase, exact-term, and mixed Chinese queries.
-Its metrics guard the evaluation procedure, not a claim that one retrieval mode
-is generally superior. Model or fusion decisions require the real-lecture
-evaluation above.
-
-## 11. Implementation sequence
-
-1. Add normalized source data structures and the `tiny_course` JSON fixture.
-2. Validate transcript, slides, scores, evidence, and exact passage coverage.
-3. Rank qualifying lecture passages and render the two-view self-contained HTML
-   report.
-4. Add deterministic owned-region windowing.
-5. Add lexical slide search, followed by dense retrieval and hybrid fusion.
-6. Add soft non-monotonic window-to-slide alignment and a human-readable
-   visualization.
-7. Add schema-constrained model annotation using only local aligned slides.
-8. Add global `inspect_slide` and `search_slides` agent tools.
-9. Add real PDF slide extraction.
-10. Add an external transcription adapter and segment normalization.
-11. Evaluate on a manually labeled lecture segment and tune from evidence.
-
-The first acceptance checkpoint is intentionally smaller than the complete
-pipeline:
-
-> Given the synthetic `transcript.json`, `slides.json`, and `annotations.json`,
-> BeyondSlides validates an exact partition of the transcript, ranks useful oral
-> additions, and generates a self-contained report whose claims can be traced
-> back to transcript and slide evidence.
-
-## 12. Deferred decisions
-
-The following choices should be made when the corresponding milestone begins:
-
-- exact JSON schema versioning and migration policy;
-- word-, token-, or duration-based window sizing;
-- whether a larger or newer embedding model justifies its additional cost;
-- retrieval fusion tuning and alignment scoring parameters based on real labels;
-- Traditional Chinese normalization and general multilingual analysis;
-- LLM provider and structured-output protocol;
-- PDF/PPTX extraction backends;
-- whether textbooks become a second written source in the MVP's successor;
-- whether slide-level evidence is sufficient or exact slide excerpts are
-  required;
-- visualization details and accessibility palette.
-
-These choices are intentionally absent from the core architecture because none
-changes the initial domain contract or first vertical slice.
+- A model can preserve wording yet choose poor semantic passage boundaries;
+  projection verifies source fidelity, not judgment quality.
+- Slide-level evidence may prove too coarse; exact slide excerpts can be added
+  if evaluation requires them.
+- Dense retrieval currently loads one fixed local Chinese embedding model.
+- The default slide-position prior assumes a complete recording beginning at
+  the first slide.
+- PDF text warnings do not yet trigger OCR or multimodal ingestion.
+- The two model stages share orchestration concepts but remain distinct
+  sessions until connecting or extracting them produces a genuinely deeper
+  interface rather than a generic workflow framework.
+- Traditional Chinese and broader multilingual export remain future work.

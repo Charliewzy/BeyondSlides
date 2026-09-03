@@ -1,6 +1,7 @@
 mod alignment;
 mod annotation;
 mod chat_completions;
+mod continuous_report;
 mod domain;
 pub mod evaluation;
 pub mod ingestion;
@@ -26,6 +27,7 @@ pub use chat_completions::{
     ChatCompletionsConfigError, ChatCompletionsError, RestorationDiagnostics,
     RestoredAnnotationResult, TranscriptWindowRestorationResult,
 };
+pub use continuous_report::render_continuous_report;
 pub use domain::{
     LecturePassage, LecturePassages, RestoredLecturePassage, RestoredTranscript,
     RestoredTranscriptSpan, Score5, ScoreOutOfRange, Slide, SlideDeck, SlideId, Transcript,

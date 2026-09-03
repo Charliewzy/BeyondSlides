@@ -11,6 +11,7 @@ use beyond_slides::{
     LectureAnalysisConfig, LectureAnalysisProgressError, LectureAnalysisSession,
     LexicalSlideScorer, ModelExchangeTrace, PassageProjectionDiagnostics, RestoredLecturePassage,
     RestoredTranscript, SlideDeck, SlideId, Transcript, ValidatedSources, WindowingConfig,
+    render_continuous_report,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,7 +20,7 @@ use crate::restoration_run;
 use crate::run_support::{
     ProviderSettings, checkpoint_path, display_token_count, initialize_run_directory,
     open_output_model_trace, open_run_model_trace, read_json, read_json_with_hash, sha256,
-    window_progress_bar, write_json_atomically,
+    window_progress_bar, write_json_atomically, write_text_atomically,
 };
 
 const ANALYSIS_RUN_FORMAT_VERSION: u32 = 3;
@@ -34,6 +35,7 @@ const MAX_OUTPUT_TOKENS: u32 = 16_384;
 const DENSE_MODEL: &str = "BAAI/bge-small-zh-v1.5";
 const RETRIEVAL_MODE: &str = "hybrid-rrf";
 const ANALYSIS_FILE: &str = "analysis.json";
+const REPORT_FILE: &str = "report.html";
 const RESTORATION_DIRECTORY: &str = "restoration";
 
 pub async fn run_canary(
@@ -195,10 +197,17 @@ pub async fn run_complete(
     };
     let output_path = run_directory.join(ANALYSIS_FILE);
     write_json_atomically(&output_path, &output, "complete analysis")?;
+    let report_path = run_directory.join(REPORT_FILE);
+    write_text_atomically(
+        &report_path,
+        &render_continuous_report(result.analysis()),
+        "continuous lecture report",
+    )?;
     progress.finish_with_message("analysis complete");
     println!(
-        "Wrote complete lecture analysis to {}",
-        output_path.display()
+        "Wrote complete lecture analysis to {} and report to {}",
+        output_path.display(),
+        report_path.display()
     );
     Ok(())
 }

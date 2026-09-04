@@ -1,11 +1,12 @@
 use std::{error::Error, time::Duration};
 
 use beyond_slides::{
-    ContinuousReportError, ContinuousReportMedia, ProposedTranscriptWindowAnalysis, ReportAudio,
-    ReportSlideImage, RestoredTranscript, RestoredTranscriptSpan, Slide, SlideDeck, SlideId,
-    Transcript, TranscriptSegment, TranscriptSegmentId, ValidatedSources, WindowingConfig,
-    assemble_restored_window_analyses, build_restored_annotation_tasks, build_restored_windows,
-    project_window_analysis, render_continuous_report, render_continuous_report_with_media,
+    ContinuousReportError, ContinuousReportMedia, PassagePlaybackInterval, PlaybackTimingBasis,
+    ProposedTranscriptWindowAnalysis, ReportAudio, ReportSlideImage, RestoredTranscript,
+    RestoredTranscriptSpan, Slide, SlideDeck, SlideId, Transcript, TranscriptSegment,
+    TranscriptSegmentId, ValidatedSources, WindowingConfig, assemble_restored_window_analyses,
+    build_restored_annotation_tasks, build_restored_windows, project_window_analysis,
+    render_continuous_report, render_continuous_report_with_media,
 };
 
 #[test]
@@ -98,6 +99,63 @@ fn report_plays_only_the_selected_passage_audio_interval() -> Result<(), Box<dyn
     assert!(report.contains("audio.currentTime = start"));
     assert!(report.contains("audio.currentTime >= activeAudioEnd"));
     assert!(report.contains("inspectPassage(passages[0], \"auto\")"));
+    Ok(())
+}
+
+#[test]
+fn report_uses_projected_playback_timing_without_changing_source_provenance()
+-> Result<(), Box<dyn Error>> {
+    let analysis = analysis()?;
+    let media = ContinuousReportMedia {
+        audio: Some(ReportAudio {
+            source: "report.assets/lecture-audio.flac".into(),
+        }),
+        playback_intervals: vec![
+            PassagePlaybackInterval {
+                start_ms: 100,
+                end_ms: 750,
+                basis: PlaybackTimingBasis::TimedTokens,
+            },
+            PassagePlaybackInterval {
+                start_ms: 750,
+                end_ms: 1_900,
+                basis: PlaybackTimingBasis::TimedTokens,
+            },
+        ],
+        ..ContinuousReportMedia::default()
+    };
+
+    let report = render_continuous_report_with_media(&analysis, &media)?;
+
+    assert!(report.contains("data-source-start=\"0\""));
+    assert!(report.contains("data-source-end=\"0\""));
+    assert!(report.contains("data-audio-start-ms=\"100\""));
+    assert!(report.contains("data-audio-end-ms=\"750\""));
+    assert!(report.contains("data-audio-basis=\"timed_tokens\""));
+    Ok(())
+}
+
+#[test]
+fn report_requires_one_playback_interval_per_passage() -> Result<(), Box<dyn Error>> {
+    let analysis = analysis()?;
+    let media = ContinuousReportMedia {
+        playback_intervals: vec![PassagePlaybackInterval {
+            start_ms: 0,
+            end_ms: 1_000,
+            basis: PlaybackTimingBasis::TimedTokens,
+        }],
+        ..ContinuousReportMedia::default()
+    };
+
+    let error = render_continuous_report_with_media(&analysis, &media)
+        .expect_err("partial playback timing must be rejected");
+    assert_eq!(
+        error,
+        ContinuousReportError::PlaybackIntervalCountMismatch {
+            expected: 2,
+            actual: 1,
+        }
+    );
     Ok(())
 }
 

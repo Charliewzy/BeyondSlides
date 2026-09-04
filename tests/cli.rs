@@ -107,9 +107,10 @@ fn saved_restored_analysis_can_be_rendered_and_evaluated_without_a_provider() {
     let trace_path = directory.path().join("model-trace.jsonl");
     let report_path = directory.path().join("report.html");
     let audio_path = directory.path().join("audio.flac");
+    let timed_tokens_path = directory.path().join("timed-tokens.json");
     fs::write(
         &transcript_path,
-        r#"{"segments":[{"id":0,"start_ms":0,"end_ms":1000,"text":"原始文本"}]}"#,
+        r#"{"segments":[{"id":0,"start_ms":0,"end_ms":1000,"text":"可读讲稿"}]}"#,
     )
     .expect("write transcript");
     fs::write(
@@ -151,6 +152,16 @@ fn saved_restored_analysis_can_be_rendered_and_evaluated_without_a_provider() {
     )
     .expect("write trace");
     fs::write(&audio_path, b"audio fixture").expect("write audio fixture");
+    fs::write(
+        &timed_tokens_path,
+        r#"{"tokens":[
+            {"text":"可","start_ms":100,"end_ms":200},
+            {"text":"读","start_ms":250,"end_ms":350},
+            {"text":"讲","start_ms":400,"end_ms":500},
+            {"text":"稿","start_ms":550,"end_ms":650}
+        ]}"#,
+    )
+    .expect("write timed transcript fixture");
 
     let render = Command::new(beyond_slides_binary())
         .arg("render-analysis")
@@ -184,6 +195,8 @@ fn saved_restored_analysis_can_be_rendered_and_evaluated_without_a_provider() {
         .arg(&slide_pdf_path)
         .args(["--audio"])
         .arg(&audio_path)
+        .args(["--timed-tokens"])
+        .arg(&timed_tokens_path)
         .env_remove("BEYOND_SLIDES_API_BASE_URL")
         .env_remove("BEYOND_SLIDES_API_KEY")
         .env_remove("BEYOND_SLIDES_MODEL")
@@ -197,7 +210,9 @@ fn saved_restored_analysis_can_be_rendered_and_evaluated_without_a_provider() {
     let report_with_slides =
         fs::read_to_string(&report_with_slides_path).expect("read report with slides");
     assert!(report_with_slides.contains("data-slide-position=\"0\""));
-    assert!(report_with_slides.contains("data-audio-start-ms=\"0\""));
+    assert!(report_with_slides.contains("data-audio-start-ms=\"100\""));
+    assert!(report_with_slides.contains("data-audio-end-ms=\"650\""));
+    assert!(report_with_slides.contains("data-audio-basis=\"timed_tokens\""));
     assert!(report_with_slides.contains("data-lecture-audio"));
     assert!(report_with_slides.contains("report-with-slides.assets/lecture-audio.flac"));
     assert!(report_with_slides.contains("report-with-slides.assets/slides/slide-0001.png"));

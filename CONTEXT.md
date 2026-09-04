@@ -20,6 +20,12 @@ _Avoid_: Notes, lecture summary
 The smallest individually timestamped and referenced part of a transcript.
 _Avoid_: Transcript sentence, ASR segment, utterance
 
+**Timed transcript token**:
+An optional fine-grained ASR text unit with its own recording interval, used to
+derive playback boundaries. A token is commonly one Chinese character but may
+contain several Latin characters; it is not assumed to be a linguistic word.
+_Avoid_: Word timestamp, exact transcript position
+
 **Restored transcript**:
 Readable lecture text derived from a transcript while retaining references to
 the transcript segments that support it.
@@ -36,6 +42,13 @@ A contiguous part of the readable restored transcript evaluated as one
 meaningful unit. It retains the transcript-segment range supporting its text,
 even when that source range is coarser than the passage boundary.
 _Avoid_: Annotation group, segment group
+
+**Passage playback interval**:
+The approximate recording interval played for a lecture passage. It is derived
+from timed transcript tokens when reliable text alignment is available and
+otherwise falls back to the passage's transcript-segment range. It is not
+source provenance.
+_Avoid_: Passage source range, exact timestamp
 
 ## Windowing
 

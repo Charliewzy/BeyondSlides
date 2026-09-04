@@ -205,6 +205,10 @@ transcript adapter       PDF text adapter
               artifact and HTML report
 ```
 
+An optional timed-token sidecar follows a separate path from the ASR system to
+report rendering. It refines passage audio playback but does not participate in
+restoration, annotation, or source provenance.
+
 ### 5.1 Ingestion and normalization
 
 The FunASR TSV adapter converts each nonblank timestamped row into one
@@ -213,6 +217,12 @@ grammatical boundaries. The PDF adapter uses Poppler `pdftotext` in raw reading
 order, preserves one slide per page, removes only rigorously detected repeated
 page furniture, and reports sparse text or suspicious glyphs rather than
 silently invoking OCR.
+
+For recordings transcribed with SenseVoice, the optional timing exporter
+retains each fine-grained ASR text unit and its interval as a timed transcript
+token. Chinese tokens are commonly individual characters; consumers must not
+assume that tokens are linguistic words. This sidecar supplements rather than
+replaces the coarser normalized transcript.
 
 The original video is not required by the product. When available, FFmpeg,
 Poppler, and MSSIM can build a visual slide/time reference for evaluating
@@ -328,6 +338,16 @@ Importance maps to six font weights and novelty maps to six underline
 thicknesses. Hover, focus, or click reveals timestamps, raw source range,
 inferred slide position, and component scores.
 
+When audio and timed transcript tokens are supplied, rendering locally aligns
+each passage's restored text within its coarse source interval and projects its
+boundaries onto token timing. Token-derived adjacent passages share one audio
+boundary. Passages with overlapping provenance are aligned as one ordered
+group, preventing repeated phrases from reversing their playback boundaries. A
+group falls back to its coarse source-segment intervals when any passage has
+less than a 60% normalized character match. These playback intervals remain
+presentation data, so adding or improving the timing sidecar does not
+invalidate `analysis.json`.
+
 An optional PDF presentation adapter invokes Poppler once at rendering time and
 writes one ordered PNG per normalized slide beneath a report-local asset
 directory. The slide count must exactly match the normalized slide deck. The
@@ -382,6 +402,7 @@ run/lecture-analysis/
 |-- analysis.json
 |-- annotation-quality.json
 |-- report.html
+|-- timed-tokens.json (optional input)
 |-- report.assets/
 |   |-- lecture-audio.flac
 |   `-- slides/
@@ -404,10 +425,10 @@ limits. Secrets are excluded. A directory resumes only when the requested
 configuration exactly matches its manifest.
 
 When a recording is supplied for rendering, the report stages it under
-`report.assets/` (normally as a hard link) and passage selection seeks to the
-original segment timestamps. Playback stops at the selected passage's source
-end. These intervals deliberately retain the transcriber's coarse timing rather
-than inventing finer timestamps for restored text.
+`report.assets/` (normally as a hard link). Passage selection uses projected
+timed-token boundaries when an optional timing sidecar supports a reliable
+local match, and otherwise uses the original segment timestamps. Playback
+stops at the selected passage's derived or fallback end.
 
 Window indices in core code are zero-based. Filenames and user-facing progress
 translate them to one-based window numbers only at the boundary.
@@ -443,6 +464,8 @@ tuned from labeled evidence rather than one aesthetically pleasing report.
 - The default slide-position prior assumes a complete recording beginning at
   the first slide.
 - PDF text warnings do not yet trigger OCR or multimodal ingestion.
+- Fine passage playback timing requires an optional SenseVoice timing sidecar;
+  reports without it retain coarse, potentially overlapping segment intervals.
 - The two model stages share orchestration concepts but remain distinct
   sessions until connecting or extracting them produces a genuinely deeper
   interface rather than a generic workflow framework.

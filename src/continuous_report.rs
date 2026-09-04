@@ -2,7 +2,7 @@ use std::{error::Error, fmt};
 
 use askama::Template;
 
-use crate::{RestoredLecturePassage, ValidatedRestoredAnalysis};
+use crate::{PassagePlaybackInterval, RestoredLecturePassage, ValidatedRestoredAnalysis};
 
 /// One report-local image corresponding to a slide in presentation order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +23,7 @@ pub struct ReportAudio {
 pub struct ContinuousReportMedia {
     pub slide_images: Vec<ReportSlideImage>,
     pub audio: Option<ReportAudio>,
+    pub playback_intervals: Vec<PassagePlaybackInterval>,
 }
 
 /// Renders the readable lecture in chronological order with inline score typography.
@@ -44,11 +45,22 @@ pub fn render_continuous_report_with_media(
             actual: media.slide_images.len(),
         });
     }
+    if !media.playback_intervals.is_empty()
+        && media.playback_intervals.len() != analysis.passages().len()
+    {
+        return Err(ContinuousReportError::PlaybackIntervalCountMismatch {
+            expected: analysis.passages().len(),
+            actual: media.playback_intervals.len(),
+        });
+    }
 
     let passages: Vec<_> = analysis
         .passages()
         .iter()
-        .map(|passage| PassageView::new(analysis, passage))
+        .enumerate()
+        .map(|(index, passage)| {
+            PassageView::new(analysis, passage, media.playback_intervals.get(index))
+        })
         .collect();
     let slides: Vec<_> = media
         .slide_images
@@ -112,6 +124,7 @@ struct PassageView {
     timestamp: String,
     audio_start_ms: u64,
     audio_end_ms: u64,
+    audio_basis: &'static str,
     slide_position: u32,
     slide_number: usize,
     importance: u8,
@@ -121,19 +134,33 @@ struct PassageView {
 }
 
 impl PassageView {
-    fn new(analysis: &ValidatedRestoredAnalysis, passage: &RestoredLecturePassage) -> Self {
+    fn new(
+        analysis: &ValidatedRestoredAnalysis,
+        passage: &RestoredLecturePassage,
+        playback: Option<&PassagePlaybackInterval>,
+    ) -> Self {
         let first = &analysis.transcript().segments[passage.source_start.index()];
         let last = &analysis.transcript().segments[passage.source_end.index()];
+        let coarse_playback = PassagePlaybackInterval {
+            start_ms: first.start_ms,
+            end_ms: last.end_ms,
+            basis: crate::PlaybackTimingBasis::TranscriptSegments,
+        };
+        let playback = playback.unwrap_or(&coarse_playback);
         Self {
             source_start: passage.source_start.0,
             source_end: passage.source_end.0,
             timestamp: format!(
                 "{}–{}",
-                format_timestamp(first.start_ms),
-                format_timestamp(last.end_ms)
+                format_timestamp(playback.start_ms),
+                format_timestamp(playback.end_ms)
             ),
-            audio_start_ms: first.start_ms,
-            audio_end_ms: last.end_ms,
+            audio_start_ms: playback.start_ms,
+            audio_end_ms: playback.end_ms,
+            audio_basis: match playback.basis {
+                crate::PlaybackTimingBasis::TimedTokens => "timed_tokens",
+                crate::PlaybackTimingBasis::TranscriptSegments => "transcript_segments",
+            },
             slide_position: passage.slide_position.0,
             slide_number: passage.slide_position.index() + 1,
             importance: passage.importance.get(),
@@ -147,6 +174,7 @@ impl PassageView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContinuousReportError {
     SlideImageCountMismatch { expected: usize, actual: usize },
+    PlaybackIntervalCountMismatch { expected: usize, actual: usize },
 }
 
 impl fmt::Display for ContinuousReportError {
@@ -155,6 +183,10 @@ impl fmt::Display for ContinuousReportError {
             Self::SlideImageCountMismatch { expected, actual } => write!(
                 formatter,
                 "continuous report expected {expected} slide images but received {actual}"
+            ),
+            Self::PlaybackIntervalCountMismatch { expected, actual } => write!(
+                formatter,
+                "continuous report expected {expected} passage playback intervals but received {actual}"
             ),
         }
     }

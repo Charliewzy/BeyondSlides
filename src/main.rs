@@ -64,6 +64,7 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
                 run_directory,
                 options.slide_pdf.as_deref(),
                 options.audio.as_deref(),
+                options.timed_tokens.as_deref(),
             )
             .await
         }
@@ -78,6 +79,7 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
                 report_path,
                 options.slide_pdf.as_deref(),
                 options.audio.as_deref(),
+                options.timed_tokens.as_deref(),
             )
         }
         [command, analysis_path, trace_path]
@@ -96,8 +98,8 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
             "usage: beyond-slides <transcript.json> <slides.json> <annotations.json> <result.html>\n\
              or:    beyond-slides summarize-trace <model-trace.jsonl>\n\
              or:    beyond-slides canary <transcript.json> <slides.json> <canary.json>\n\
-             or:    beyond-slides analyze <transcript.json> <slides.json> <run-directory> [--slides-pdf <slides.pdf>] [--audio <recording>]\n\
-             or:    beyond-slides render-analysis <transcript.json> <slides.json> <analysis.json> <result.html> [--slides-pdf <slides.pdf>] [--audio <recording>]\n\
+             or:    beyond-slides analyze <transcript.json> <slides.json> <run-directory> [--slides-pdf <slides.pdf>] [--audio <recording> --timed-tokens <timing.json>]\n\
+             or:    beyond-slides render-analysis <transcript.json> <slides.json> <analysis.json> <result.html> [--slides-pdf <slides.pdf>] [--audio <recording> --timed-tokens <timing.json>]\n\
              or:    beyond-slides evaluate-analysis <analysis.json> <model-trace.jsonl>\n\
              or:    beyond-slides restore-canary <transcript.json> <run-directory>\n\
              or:    beyond-slides restore <transcript.json> <run-directory>\n\
@@ -116,6 +118,7 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
 struct ReportOptions {
     slide_pdf: Option<OsString>,
     audio: Option<OsString>,
+    timed_tokens: Option<OsString>,
 }
 
 fn parse_report_options(arguments: &[OsString]) -> Result<ReportOptions, io::Error> {
@@ -131,6 +134,7 @@ fn parse_report_options(arguments: &[OsString]) -> Result<ReportOptions, io::Err
         let destination = match flag.as_os_str() {
             flag if flag == OsStr::new("--slides-pdf") => &mut options.slide_pdf,
             flag if flag == OsStr::new("--audio") => &mut options.audio,
+            flag if flag == OsStr::new("--timed-tokens") => &mut options.timed_tokens,
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,

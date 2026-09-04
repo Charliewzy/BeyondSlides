@@ -9,6 +9,7 @@ pub mod ingestion;
 mod model_trace;
 mod orchestration;
 mod passage_projection;
+mod playback_timing;
 mod ranking;
 mod report;
 mod restoration;
@@ -35,8 +36,8 @@ pub use continuous_report::{
 };
 pub use domain::{
     LecturePassage, LecturePassages, RestoredLecturePassage, RestoredTranscript,
-    RestoredTranscriptSpan, Score5, ScoreOutOfRange, Slide, SlideDeck, SlideId, Transcript,
-    TranscriptSegment, TranscriptSegmentId,
+    RestoredTranscriptSpan, Score5, ScoreOutOfRange, Slide, SlideDeck, SlideId, TimedTranscript,
+    TimedTranscriptToken, Transcript, TranscriptSegment, TranscriptSegmentId,
 };
 pub use model_trace::{
     MODEL_TRACE_FORMAT_VERSION, ModelExchangeTrace, ModelProviderError, ModelRequestKind,
@@ -50,6 +51,10 @@ pub use orchestration::{
 pub use passage_projection::{
     PassageProjection, PassageProjectionDiagnostics, PassageProjectionError,
     project_passage_boundaries,
+};
+pub use playback_timing::{
+    PassagePlaybackInterval, PlaybackTimingBasis, PlaybackTimingError,
+    project_passage_playback_intervals,
 };
 pub use ranking::rank_oral_additions;
 pub use report::render_report;

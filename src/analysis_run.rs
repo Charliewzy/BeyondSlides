@@ -9,10 +9,11 @@ use std::{
 use beyond_slides::{
     ChatCompletionsClient, ContinuousReportMedia, DenseSlideScorer, HybridSlideScorer,
     LectureAnalysisConfig, LectureAnalysisProgressError, LectureAnalysisSession,
-    LexicalSlideScorer, ModelExchangeTrace, RestoredAnalysisArtifact, RestoredTranscript,
-    SlideDeck, Transcript, ValidatedRestoredAnalysis, ValidatedSources, WindowingConfig,
+    LexicalSlideScorer, ModelExchangeTrace, PlaybackTimingBasis, RestoredAnalysisArtifact,
+    RestoredTranscript, SlideDeck, TimedTranscript, Transcript, ValidatedRestoredAnalysis,
+    ValidatedSources, WindowingConfig,
     evaluation::{render_annotation_quality, summarize_annotation_quality},
-    read_model_trace, render_continuous_report_with_media,
+    project_passage_playback_intervals, read_model_trace, render_continuous_report_with_media,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -112,12 +113,14 @@ pub async fn run_complete(
     run_directory: &OsStr,
     slide_pdf_path: Option<&OsStr>,
     audio_path: Option<&OsStr>,
+    timed_tokens_path: Option<&OsStr>,
 ) -> Result<(), Box<dyn Error>> {
     let transcript_path = PathBuf::from(transcript_path);
     let slides_path = PathBuf::from(slides_path);
     let run_directory = PathBuf::from(run_directory);
     let slide_pdf_path = slide_pdf_path.map(PathBuf::from);
     let audio_path = audio_path.map(PathBuf::from);
+    let timed_tokens_path = timed_tokens_path.map(PathBuf::from);
     let provider = ProviderSettings::from_annotation_environment()?;
     let restoration_directory = run_directory.join(RESTORATION_DIRECTORY);
     restoration_run::run_complete(
@@ -213,6 +216,7 @@ pub async fn run_complete(
         &report_path,
         slide_pdf_path.as_deref(),
         audio_path.as_deref(),
+        timed_tokens_path.as_deref(),
     )?;
     let trace = read_model_trace(&model_trace_path(&run_directory))?;
     let quality = summarize_annotation_quality(&output, &trace);
@@ -235,6 +239,7 @@ pub fn render_saved_analysis(
     report_path: &OsStr,
     slide_pdf_path: Option<&OsStr>,
     audio_path: Option<&OsStr>,
+    timed_tokens_path: Option<&OsStr>,
 ) -> Result<(), Box<dyn Error>> {
     let transcript: Transcript = read_json(Path::new(transcript_path), "transcript")?;
     let slide_deck: SlideDeck = read_json(Path::new(slides_path), "slides")?;
@@ -246,6 +251,7 @@ pub fn render_saved_analysis(
         Path::new(report_path),
         slide_pdf_path.map(Path::new),
         audio_path.map(Path::new),
+        timed_tokens_path.map(Path::new),
     )?;
     println!(
         "Wrote continuous lecture report to {}",
@@ -259,7 +265,15 @@ fn write_analysis_report(
     report_path: &Path,
     slide_pdf_path: Option<&Path>,
     audio_path: Option<&Path>,
+    timed_tokens_path: Option<&Path>,
 ) -> Result<(), Box<dyn Error>> {
+    if timed_tokens_path.is_some() && audio_path.is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--timed-tokens requires --audio because playback timing has no effect without a recording",
+        )
+        .into());
+    }
     let slide_images = if let Some(slide_pdf_path) = slide_pdf_path {
         render_pdf_slides(
             slide_pdf_path,
@@ -272,11 +286,32 @@ fn write_analysis_report(
     let audio = audio_path
         .map(|audio_path| prepare_audio_asset(audio_path, report_path))
         .transpose()?;
+    let playback_intervals = timed_tokens_path
+        .map(|timed_tokens_path| {
+            let timing: TimedTranscript = read_json(timed_tokens_path, "timed transcript")?;
+            let intervals = project_passage_playback_intervals(
+                analysis.transcript(),
+                analysis.passages(),
+                &timing,
+            )?;
+            let token_aligned = intervals
+                .iter()
+                .filter(|interval| interval.basis == PlaybackTimingBasis::TimedTokens)
+                .count();
+            eprintln!(
+                "Projected token-level playback timing for {token_aligned}/{} passages; the remainder use coarse transcript-segment timing.",
+                intervals.len()
+            );
+            Ok::<_, Box<dyn Error>>(intervals)
+        })
+        .transpose()?
+        .unwrap_or_default();
     let report = render_continuous_report_with_media(
         analysis,
         &ContinuousReportMedia {
             slide_images,
             audio,
+            playback_intervals,
         },
     )?;
     write_text_atomically(report_path, &report, "continuous lecture report")?;

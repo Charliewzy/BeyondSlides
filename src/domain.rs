@@ -69,6 +69,23 @@ pub struct Transcript {
     pub segments: Vec<TranscriptSegment>,
 }
 
+/// Fine-grained ASR timing retained separately from transcript segmentation.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct TimedTranscript {
+    pub tokens: Vec<TimedTranscriptToken>,
+}
+
+/// One textual ASR unit and its absolute interval in the source recording.
+///
+/// Chinese units are normally individual characters; Latin units may contain
+/// multiple characters and should not be assumed to be linguistic words.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct TimedTranscriptToken {
+    pub text: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct RestoredTranscript {
     pub spans: Vec<RestoredTranscriptSpan>,
@@ -156,7 +173,11 @@ pub struct LecturePassages {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct RestoredLecturePassage {
     pub text: String,
+    /// Earliest transcript segment contributing evidence to this passage.
+    /// This is coarse provenance, not an exact playback boundary.
     pub source_start: TranscriptSegmentId,
+    /// Latest transcript segment contributing evidence to this passage.
+    /// This is coarse provenance, not an exact playback boundary.
     pub source_end: TranscriptSegmentId,
     pub slide_position: SlideId,
     pub novelty: Score5,

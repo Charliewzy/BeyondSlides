@@ -30,8 +30,8 @@ pub use chat_completions::{
     RestoredAnnotationResult, TranscriptWindowRestorationResult,
 };
 pub use continuous_report::{
-    ContinuousReportError, ContinuousReportMedia, ReportSlideImage, render_continuous_report,
-    render_continuous_report_with_media,
+    ContinuousReportError, ContinuousReportMedia, ReportAudio, ReportSlideImage,
+    render_continuous_report, render_continuous_report_with_media,
 };
 pub use domain::{
     LecturePassage, LecturePassages, RestoredLecturePassage, RestoredTranscript,

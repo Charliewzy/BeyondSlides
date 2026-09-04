@@ -106,6 +106,7 @@ fn saved_restored_analysis_can_be_rendered_and_evaluated_without_a_provider() {
     let analysis_path = directory.path().join("analysis.json");
     let trace_path = directory.path().join("model-trace.jsonl");
     let report_path = directory.path().join("report.html");
+    let audio_path = directory.path().join("audio.flac");
     fs::write(
         &transcript_path,
         r#"{"segments":[{"id":0,"start_ms":0,"end_ms":1000,"text":"原始文本"}]}"#,
@@ -149,6 +150,7 @@ fn saved_restored_analysis_can_be_rendered_and_evaluated_without_a_provider() {
         ),
     )
     .expect("write trace");
+    fs::write(&audio_path, b"audio fixture").expect("write audio fixture");
 
     let render = Command::new(beyond_slides_binary())
         .arg("render-analysis")
@@ -180,6 +182,8 @@ fn saved_restored_analysis_can_be_rendered_and_evaluated_without_a_provider() {
         ])
         .args(["--slides-pdf"])
         .arg(&slide_pdf_path)
+        .args(["--audio"])
+        .arg(&audio_path)
         .env_remove("BEYOND_SLIDES_API_BASE_URL")
         .env_remove("BEYOND_SLIDES_API_KEY")
         .env_remove("BEYOND_SLIDES_MODEL")
@@ -193,12 +197,24 @@ fn saved_restored_analysis_can_be_rendered_and_evaluated_without_a_provider() {
     let report_with_slides =
         fs::read_to_string(&report_with_slides_path).expect("read report with slides");
     assert!(report_with_slides.contains("data-slide-position=\"0\""));
+    assert!(report_with_slides.contains("data-audio-start-ms=\"0\""));
+    assert!(report_with_slides.contains("data-lecture-audio"));
+    assert!(report_with_slides.contains("report-with-slides.assets/lecture-audio.flac"));
     assert!(report_with_slides.contains("report-with-slides.assets/slides/slide-0001.png"));
     assert!(
         directory
             .path()
             .join("report-with-slides.assets/slides/slide-0002.png")
             .exists()
+    );
+    assert_eq!(
+        fs::read(
+            directory
+                .path()
+                .join("report-with-slides.assets/lecture-audio.flac")
+        )
+        .expect("read report audio asset"),
+        b"audio fixture"
     );
 
     let evaluate = Command::new(beyond_slides_binary())

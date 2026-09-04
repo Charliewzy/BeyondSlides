@@ -383,6 +383,7 @@ run/lecture-analysis/
 |-- annotation-quality.json
 |-- report.html
 |-- report.assets/
+|   |-- lecture-audio.flac
 |   `-- slides/
 |       |-- slide-0001.png
 |       `-- ...
@@ -401,6 +402,12 @@ hashes, embedded prompt hash, endpoint and model identity, optional extra body,
 windowing, concurrency, retrieval, request pacing, retry limits, and output
 limits. Secrets are excluded. A directory resumes only when the requested
 configuration exactly matches its manifest.
+
+When a recording is supplied for rendering, the report stages it under
+`report.assets/` (normally as a hard link) and passage selection seeks to the
+original segment timestamps. Playback stops at the selected passage's source
+end. These intervals deliberately retain the transcriber's coarse timing rather
+than inventing finer timestamps for restored text.
 
 Window indices in core code are zero-based. Filenames and user-facing progress
 translate them to one-based window numbers only at the boundary.

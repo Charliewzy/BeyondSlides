@@ -1,7 +1,7 @@
 use std::{error::Error, time::Duration};
 
 use beyond_slides::{
-    ContinuousReportError, ContinuousReportMedia, ProposedTranscriptWindowAnalysis,
+    ContinuousReportError, ContinuousReportMedia, ProposedTranscriptWindowAnalysis, ReportAudio,
     ReportSlideImage, RestoredTranscript, RestoredTranscriptSpan, Slide, SlideDeck, SlideId,
     Transcript, TranscriptSegment, TranscriptSegmentId, ValidatedSources, WindowingConfig,
     assemble_restored_window_analyses, build_restored_annotation_tasks, build_restored_windows,
@@ -41,6 +41,7 @@ fn report_distinguishes_aligned_and_currently_viewed_slides() -> Result<(), Box<
                 height: 540,
             },
         ],
+        ..ContinuousReportMedia::default()
     };
 
     let report = render_continuous_report_with_media(&analysis, &media)?;
@@ -64,6 +65,7 @@ fn report_requires_one_image_per_normalized_slide() -> Result<(), Box<dyn Error>
             width: 960,
             height: 540,
         }],
+        ..ContinuousReportMedia::default()
     };
 
     let error = render_continuous_report_with_media(&analysis, &media)
@@ -75,6 +77,27 @@ fn report_requires_one_image_per_normalized_slide() -> Result<(), Box<dyn Error>
             actual: 1,
         }
     );
+    Ok(())
+}
+
+#[test]
+fn report_plays_only_the_selected_passage_audio_interval() -> Result<(), Box<dyn Error>> {
+    let analysis = analysis()?;
+    let media = ContinuousReportMedia {
+        audio: Some(ReportAudio {
+            source: "report.assets/lecture-audio.flac".into(),
+        }),
+        ..ContinuousReportMedia::default()
+    };
+
+    let report = render_continuous_report_with_media(&analysis, &media)?;
+
+    assert!(report.contains("data-audio-start-ms=\"0\""));
+    assert!(report.contains("data-audio-end-ms=\"1000\""));
+    assert!(report.contains("src=\"report.assets/lecture-audio.flac\""));
+    assert!(report.contains("audio.currentTime = start"));
+    assert!(report.contains("audio.currentTime >= activeAudioEnd"));
+    assert!(report.contains("inspectPassage(passages[0], \"auto\")"));
     Ok(())
 }
 

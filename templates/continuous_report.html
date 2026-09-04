@@ -47,7 +47,7 @@
           <p class="section-kicker">Continuous lecture transcript</p>
           <h2 id="transcript-title">完整讲稿</h2>
         </header>
-        <p class="continuous-transcript">{% for passage in passages %}<span class="passage" tabindex="0" data-passage data-source-start="{{ passage.source_start }}" data-source-end="{{ passage.source_end }}" data-time="{{ passage.timestamp }}" data-slide-position="{{ passage.slide_position }}" data-slide-number="{{ passage.slide_number }}" data-importance="{{ passage.importance }}" data-novelty="{{ passage.novelty }}" data-connection="{{ passage.connection_strength }}">{{ passage.text }}</span>{% endfor %}</p>
+        <p class="continuous-transcript">{% for passage in passages %}<span class="passage" tabindex="0" data-passage data-source-start="{{ passage.source_start }}" data-source-end="{{ passage.source_end }}" data-time="{{ passage.timestamp }}" data-audio-start-ms="{{ passage.audio_start_ms }}" data-audio-end-ms="{{ passage.audio_end_ms }}" data-slide-position="{{ passage.slide_position }}" data-slide-number="{{ passage.slide_number }}" data-importance="{{ passage.importance }}" data-novelty="{{ passage.novelty }}" data-connection="{{ passage.connection_strength }}">{{ passage.text }}</span>{% endfor %}</p>
       </section>
 
 {% if has_slides %}
@@ -82,6 +82,12 @@
   <aside class="passage-inspector" data-passage-inspector aria-live="polite">
     <strong data-inspector-range>点击讲稿段落查看评分</strong>
     <span data-inspector-details></span>
+{% if has_audio %}
+    <div class="audio-controls">
+      <span data-audio-status>点击讲稿段落播放对应音频</span>
+      <audio data-lecture-audio controls preload="metadata" src="{{ audio_source }}"></audio>
+    </div>
+{% endif %}
   </aside>
 
   <script>

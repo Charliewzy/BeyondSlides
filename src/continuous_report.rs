@@ -12,10 +12,17 @@ pub struct ReportSlideImage {
     pub height: u32,
 }
 
+/// One report-local recording used for passage-scoped playback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportAudio {
+    pub source: String,
+}
+
 /// Optional presentation assets used by the continuous lecture report.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ContinuousReportMedia {
     pub slide_images: Vec<ReportSlideImage>,
+    pub audio: Option<ReportAudio>,
 }
 
 /// Renders the readable lecture in chronological order with inline score typography.
@@ -64,6 +71,8 @@ pub fn render_continuous_report_with_media(
         importance_distribution: score_distribution(analysis, |passage| passage.importance.get()),
         novelty_distribution: score_distribution(analysis, |passage| passage.novelty.get()),
         has_slides: !slides.is_empty(),
+        has_audio: media.audio.is_some(),
+        audio_source: media.audio.as_ref().map_or("", |audio| &audio.source),
         slides,
         passages,
     }
@@ -78,6 +87,8 @@ struct ContinuousReportTemplate<'a> {
     importance_distribution: Vec<ScoreCount>,
     novelty_distribution: Vec<ScoreCount>,
     has_slides: bool,
+    has_audio: bool,
+    audio_source: &'a str,
     slides: Vec<SlideView<'a>>,
     passages: Vec<PassageView>,
 }
@@ -99,6 +110,8 @@ struct PassageView {
     source_start: u32,
     source_end: u32,
     timestamp: String,
+    audio_start_ms: u64,
+    audio_end_ms: u64,
     slide_position: u32,
     slide_number: usize,
     importance: u8,
@@ -119,6 +132,8 @@ impl PassageView {
                 format_timestamp(first.start_ms),
                 format_timestamp(last.end_ms)
             ),
+            audio_start_ms: first.start_ms,
+            audio_end_ms: last.end_ms,
             slide_position: passage.slide_position.0,
             slide_number: passage.slide_position.index() + 1,
             importance: passage.importance.get(),

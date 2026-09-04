@@ -54,43 +54,30 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
         {
             analysis_run::run_canary(transcript_path, slides_path, output_path).await
         }
-        [command, transcript_path, slides_path, run_directory]
+        [command, transcript_path, slides_path, run_directory, options @ ..]
             if command == OsStr::new("analyze") =>
         {
-            analysis_run::run_complete(transcript_path, slides_path, run_directory, None).await
-        }
-        [command, transcript_path, slides_path, run_directory, flag, slide_pdf_path]
-            if command == OsStr::new("analyze") && flag == OsStr::new("--slides-pdf") =>
-        {
+            let options = parse_report_options(options)?;
             analysis_run::run_complete(
                 transcript_path,
                 slides_path,
                 run_directory,
-                Some(slide_pdf_path),
+                options.slide_pdf.as_deref(),
+                options.audio.as_deref(),
             )
             .await
         }
-        [command, transcript_path, slides_path, analysis_path, report_path]
+        [command, transcript_path, slides_path, analysis_path, report_path, options @ ..]
             if command == OsStr::new("render-analysis") =>
         {
+            let options = parse_report_options(options)?;
             analysis_run::render_saved_analysis(
                 transcript_path,
                 slides_path,
                 analysis_path,
                 report_path,
-                None,
-            )
-        }
-        [command, transcript_path, slides_path, analysis_path, report_path, flag, slide_pdf_path]
-            if command == OsStr::new("render-analysis")
-                && flag == OsStr::new("--slides-pdf") =>
-        {
-            analysis_run::render_saved_analysis(
-                transcript_path,
-                slides_path,
-                analysis_path,
-                report_path,
-                Some(slide_pdf_path),
+                options.slide_pdf.as_deref(),
+                options.audio.as_deref(),
             )
         }
         [command, analysis_path, trace_path]
@@ -109,8 +96,8 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
             "usage: beyond-slides <transcript.json> <slides.json> <annotations.json> <result.html>\n\
              or:    beyond-slides summarize-trace <model-trace.jsonl>\n\
              or:    beyond-slides canary <transcript.json> <slides.json> <canary.json>\n\
-             or:    beyond-slides analyze <transcript.json> <slides.json> <run-directory> [--slides-pdf <slides.pdf>]\n\
-             or:    beyond-slides render-analysis <transcript.json> <slides.json> <analysis.json> <result.html> [--slides-pdf <slides.pdf>]\n\
+             or:    beyond-slides analyze <transcript.json> <slides.json> <run-directory> [--slides-pdf <slides.pdf>] [--audio <recording>]\n\
+             or:    beyond-slides render-analysis <transcript.json> <slides.json> <analysis.json> <result.html> [--slides-pdf <slides.pdf>] [--audio <recording>]\n\
              or:    beyond-slides evaluate-analysis <analysis.json> <model-trace.jsonl>\n\
              or:    beyond-slides restore-canary <transcript.json> <run-directory>\n\
              or:    beyond-slides restore <transcript.json> <run-directory>\n\
@@ -123,6 +110,42 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
         )
         .into()),
     }
+}
+
+#[derive(Default)]
+struct ReportOptions {
+    slide_pdf: Option<OsString>,
+    audio: Option<OsString>,
+}
+
+fn parse_report_options(arguments: &[OsString]) -> Result<ReportOptions, io::Error> {
+    let mut options = ReportOptions::default();
+    let mut arguments = arguments.iter();
+    while let Some(flag) = arguments.next() {
+        let value = arguments.next().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("missing path after {}", flag.to_string_lossy()),
+            )
+        })?;
+        let destination = match flag.as_os_str() {
+            flag if flag == OsStr::new("--slides-pdf") => &mut options.slide_pdf,
+            flag if flag == OsStr::new("--audio") => &mut options.audio,
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown report option {}", flag.to_string_lossy()),
+                ));
+            }
+        };
+        if destination.replace(value.clone()).is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("duplicate report option {}", flag.to_string_lossy()),
+            ));
+        }
+    }
+    Ok(options)
 }
 
 fn run_report(

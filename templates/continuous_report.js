@@ -7,7 +7,10 @@
   const slidesById = new Map(slides.map(slide => [slide.dataset.slideId, slide]));
   const alignedSlideLabel = document.querySelector("[data-aligned-slide-label]");
   const viewingSlideLabel = document.querySelector("[data-viewing-slide-label]");
+  const audio = document.querySelector("[data-lecture-audio]");
+  const audioStatus = document.querySelector("[data-audio-status]");
   let viewingFrame;
+  let activeAudioEnd;
 
   function updateViewingSlide() {
     viewingFrame = undefined;
@@ -50,12 +53,31 @@
     scheduleViewingSlideUpdate();
   }
 
-  function inspectPassage(passage, scrollBehavior = "smooth") {
+  function playPassageAudio(passage) {
+    if (!audio) return;
+    const start = Number(passage.dataset.audioStartMs) / 1000;
+    const end = Number(passage.dataset.audioEndMs) / 1000;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+
+    activeAudioEnd = end;
+    audio.currentTime = start;
+    audioStatus.textContent = `正在播放 ${passage.dataset.time}`;
+    const playback = audio.play();
+    if (playback) {
+      playback.catch(() => {
+        audioStatus.textContent = `音频已定位到 ${passage.dataset.time}；点击播放按钮开始`;
+      });
+    }
+  }
+
+  function inspectPassage(passage, scrollBehavior = "smooth", playAudio = false) {
     for (const candidate of passages) {
       candidate.classList.toggle("selected", candidate === passage);
     }
     range.textContent = `来源片段 #${passage.dataset.sourceStart}–${passage.dataset.sourceEnd} · ${passage.dataset.time}`;
     details.textContent = `对齐页 ${passage.dataset.slideNumber} · 重要性 ${passage.dataset.importance} · 新颖度 ${passage.dataset.novelty} · 连接强度 ${passage.dataset.connection}`;
+
+    if (playAudio) playPassageAudio(passage);
 
     if (!rail) return;
     const alignedSlide = slidesById.get(passage.dataset.slidePosition);
@@ -74,11 +96,11 @@
   }
 
   for (const passage of passages) {
-    passage.addEventListener("click", () => inspectPassage(passage));
+    passage.addEventListener("click", () => inspectPassage(passage, "smooth", true));
     passage.addEventListener("keydown", event => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        inspectPassage(passage);
+        inspectPassage(passage, "smooth", true);
       }
     });
   }
@@ -86,6 +108,16 @@
   if (rail) {
     rail.addEventListener("scroll", scheduleViewingSlideUpdate, { passive: true });
     window.addEventListener("resize", scheduleViewingSlideUpdate);
+  }
+  if (audio) {
+    audio.addEventListener("timeupdate", () => {
+      if (activeAudioEnd !== undefined && audio.currentTime >= activeAudioEnd) {
+        audio.pause();
+        audio.currentTime = activeAudioEnd;
+        activeAudioEnd = undefined;
+        audioStatus.textContent = "已播放所选讲稿段落的音频";
+      }
+    });
   }
   if (passages.length > 0) {
     inspectPassage(passages[0], "auto");

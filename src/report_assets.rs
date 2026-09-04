@@ -5,9 +5,73 @@ use std::{
     process::Command,
 };
 
-use beyond_slides::ReportSlideImage;
+use beyond_slides::{ReportAudio, ReportSlideImage};
 
 const SLIDE_IMAGE_WIDTH: &str = "960";
+const AUDIO_ASSET_STEM: &str = "lecture-audio";
+
+/// Makes a recording available beside the report without duplicating it when
+/// the source and report are on the same filesystem.
+pub fn prepare_audio_asset(
+    audio_path: &Path,
+    report_path: &Path,
+) -> Result<ReportAudio, io::Error> {
+    let metadata = fs::metadata(audio_path).map_err(|source| {
+        io::Error::new(
+            source.kind(),
+            format!(
+                "could not read report audio {}: {source}",
+                audio_path.display()
+            ),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("report audio {} is not a file", audio_path.display()),
+        ));
+    }
+
+    let report_parent = report_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let report_stem = report_path.file_stem().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("report path {} has no file name", report_path.display()),
+        )
+    })?;
+    let asset_directory_name = format!("{}.assets", report_stem.to_string_lossy());
+    let asset_directory = report_parent.join(&asset_directory_name);
+    fs::create_dir_all(&asset_directory)?;
+
+    remove_stale_audio_assets(&asset_directory)?;
+    let file_name = audio_path.extension().map_or_else(
+        || AUDIO_ASSET_STEM.into(),
+        |extension| format!("{AUDIO_ASSET_STEM}.{}", extension.to_string_lossy()),
+    );
+    let target = asset_directory.join(&file_name);
+    if let Err(link_error) = fs::hard_link(audio_path, &target) {
+        fs::copy(audio_path, &target).map_err(|copy_error| {
+            io::Error::new(
+                copy_error.kind(),
+                format!(
+                    "could not hard-link {} ({link_error}) or copy it to {} ({copy_error})",
+                    audio_path.display(),
+                    target.display()
+                ),
+            )
+        })?;
+    }
+
+    Ok(ReportAudio {
+        source: PathBuf::from(asset_directory_name)
+            .join(file_name)
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/"),
+    })
+}
 
 /// Renders one report-local PNG for every PDF page in presentation order.
 pub fn render_pdf_slides(
@@ -147,6 +211,20 @@ fn remove_stale_slides(directory: &Path, slide_count: usize) -> Result<(), io::E
     Ok(())
 }
 
+fn remove_stale_audio_assets(directory: &Path) -> Result<(), io::Error> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if (file_name == AUDIO_ASSET_STEM || file_name.starts_with("lecture-audio."))
+            && entry.file_type()?.is_file()
+        {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,6 +244,23 @@ mod tests {
         assert_eq!((images[0].width, images[0].height), (960, 540));
         assert!(directory.path().join(&images[0].source).exists());
         assert!(directory.path().join(&images[1].source).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn audio_becomes_a_report_local_asset() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let audio_path = directory.path().join("recording.flac");
+        let report_path = directory.path().join("lecture.html");
+        fs::write(&audio_path, b"audio fixture")?;
+
+        let audio = prepare_audio_asset(&audio_path, &report_path)?;
+
+        assert_eq!(audio.source, "lecture.assets/lecture-audio.flac");
+        assert_eq!(
+            fs::read(directory.path().join(audio.source))?,
+            b"audio fixture"
+        );
         Ok(())
     }
 }

@@ -85,6 +85,10 @@
 {% if has_audio %}
     <div class="audio-controls">
       <span data-audio-status>点击讲稿段落播放对应音频</span>
+      <div class="playback-mode" role="group" aria-label="播放模式">
+        <button type="button" data-playback-mode="passage" aria-pressed="true">单段播放</button>
+        <button type="button" data-playback-mode="continuous" aria-pressed="false">连续播放</button>
+      </div>
       <audio data-lecture-audio controls preload="metadata" src="{{ audio_source }}"></audio>
     </div>
 {% endif %}

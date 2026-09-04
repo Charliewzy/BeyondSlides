@@ -135,7 +135,32 @@ fn report_plays_only_the_selected_passage_audio_interval() -> Result<(), Box<dyn
     assert!(report.contains("src=\"report.assets/lecture-audio.flac\""));
     assert!(report.contains("audio.currentTime = start"));
     assert!(report.contains("audio.currentTime >= activeAudioEnd"));
+    assert!(report.contains("data-playback-mode=\"passage\""));
+    assert!(report.contains("data-playback-mode=\"continuous\""));
+    assert!(report.contains("playbackMode === \"passage\""));
     assert!(report.contains("inspectPassage(passages[0], \"auto\")"));
+    Ok(())
+}
+
+#[test]
+fn report_projects_audio_playback_back_onto_passages_and_slides() -> Result<(), Box<dyn Error>> {
+    let analysis = analysis()?;
+    let media = ContinuousReportMedia {
+        audio: Some(ReportAudio {
+            source: "lecture.flac".into(),
+        }),
+        ..ContinuousReportMedia::default()
+    };
+
+    let report = render_continuous_report_with_media(&analysis, &media)?;
+
+    assert!(report.contains("function findAudioPassage(time)"));
+    assert!(report.contains("candidate.classList.toggle(\"audio-current\""));
+    assert!(report.contains("audio.addEventListener(\"timeupdate\""));
+    assert!(report.contains("audio.addEventListener(\"seeking\""));
+    assert!(report.contains("audio.addEventListener(\"seeked\""));
+    assert!(report.contains("activateSlide(alignedSlide)"));
+    assert!(report.contains("!passageIsVisible(passage)"));
     Ok(())
 }
 

@@ -10,8 +10,19 @@
   const viewingSlideLabel = document.querySelector("[data-viewing-slide-label]");
   const audio = document.querySelector("[data-lecture-audio]");
   const audioStatus = document.querySelector("[data-audio-status]");
+  const playbackModeButtons = [...document.querySelectorAll("[data-playback-mode]")];
+  const audioIntervals = passages.map(passage => ({
+    passage,
+    start: Number(passage.dataset.audioStartMs) / 1000,
+    end: Number(passage.dataset.audioEndMs) / 1000,
+    precise: passage.dataset.audioBasis === "timed_tokens",
+  }));
   let viewingFrame;
   let activeAudioEnd;
+  let boundedPassage;
+  let passageSeekTarget;
+  let audioCurrentPassage;
+  let playbackMode = "passage";
 
   for (const passage of passages) {
     const matches = passagesBySlideId.get(passage.dataset.slidePosition) || [];
@@ -66,8 +77,11 @@
     const end = Number(passage.dataset.audioEndMs) / 1000;
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
 
-    activeAudioEnd = end;
+    boundedPassage = playbackMode === "passage" ? passage : undefined;
+    activeAudioEnd = boundedPassage ? end : undefined;
+    passageSeekTarget = start;
     audio.currentTime = start;
+    setAudioCurrentPassage(passage, false);
     audioStatus.textContent = `正在播放 ${passage.dataset.time}`;
     const playback = audio.play();
     if (playback) {
@@ -80,7 +94,77 @@
   function pausePassageAudio() {
     if (!audio) return;
     activeAudioEnd = undefined;
+    boundedPassage = undefined;
+    passageSeekTarget = undefined;
     audio.pause();
+    setAudioCurrentPassage(undefined, false);
+  }
+
+  function findAudioPassage(time) {
+    if (!Number.isFinite(time)) return;
+    let match;
+    for (const interval of audioIntervals) {
+      if (!Number.isFinite(interval.start) || !Number.isFinite(interval.end)
+          || time < interval.start || time >= interval.end) {
+        continue;
+      }
+      if (!match
+          || (interval.precise && !match.precise)
+          || (interval.precise === match.precise && interval.start > match.start)) {
+        match = interval;
+      }
+    }
+    return match?.passage;
+  }
+
+  function passageIsVisible(passage) {
+    const bounds = passage.getBoundingClientRect();
+    const margin = Math.min(120, window.innerHeight / 4);
+    return bounds.top >= margin && bounds.bottom <= window.innerHeight - margin;
+  }
+
+  function showPassageDetails(passage, prefix = "") {
+    const label = `来源片段 #${passage.dataset.sourceStart}–${passage.dataset.sourceEnd} · ${passage.dataset.time}`;
+    range.textContent = prefix ? `${prefix} · ${label}` : label;
+    details.textContent = `对齐页 ${passage.dataset.slideNumber} · 重要性 ${passage.dataset.importance} · 新颖度 ${passage.dataset.novelty} · 连接强度 ${passage.dataset.connection}`;
+  }
+
+  function setAudioCurrentPassage(passage, forceScroll) {
+    const changed = passage !== audioCurrentPassage;
+    audioCurrentPassage = passage;
+    for (const candidate of passages) {
+      candidate.classList.toggle("audio-current", candidate === passage);
+    }
+    if (!passage) return;
+
+    showPassageDetails(passage, audio && audio.paused ? "当前音频" : "正在播放");
+    if (audioStatus) {
+      audioStatus.textContent = audio && audio.paused
+        ? `音频已定位到 ${passage.dataset.time}`
+        : `正在播放 ${passage.dataset.time}`;
+    }
+    const alignedSlide = slidesById.get(passage.dataset.slidePosition);
+    if (alignedSlide && (changed || forceScroll)) {
+      activateSlide(alignedSlide);
+      centerSlide(alignedSlide, "smooth");
+    }
+    if (forceScroll || (changed && audio && !audio.paused && !passageIsVisible(passage))) {
+      passage.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }
+
+  function synchronizeAudioPosition(forceScroll = false) {
+    if (!audio || !Number.isFinite(audio.currentTime)) return;
+    setAudioCurrentPassage(findAudioPassage(audio.currentTime), forceScroll);
+  }
+
+  function setPlaybackMode(mode) {
+    playbackMode = mode;
+    for (const button of playbackModeButtons) {
+      button.setAttribute("aria-pressed", String(button.dataset.playbackMode === mode));
+    }
+    activeAudioEnd = undefined;
+    boundedPassage = undefined;
   }
 
   function activateSlide(slide) {
@@ -127,8 +211,7 @@
     for (const candidate of passages) {
       candidate.classList.toggle("selected", candidate === passage);
     }
-    range.textContent = `来源片段 #${passage.dataset.sourceStart}–${passage.dataset.sourceEnd} · ${passage.dataset.time}`;
-    details.textContent = `对齐页 ${passage.dataset.slideNumber} · 重要性 ${passage.dataset.importance} · 新颖度 ${passage.dataset.novelty} · 连接强度 ${passage.dataset.connection}`;
+    showPassageDetails(passage);
 
     if (playAudio) playPassageAudio(passage);
 
@@ -159,6 +242,10 @@
     });
   }
 
+  for (const button of playbackModeButtons) {
+    button.addEventListener("click", () => setPlaybackMode(button.dataset.playbackMode));
+  }
+
   if (rail) {
     rail.addEventListener("scroll", scheduleViewingSlideUpdate, { passive: true });
     window.addEventListener("resize", scheduleViewingSlideUpdate);
@@ -166,11 +253,34 @@
   if (audio) {
     audio.addEventListener("timeupdate", () => {
       if (activeAudioEnd !== undefined && audio.currentTime >= activeAudioEnd) {
+        const passage = boundedPassage;
         audio.pause();
-        audio.currentTime = activeAudioEnd;
+        const passageStart = passage ? Number(passage.dataset.audioStartMs) / 1000 : 0;
+        passageSeekTarget = Math.max(passageStart, activeAudioEnd - 0.001);
+        audio.currentTime = passageSeekTarget;
         activeAudioEnd = undefined;
+        boundedPassage = undefined;
+        setAudioCurrentPassage(passage, false);
         audioStatus.textContent = "已播放所选讲稿段落的音频";
+        return;
       }
+      synchronizeAudioPosition();
+    });
+    audio.addEventListener("seeking", () => {
+      const isPassageSeek = passageSeekTarget !== undefined
+        && Math.abs(audio.currentTime - passageSeekTarget) < 0.05;
+      if (!isPassageSeek) {
+        activeAudioEnd = undefined;
+        boundedPassage = undefined;
+      }
+      synchronizeAudioPosition();
+    });
+    audio.addEventListener("seeked", () => {
+      passageSeekTarget = undefined;
+      synchronizeAudioPosition(true);
+    });
+    audio.addEventListener("play", () => {
+      synchronizeAudioPosition();
     });
   }
   if (passages.length > 0) {

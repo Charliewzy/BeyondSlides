@@ -363,6 +363,13 @@ and scrolls to the first one without choosing or playing an individual passage.
 Slides with no inferred passage position report that state without moving the
 transcript. Reverse navigation uses `slide_position`, never `related_slides`.
 
+Audio navigation projects in the other direction through the report's passage
+playback intervals. Playing or seeking marks the passage at the playhead and
+activates its slide position. Natural playback scrolls only when that passage
+leaves the viewport, while an explicit seek centers it. The default single-
+passage mode stops after a clicked passage; continuous mode removes that stop.
+Manual seeking always cancels a previously selected passage boundary.
+
 `evaluate-analysis` combines accepted projection diagnostics with rejected
 partition validations from `model-trace.jsonl`. It reports exact accepted,
 fuzzy accepted, and rejected candidate-attempt rates, rejected affected

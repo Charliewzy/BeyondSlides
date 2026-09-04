@@ -224,6 +224,13 @@ dd { margin: .2rem 0 0; font-size: 1.35rem; font-weight: 850; }
   box-shadow: inset 0 -.12em 0 rgb(25 118 210 / 28%);
 }
 
+.passage.audio-current {
+  border-radius: .16em;
+  background: rgb(244 154 26 / 20%);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
 .passage-inspector {
   position: fixed;
   z-index: 9;
@@ -254,6 +261,27 @@ dd { margin: .2rem 0 0; font-size: 1.35rem; font-weight: 850; }
   color: var(--muted);
 }
 
+.playback-mode {
+  display: flex;
+  width: fit-content;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: .55rem;
+  background: var(--paper);
+}
+
+.playback-mode button {
+  padding: .35rem .65rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.playback-mode button + button { border-left: 1px solid var(--line); }
+.playback-mode button[aria-pressed="true"] { background: var(--accent); color: white; }
+.playback-mode button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .audio-controls audio { width: min(21rem, 100%); height: 2.2rem; }
 
 @media (max-width: 70rem) {

@@ -356,6 +356,13 @@ and browsing remain separate interaction states: passage selection controls the
 persistent blue aligned-page marker, while scrolling controls which centered
 page is slightly enlarged. Related slides do not affect either state.
 
+Alignment navigation is bidirectional. Selecting a passage activates its slide
+position and highlights every passage sharing that position; selecting a slide
+activates the same relation, pauses audio, highlights all matching passages,
+and scrolls to the first one without choosing or playing an individual passage.
+Slides with no inferred passage position report that state without moving the
+transcript. Reverse navigation uses `slide_position`, never `related_slides`.
+
 `evaluate-analysis` combines accepted projection diagnostics with rejected
 partition validations from `model-trace.jsonl`. It reports exact accepted,
 fuzzy accepted, and rejected candidate-attempt rates, rejected affected

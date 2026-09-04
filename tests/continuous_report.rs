@@ -51,9 +51,46 @@ fn report_distinguishes_aligned_and_currently_viewed_slides() -> Result<(), Box<
     assert!(report.contains("data-slide-id=\"0\""));
     assert!(report.contains("data-slide-id=\"1\""));
     assert!(report.contains("src=\"report.assets/slides/slide-0001.png\""));
-    assert!(report.contains("slide.classList.toggle(\"aligned\""));
+    assert!(report.contains("candidate.classList.toggle(\"aligned\""));
     assert!(report.contains("slide.classList.toggle(\"viewing\""));
     assert!(report.contains("centerSlide(alignedSlide"));
+    Ok(())
+}
+
+#[test]
+fn report_supports_reverse_navigation_from_slides_to_aligned_passages() -> Result<(), Box<dyn Error>>
+{
+    let analysis = analysis()?;
+    let media = ContinuousReportMedia {
+        slide_images: vec![
+            ReportSlideImage {
+                source: "slide-0001.png".into(),
+                width: 960,
+                height: 540,
+            },
+            ReportSlideImage {
+                source: "slide-0002.png".into(),
+                width: 960,
+                height: 540,
+            },
+        ],
+        audio: Some(ReportAudio {
+            source: "lecture.flac".into(),
+        }),
+        ..ContinuousReportMedia::default()
+    };
+
+    let report = render_continuous_report_with_media(&analysis, &media)?;
+
+    assert!(report.contains("<button class=\"slide-item\" type=\"button\""));
+    assert!(report.contains("aria-pressed=\"false\""));
+    assert!(report.contains("const passagesBySlideId = new Map()"));
+    assert!(report.contains("passage.classList.toggle(\"slide-aligned\""));
+    assert!(report.contains("slide.addEventListener(\"click\""));
+    assert!(report.contains("slide.addEventListener(\"keydown\""));
+    assert!(report.contains("first.scrollIntoView({ behavior: \"smooth\", block: \"center\" })"));
+    assert!(report.contains("pausePassageAudio()"));
+    assert!(report.contains("没有对齐讲稿"));
     Ok(())
 }
 

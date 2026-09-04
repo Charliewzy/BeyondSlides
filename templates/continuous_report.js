@@ -5,12 +5,19 @@
   const rail = document.querySelector("[data-slide-rail]");
   const slides = [...document.querySelectorAll("[data-slide]")];
   const slidesById = new Map(slides.map(slide => [slide.dataset.slideId, slide]));
+  const passagesBySlideId = new Map();
   const alignedSlideLabel = document.querySelector("[data-aligned-slide-label]");
   const viewingSlideLabel = document.querySelector("[data-viewing-slide-label]");
   const audio = document.querySelector("[data-lecture-audio]");
   const audioStatus = document.querySelector("[data-audio-status]");
   let viewingFrame;
   let activeAudioEnd;
+
+  for (const passage of passages) {
+    const matches = passagesBySlideId.get(passage.dataset.slidePosition) || [];
+    matches.push(passage);
+    passagesBySlideId.set(passage.dataset.slidePosition, matches);
+  }
 
   function updateViewingSlide() {
     viewingFrame = undefined;
@@ -70,6 +77,52 @@
     }
   }
 
+  function pausePassageAudio() {
+    if (!audio) return;
+    activeAudioEnd = undefined;
+    audio.pause();
+  }
+
+  function activateSlide(slide) {
+    const slideId = slide.dataset.slideId;
+    const matchedPassages = passagesBySlideId.get(slideId) || [];
+    for (const passage of passages) {
+      passage.classList.toggle("slide-aligned", passage.dataset.slidePosition === slideId);
+    }
+    for (const candidate of slides) {
+      const aligned = candidate === slide;
+      candidate.classList.toggle("aligned", aligned);
+      candidate.setAttribute("aria-pressed", String(aligned));
+    }
+    alignedSlideLabel.textContent = `对齐页 ${slide.dataset.slideNumber}`;
+    return matchedPassages;
+  }
+
+  function inspectSlide(slide) {
+    for (const passage of passages) {
+      passage.classList.remove("selected");
+    }
+    pausePassageAudio();
+    const matchedPassages = activateSlide(slide);
+    centerSlide(slide, "smooth");
+
+    if (matchedPassages.length === 0) {
+      range.textContent = `幻灯片 ${slide.dataset.slideNumber} · 没有对齐讲稿`;
+      details.textContent = "该页没有被推断为任何讲稿段落的时间位置。";
+      if (audioStatus) audioStatus.textContent = "选择具体讲稿段落可播放音频";
+      return;
+    }
+
+    const first = matchedPassages[0];
+    const last = matchedPassages[matchedPassages.length - 1];
+    const firstStart = first.dataset.time.split("–")[0];
+    const lastEnd = last.dataset.time.split("–").at(-1);
+    range.textContent = `幻灯片 ${slide.dataset.slideNumber} · 对齐 ${matchedPassages.length} 个段落`;
+    details.textContent = `讲稿时间 ${firstStart}–${lastEnd} · 点击具体段落可查看评分`;
+    if (audioStatus) audioStatus.textContent = "已定位到对齐讲稿；点击具体段落播放音频";
+    first.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
   function inspectPassage(passage, scrollBehavior = "smooth", playAudio = false) {
     for (const candidate of passages) {
       candidate.classList.toggle("selected", candidate === passage);
@@ -82,16 +135,7 @@
     if (!rail) return;
     const alignedSlide = slidesById.get(passage.dataset.slidePosition);
     if (!alignedSlide) return;
-    for (const slide of slides) {
-      const aligned = slide === alignedSlide;
-      slide.classList.toggle("aligned", aligned);
-      if (aligned) {
-        slide.setAttribute("aria-current", "true");
-      } else {
-        slide.removeAttribute("aria-current");
-      }
-    }
-    alignedSlideLabel.textContent = `对齐页 ${alignedSlide.dataset.slideNumber}`;
+    activateSlide(alignedSlide);
     centerSlide(alignedSlide, scrollBehavior);
   }
 
@@ -101,6 +145,16 @@
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         inspectPassage(passage, "smooth", true);
+      }
+    });
+  }
+
+  for (const slide of slides) {
+    slide.addEventListener("click", () => inspectSlide(slide));
+    slide.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        inspectSlide(slide);
       }
     });
   }

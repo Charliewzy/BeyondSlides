@@ -14,7 +14,7 @@
       <div>
         <p class="eyebrow">BeyondSlides</p>
         <h1>在连续讲稿中看见课堂价值</h1>
-        <p class="lede">文字越粗，重要性越高；文字下方的线越粗，新颖度越高。点击任一段可固定查看评分和来源时间。</p>
+        <p class="lede">文字越粗，重要性越高；文字下方的线越粗，新颖度越高。点击讲稿可查看评分和播放音频，点击幻灯片可反向定位全部对齐讲稿。</p>
       </div>
       <dl class="summary">
         <div><dt>讲稿时长</dt><dd>{{ duration }}</dd></div>
@@ -65,12 +65,12 @@
         <div class="slide-rail" data-slide-rail tabindex="0" aria-label="可滚动的幻灯片列表">
           <div class="slide-stack">
 {% for slide in slides %}
-            <figure class="slide-item" data-slide data-slide-id="{{ slide.id }}" data-slide-number="{{ slide.number }}">
-              <div class="slide-frame">
+            <button class="slide-item" type="button" data-slide data-slide-id="{{ slide.id }}" data-slide-number="{{ slide.number }}" aria-label="查看与第 {{ slide.number }} 张幻灯片对齐的讲稿" aria-pressed="false">
+              <span class="slide-frame">
                 <img src="{{ slide.source }}" width="{{ slide.width }}" height="{{ slide.height }}" loading="lazy" alt="第 {{ slide.number }} 张幻灯片">
-              </div>
-              <figcaption>幻灯片 {{ slide.number }}</figcaption>
-            </figure>
+              </span>
+              <span class="slide-caption">幻灯片 {{ slide.number }}</span>
+            </button>
 {% endfor %}
           </div>
         </div>

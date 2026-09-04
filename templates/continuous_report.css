@@ -6,6 +6,7 @@
   --surface: #fffefa;
   --line: #d8d3c9;
   --accent: #682bd7;
+  --aligned: #1976d2;
   --underline: #c92349;
   --shadow: 0 18px 55px rgb(31 27 39 / 10%);
 }
@@ -22,7 +23,7 @@ body {
   font-family: "Noto Sans CJK SC", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
 }
 
-main { width: min(78rem, calc(100% - 2rem)); margin: 0 auto; padding: 4rem 0; }
+main { width: min(94rem, calc(100% - 2rem)); margin: 0 auto; padding: 4rem 0; }
 h1, h2, p { margin-top: 0; }
 
 .page-header {
@@ -95,6 +96,81 @@ dd { margin: .2rem 0 0; font-size: 1.35rem; font-weight: 850; }
   box-shadow: var(--shadow);
 }
 
+.lecture-layout.has-slides {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(24rem, 34rem);
+  gap: 1.2rem;
+  align-items: start;
+}
+
+.slide-panel {
+  position: sticky;
+  top: 1rem;
+  height: calc(100vh - 2rem);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: rgb(255 254 250 / 92%);
+  box-shadow: var(--shadow);
+}
+
+.slide-panel-header {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: end;
+  min-height: 5.7rem;
+  padding: 1rem 1.2rem;
+  border-bottom: 1px solid var(--line);
+  background: rgb(255 254 250 / 96%);
+}
+
+.slide-panel-header .section-kicker { margin-bottom: .3rem; }
+.slide-panel-header h2 { margin: 0; font-size: 1.35rem; }
+.slide-status { display: grid; gap: .2rem; color: var(--muted); font-size: .72rem; text-align: right; }
+.slide-status [data-aligned-slide-label] { color: var(--aligned); font-weight: 750; }
+
+.slide-rail {
+  height: calc(100% - 5.7rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-snap-type: y proximity;
+  scrollbar-gutter: stable;
+}
+
+.slide-rail:focus-visible { outline: 3px solid rgb(25 118 210 / 35%); outline-offset: -3px; }
+.slide-stack { display: grid; gap: 1rem; padding: 38vh 1.6rem; }
+
+.slide-item {
+  margin: 0;
+  scroll-snap-align: center;
+  color: var(--muted);
+  transform: scale(.92);
+  transform-origin: center;
+  transition: transform 180ms ease, color 180ms ease;
+}
+
+.slide-item.viewing { color: var(--ink); transform: scale(1); }
+.slide-frame {
+  overflow: hidden;
+  border: 1px solid #cbc7c0;
+  border-radius: .55rem;
+  background: white;
+  box-shadow: 0 7px 22px rgb(31 27 39 / 10%);
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+.slide-frame img { display: block; width: 100%; height: auto; }
+.slide-item.aligned .slide-frame {
+  border-color: var(--aligned);
+  box-shadow:
+    0 0 0 4px rgb(25 118 210 / 28%),
+    0 14px 36px rgb(25 118 210 / 22%);
+}
+.slide-item figcaption { margin-top: .45rem; font-size: .72rem; font-weight: 650; text-align: center; }
+.slide-item.aligned figcaption { color: var(--aligned); }
+
 .transcript-card > header { margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 1px solid var(--line); }
 .transcript-card h2 { margin-bottom: 0; font-size: 1.8rem; }
 
@@ -142,14 +218,17 @@ dd { margin: .2rem 0 0; font-size: 1.35rem; font-weight: 850; }
 .passage-inspector strong { color: var(--accent); }
 .passage-inspector span:empty { display: none; }
 
-@media (max-width: 62rem) {
+@media (max-width: 70rem) {
   .page-header { grid-template-columns: 1fr; }
   .summary { grid-template-columns: repeat(2, minmax(8rem, 1fr)); }
   .legend-card { grid-template-columns: 1fr; }
+  .lecture-layout.has-slides { grid-template-columns: 1fr; }
+  .slide-panel { position: relative; top: auto; height: min(75vh, 42rem); }
+  .slide-stack { padding-block: 28vh; }
   .passage-inspector { right: .5rem; bottom: .5rem; left: .5rem; max-width: none; }
 }
 
 @media (max-width: 40rem) {
-  main { width: min(100% - 1rem, 78rem); padding-top: 2rem; }
+  main { width: min(100% - 1rem, 94rem); padding-top: 2rem; }
   .legend-scale { grid-template-columns: repeat(3, 1fr); row-gap: .9rem; }
 }

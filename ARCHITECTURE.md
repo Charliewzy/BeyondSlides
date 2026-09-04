@@ -30,7 +30,11 @@ then analyzes that restored text against the slides.
 The primary report preserves lecture order. Importance controls character
 weight; novelty controls underline thickness. A reader can therefore follow
 the lecture continuously while visually locating high-value oral additions.
-Selecting a passage reveals its scores, time range, and raw source range.
+Selecting a passage reveals its scores, time range, and raw source range. When
+a slide PDF is supplied at rendering time, a scrollable rail displays real
+slide pages beside the transcript and centers the selected passage's inferred
+slide position. The aligned page retains a blue highlight while the page at the
+center of the independently scrolled rail is enlarged.
 
 The completed analysis is also a standalone, validated JSON artifact. Reports
 and quality summaries can be regenerated from saved artifacts without another
@@ -145,6 +149,7 @@ struct RestoredLecturePassage {
     text: String,
     source_start: TranscriptSegmentId,
     source_end: TranscriptSegmentId,
+    slide_position: SlideId,
     novelty: Score5,
     connection_strength: Score5,
     importance: Score5,
@@ -306,8 +311,8 @@ and lecture-wide passage partition through the same shared partition routine.
 `analysis.json` is a `RestoredAnalysisArtifact` containing:
 
 - the complete restored transcript;
-- all chronological lecture passages;
-- inferred slide positions;
+- all chronological lecture passages, each carrying its inferred slide
+  position;
 - per-window model diagnostics;
 - per-window projection diagnostics.
 
@@ -318,10 +323,18 @@ match the restored transcript.
 
 ### 5.8 Rendering and evaluation
 
-The self-contained continuous report renders authoritative passage text in
-lecture order. Importance maps to six font weights and novelty maps to six
-underline thicknesses. It embeds no remote assets. Hover, focus, or click
-reveals timestamps, raw source range, and component scores.
+The continuous report renders authoritative passage text in lecture order.
+Importance maps to six font weights and novelty maps to six underline
+thicknesses. Hover, focus, or click reveals timestamps, raw source range,
+inferred slide position, and component scores.
+
+An optional PDF presentation adapter invokes Poppler once at rendering time and
+writes one ordered PNG per normalized slide beneath a report-local asset
+directory. The slide count must exactly match the normalized slide deck. The
+HTML references only those local images and embeds no remote assets. Alignment
+and browsing remain separate interaction states: passage selection controls the
+persistent blue aligned-page marker, while scrolling controls which centered
+page is slightly enlarged. Related slides do not affect either state.
 
 `evaluate-analysis` combines accepted projection diagnostics with rejected
 partition validations from `model-trace.jsonl`. It reports exact accepted,
@@ -369,6 +382,10 @@ run/lecture-analysis/
 |-- analysis.json
 |-- annotation-quality.json
 |-- report.html
+|-- report.assets/
+|   `-- slides/
+|       |-- slide-0001.png
+|       `-- ...
 `-- restoration/
     |-- manifest.json
     |-- model-trace.jsonl

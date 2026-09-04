@@ -7,24 +7,24 @@ use std::{
 };
 
 use beyond_slides::{
-    ChatCompletionsClient, DenseSlideScorer, HybridSlideScorer, LectureAnalysisConfig,
-    LectureAnalysisProgressError, LectureAnalysisSession, LexicalSlideScorer, ModelExchangeTrace,
-    RestoredAnalysisArtifact, RestoredTranscript, SlideDeck, Transcript, ValidatedSources,
-    WindowingConfig,
+    ChatCompletionsClient, ContinuousReportMedia, DenseSlideScorer, HybridSlideScorer,
+    LectureAnalysisConfig, LectureAnalysisProgressError, LectureAnalysisSession,
+    LexicalSlideScorer, ModelExchangeTrace, RestoredAnalysisArtifact, RestoredTranscript,
+    SlideDeck, Transcript, ValidatedRestoredAnalysis, ValidatedSources, WindowingConfig,
     evaluation::{render_annotation_quality, summarize_annotation_quality},
-    read_model_trace, render_continuous_report,
+    read_model_trace, render_continuous_report, render_continuous_report_with_media,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::restoration_run;
 use crate::run_support::{
     ProviderSettings, checkpoint_path, display_token_count, initialize_run_directory,
     model_trace_path, open_output_model_trace, open_run_model_trace, read_json,
     read_json_with_hash, sha256, window_progress_bar, write_json_atomically, write_text_atomically,
 };
+use crate::{report_assets::render_pdf_slides, restoration_run};
 
-const ANALYSIS_RUN_FORMAT_VERSION: u32 = 4;
+const ANALYSIS_RUN_FORMAT_VERSION: u32 = 5;
 const MAX_OWNED_CHARACTERS: usize = 400;
 const MAX_OWNED_DURATION_SECONDS: u64 = 60;
 const CONTEXT_CHARACTERS: usize = 150;
@@ -107,10 +107,12 @@ pub async fn run_complete(
     transcript_path: &OsStr,
     slides_path: &OsStr,
     run_directory: &OsStr,
+    slide_pdf_path: Option<&OsStr>,
 ) -> Result<(), Box<dyn Error>> {
     let transcript_path = PathBuf::from(transcript_path);
     let slides_path = PathBuf::from(slides_path);
     let run_directory = PathBuf::from(run_directory);
+    let slide_pdf_path = slide_pdf_path.map(PathBuf::from);
     let provider = ProviderSettings::from_annotation_environment()?;
     let restoration_directory = run_directory.join(RESTORATION_DIRECTORY);
     restoration_run::run_complete(
@@ -195,18 +197,13 @@ pub async fn run_complete(
     let output = RestoredAnalysisArtifact {
         restored_transcript: result.analysis().restored_transcript().clone(),
         passages: result.analysis().passages().to_vec(),
-        slide_positions: result.slide_positions().to_vec(),
         window_diagnostics: result.window_diagnostics().to_vec(),
         window_projections: result.window_projections().to_vec(),
     };
     let output_path = run_directory.join(ANALYSIS_FILE);
     write_json_atomically(&output_path, &output, "complete analysis")?;
     let report_path = run_directory.join(REPORT_FILE);
-    write_text_atomically(
-        &report_path,
-        &render_continuous_report(result.analysis()),
-        "continuous lecture report",
-    )?;
+    write_analysis_report(result.analysis(), &report_path, slide_pdf_path.as_deref())?;
     let trace = read_model_trace(&model_trace_path(&run_directory))?;
     let quality = summarize_annotation_quality(&output, &trace);
     let quality_path = run_directory.join(QUALITY_FILE);
@@ -226,21 +223,41 @@ pub fn render_saved_analysis(
     slides_path: &OsStr,
     analysis_path: &OsStr,
     report_path: &OsStr,
+    slide_pdf_path: Option<&OsStr>,
 ) -> Result<(), Box<dyn Error>> {
     let transcript: Transcript = read_json(Path::new(transcript_path), "transcript")?;
     let slide_deck: SlideDeck = read_json(Path::new(slides_path), "slides")?;
     let artifact: RestoredAnalysisArtifact =
         read_json(Path::new(analysis_path), "restored analysis")?;
     let analysis = artifact.validate(ValidatedSources::new(transcript, slide_deck)?)?;
-    write_text_atomically(
+    write_analysis_report(
+        &analysis,
         Path::new(report_path),
-        &render_continuous_report(&analysis),
-        "continuous lecture report",
+        slide_pdf_path.map(Path::new),
     )?;
     println!(
         "Wrote continuous lecture report to {}",
         Path::new(report_path).display()
     );
+    Ok(())
+}
+
+fn write_analysis_report(
+    analysis: &ValidatedRestoredAnalysis,
+    report_path: &Path,
+    slide_pdf_path: Option<&Path>,
+) -> Result<(), Box<dyn Error>> {
+    let report = if let Some(slide_pdf_path) = slide_pdf_path {
+        let slide_images = render_pdf_slides(
+            slide_pdf_path,
+            report_path,
+            analysis.slide_deck().slides.len(),
+        )?;
+        render_continuous_report_with_media(analysis, &ContinuousReportMedia { slide_images })?
+    } else {
+        render_continuous_report(analysis)
+    };
+    write_text_atomically(report_path, &report, "continuous lecture report")?;
     Ok(())
 }
 

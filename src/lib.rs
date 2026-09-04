@@ -29,7 +29,10 @@ pub use chat_completions::{
     ChatCompletionsConfigError, ChatCompletionsError, RestorationDiagnostics,
     RestoredAnnotationResult, TranscriptWindowRestorationResult,
 };
-pub use continuous_report::render_continuous_report;
+pub use continuous_report::{
+    ContinuousReportError, ContinuousReportMedia, ReportSlideImage, render_continuous_report,
+    render_continuous_report_with_media,
+};
 pub use domain::{
     LecturePassage, LecturePassages, RestoredLecturePassage, RestoredTranscript,
     RestoredTranscriptSpan, Score5, ScoreOutOfRange, Slide, SlideDeck, SlideId, Transcript,

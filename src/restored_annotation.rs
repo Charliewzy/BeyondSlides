@@ -117,8 +117,14 @@ impl ValidatedRestoredAnalysis {
             .map_err(RestoredAnalysisValidationError::RestoredTranscript)?;
 
         let source = restored_text(&restored_transcript.spans);
-        validate_passage_partition(&sources, &restored_transcript.spans, &source, &passages)
-            .map_err(RestoredAnalysisValidationError::Passages)?;
+        validate_passage_partition(
+            &sources,
+            &restored_transcript.spans,
+            &source,
+            &passages,
+            None,
+        )
+        .map_err(RestoredAnalysisValidationError::Passages)?;
 
         Ok(Self {
             sources,
@@ -222,6 +228,7 @@ pub fn project_window_analysis(
             text: source[byte_range.clone()].to_owned(),
             source_start,
             source_end,
+            slide_position: task.slide_position,
             novelty: proposed.novelty,
             connection_strength: proposed.connection_strength,
             importance: proposed.importance,
@@ -246,6 +253,7 @@ pub fn validate_restored_window_analysis(
         task.window.owned_region(),
         &source,
         &analysis.passages,
+        Some(task.slide_position),
     )
 }
 
@@ -254,6 +262,7 @@ fn validate_passage_partition(
     spans: &[RestoredTranscriptSpan],
     source: &str,
     passages: &[RestoredLecturePassage],
+    expected_slide_position: Option<SlideId>,
 ) -> Result<(), RestoredAnnotationError> {
     let mut next_byte = 0;
 
@@ -278,6 +287,21 @@ fn validate_passage_partition(
                 expected_end,
                 actual_start: passage.source_start,
                 actual_end: passage.source_end,
+            });
+        }
+        if sources.slide_deck().find(passage.slide_position).is_none() {
+            return Err(RestoredAnnotationError::UnknownPassageSlidePosition {
+                passage_index,
+                slide: passage.slide_position,
+            });
+        }
+        if let Some(expected) = expected_slide_position
+            && passage.slide_position != expected
+        {
+            return Err(RestoredAnnotationError::PassageSlidePositionMismatch {
+                passage_index,
+                expected,
+                actual: passage.slide_position,
             });
         }
         validate_related_slides(sources, passage_index, &passage.related_slides)?;
@@ -404,6 +428,15 @@ pub enum RestoredAnnotationError {
         passage_index: usize,
         slide: SlideId,
     },
+    UnknownPassageSlidePosition {
+        passage_index: usize,
+        slide: SlideId,
+    },
+    PassageSlidePositionMismatch {
+        passage_index: usize,
+        expected: SlideId,
+        actual: SlideId,
+    },
     DuplicateRelatedSlide {
         passage_index: usize,
         slide: SlideId,
@@ -458,6 +491,23 @@ impl fmt::Display for RestoredAnnotationError {
                 "projected lecture passage {passage_index} references unknown slide {}",
                 slide.0
             ),
+            Self::UnknownPassageSlidePosition {
+                passage_index,
+                slide,
+            } => write!(
+                formatter,
+                "lecture passage {passage_index} has unknown inferred slide position {}",
+                slide.0
+            ),
+            Self::PassageSlidePositionMismatch {
+                passage_index,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "lecture passage {passage_index} should have inferred slide position {} but has {}",
+                expected.0, actual.0
+            ),
             Self::DuplicateRelatedSlide {
                 passage_index,
                 slide,
@@ -501,6 +551,8 @@ impl Error for RestoredAnnotationError {
             | Self::UnknownSlidePosition { .. }
             | Self::MissingSourceProvenance { .. }
             | Self::UnknownRelatedSlide { .. }
+            | Self::UnknownPassageSlidePosition { .. }
+            | Self::PassageSlidePositionMismatch { .. }
             | Self::DuplicateRelatedSlide { .. }
             | Self::EmptyTrustedPassage { .. }
             | Self::TrustedTextMismatch { .. }

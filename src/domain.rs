@@ -158,6 +158,7 @@ pub struct RestoredLecturePassage {
     pub text: String,
     pub source_start: TranscriptSegmentId,
     pub source_end: TranscriptSegmentId,
+    pub slide_position: SlideId,
     pub novelty: Score5,
     pub connection_strength: Score5,
     pub importance: Score5,

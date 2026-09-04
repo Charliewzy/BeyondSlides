@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use beyond_slides::{
-    RestoredAnalysisArtifact, RestoredAnalysisArtifactError, SlideDeck, Transcript,
+    RestoredAnalysisArtifact, RestoredAnalysisArtifactError, SlideDeck, SlideId, Transcript,
     ValidatedSources,
 };
 
@@ -53,6 +53,23 @@ fn persisted_analysis_rejects_text_that_is_not_the_restored_transcript()
     Ok(())
 }
 
+#[test]
+fn persisted_analysis_rejects_an_unknown_passage_slide_position() -> Result<(), Box<dyn Error>> {
+    let mut artifact = artifact()?;
+    artifact.passages[0].slide_position = SlideId(9);
+
+    let error = artifact
+        .validate(sources()?)
+        .expect_err("rendering must not trust an unknown inferred slide position");
+
+    assert!(
+        error
+            .to_string()
+            .contains("unknown inferred slide position 9")
+    );
+    Ok(())
+}
+
 fn artifact() -> Result<RestoredAnalysisArtifact, serde_json::Error> {
     serde_json::from_value(serde_json::json!({
         "restored_transcript": {
@@ -68,6 +85,7 @@ fn artifact() -> Result<RestoredAnalysisArtifact, serde_json::Error> {
                 "text": "所有权",
                 "source_start": 0,
                 "source_end": 0,
+                "slide_position": 0,
                 "novelty": 1,
                 "connection_strength": 2,
                 "importance": 4,
@@ -79,6 +97,7 @@ fn artifact() -> Result<RestoredAnalysisArtifact, serde_json::Error> {
                 "text": "保证内存安全。",
                 "source_start": 0,
                 "source_end": 0,
+                "slide_position": 0,
                 "novelty": 2,
                 "connection_strength": 3,
                 "importance": 5,
@@ -87,7 +106,6 @@ fn artifact() -> Result<RestoredAnalysisArtifact, serde_json::Error> {
                 "comparison_note": null
             }
         ],
-        "slide_positions": [0],
         "window_diagnostics": [{
             "provider_retries": 0,
             "tool_rounds": 0,

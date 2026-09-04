@@ -41,13 +41,42 @@
       </div>
     </section>
 
-    <section class="transcript-card" aria-labelledby="transcript-title">
-      <header>
-        <p class="section-kicker">Continuous lecture transcript</p>
-        <h2 id="transcript-title">完整讲稿</h2>
-      </header>
-      <p class="continuous-transcript">{% for passage in passages %}<span class="passage" tabindex="0" data-passage data-source-start="{{ passage.source_start }}" data-source-end="{{ passage.source_end }}" data-time="{{ passage.timestamp }}" data-importance="{{ passage.importance }}" data-novelty="{{ passage.novelty }}" data-connection="{{ passage.connection_strength }}">{{ passage.text }}</span>{% endfor %}</p>
-    </section>
+    <div class="lecture-layout{% if has_slides %} has-slides{% endif %}">
+      <section class="transcript-card" aria-labelledby="transcript-title">
+        <header>
+          <p class="section-kicker">Continuous lecture transcript</p>
+          <h2 id="transcript-title">完整讲稿</h2>
+        </header>
+        <p class="continuous-transcript">{% for passage in passages %}<span class="passage" tabindex="0" data-passage data-source-start="{{ passage.source_start }}" data-source-end="{{ passage.source_end }}" data-time="{{ passage.timestamp }}" data-slide-position="{{ passage.slide_position }}" data-slide-number="{{ passage.slide_number }}" data-importance="{{ passage.importance }}" data-novelty="{{ passage.novelty }}" data-connection="{{ passage.connection_strength }}">{{ passage.text }}</span>{% endfor %}</p>
+      </section>
+
+{% if has_slides %}
+      <aside class="slide-panel" aria-labelledby="slide-panel-title">
+        <header class="slide-panel-header">
+          <div>
+            <p class="section-kicker">Aligned presentation</p>
+            <h2 id="slide-panel-title">演示文稿</h2>
+          </div>
+          <div class="slide-status">
+            <span data-aligned-slide-label>对齐页 —</span>
+            <span data-viewing-slide-label>浏览页 —</span>
+          </div>
+        </header>
+        <div class="slide-rail" data-slide-rail tabindex="0" aria-label="可滚动的幻灯片列表">
+          <div class="slide-stack">
+{% for slide in slides %}
+            <figure class="slide-item" data-slide data-slide-id="{{ slide.id }}" data-slide-number="{{ slide.number }}">
+              <div class="slide-frame">
+                <img src="{{ slide.source }}" width="{{ slide.width }}" height="{{ slide.height }}" loading="lazy" alt="第 {{ slide.number }} 张幻灯片">
+              </div>
+              <figcaption>幻灯片 {{ slide.number }}</figcaption>
+            </figure>
+{% endfor %}
+          </div>
+        </div>
+      </aside>
+{% endif %}
+    </div>
   </main>
 
   <aside class="passage-inspector" data-passage-inspector aria-live="polite">

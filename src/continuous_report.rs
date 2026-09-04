@@ -1,15 +1,61 @@
+use std::{error::Error, fmt};
+
 use askama::Template;
 
 use crate::{RestoredLecturePassage, ValidatedRestoredAnalysis};
 
+/// One report-local image corresponding to a slide in presentation order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportSlideImage {
+    pub source: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Optional presentation assets used by the continuous lecture report.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ContinuousReportMedia {
+    pub slide_images: Vec<ReportSlideImage>,
+}
+
 /// Renders the readable lecture in chronological order with inline score typography.
 pub fn render_continuous_report(analysis: &ValidatedRestoredAnalysis) -> String {
+    render_continuous_report_with_media(analysis, &ContinuousReportMedia::default())
+        .expect("an empty media collection is always valid")
+}
+
+/// Renders the readable lecture together with optional report-local media.
+pub fn render_continuous_report_with_media(
+    analysis: &ValidatedRestoredAnalysis,
+    media: &ContinuousReportMedia,
+) -> Result<String, ContinuousReportError> {
+    if !media.slide_images.is_empty()
+        && media.slide_images.len() != analysis.slide_deck().slides.len()
+    {
+        return Err(ContinuousReportError::SlideImageCountMismatch {
+            expected: analysis.slide_deck().slides.len(),
+            actual: media.slide_images.len(),
+        });
+    }
+
     let passages: Vec<_> = analysis
         .passages()
         .iter()
         .map(|passage| PassageView::new(analysis, passage))
         .collect();
-    ContinuousReportTemplate {
+    let slides: Vec<_> = media
+        .slide_images
+        .iter()
+        .enumerate()
+        .map(|(index, image)| SlideView {
+            id: index,
+            number: index + 1,
+            source: image.source.as_str(),
+            width: image.width,
+            height: image.height,
+        })
+        .collect();
+    Ok(ContinuousReportTemplate {
         passage_count: passages.len(),
         duration: analysis.transcript().segments.last().map_or_else(
             || "00:00".into(),
@@ -17,19 +63,31 @@ pub fn render_continuous_report(analysis: &ValidatedRestoredAnalysis) -> String 
         ),
         importance_distribution: score_distribution(analysis, |passage| passage.importance.get()),
         novelty_distribution: score_distribution(analysis, |passage| passage.novelty.get()),
+        has_slides: !slides.is_empty(),
+        slides,
         passages,
     }
-    .to_string()
+    .to_string())
 }
 
 #[derive(Template)]
 #[template(path = "continuous_report.html")]
-struct ContinuousReportTemplate {
+struct ContinuousReportTemplate<'a> {
     passage_count: usize,
     duration: String,
     importance_distribution: Vec<ScoreCount>,
     novelty_distribution: Vec<ScoreCount>,
+    has_slides: bool,
+    slides: Vec<SlideView<'a>>,
     passages: Vec<PassageView>,
+}
+
+struct SlideView<'a> {
+    id: usize,
+    number: usize,
+    source: &'a str,
+    width: u32,
+    height: u32,
 }
 
 struct ScoreCount {
@@ -41,6 +99,8 @@ struct PassageView {
     source_start: u32,
     source_end: u32,
     timestamp: String,
+    slide_position: u32,
+    slide_number: usize,
     importance: u8,
     novelty: u8,
     connection_strength: u8,
@@ -59,6 +119,8 @@ impl PassageView {
                 format_timestamp(first.start_ms),
                 format_timestamp(last.end_ms)
             ),
+            slide_position: passage.slide_position.0,
+            slide_number: passage.slide_position.index() + 1,
             importance: passage.importance.get(),
             novelty: passage.novelty.get(),
             connection_strength: passage.connection_strength.get(),
@@ -66,6 +128,24 @@ impl PassageView {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinuousReportError {
+    SlideImageCountMismatch { expected: usize, actual: usize },
+}
+
+impl fmt::Display for ContinuousReportError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SlideImageCountMismatch { expected, actual } => write!(
+                formatter,
+                "continuous report expected {expected} slide images but received {actual}"
+            ),
+        }
+    }
+}
+
+impl Error for ContinuousReportError {}
 
 fn score_distribution(
     analysis: &ValidatedRestoredAnalysis,

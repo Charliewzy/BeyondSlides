@@ -127,7 +127,7 @@ mod tests {
     use super::*;
     use crate::{
         AnnotationDiagnostics, MODEL_TRACE_FORMAT_VERSION, ModelRequestKind,
-        PassageProjectionDiagnostics, RestoredTranscript, SlideId,
+        PassageProjectionDiagnostics, RestoredTranscript,
     };
 
     #[test]
@@ -135,7 +135,6 @@ mod tests {
         let artifact = RestoredAnalysisArtifact {
             restored_transcript: RestoredTranscript { spans: Vec::new() },
             passages: Vec::new(),
-            slide_positions: vec![SlideId(0), SlideId(1)],
             window_diagnostics: vec![diagnostics(0), diagnostics(1)],
             window_projections: vec![projection(0, 80), projection(2, 100)],
         };

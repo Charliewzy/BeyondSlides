@@ -1322,6 +1322,8 @@ fn restored_analysis_error_category(error: &RestoredAnnotationError) -> &'static
         RestoredAnnotationError::SlidePositionCountMismatch { .. }
         | RestoredAnnotationError::EmptyOwnedText { .. }
         | RestoredAnnotationError::UnknownSlidePosition { .. }
+        | RestoredAnnotationError::UnknownPassageSlidePosition { .. }
+        | RestoredAnnotationError::PassageSlidePositionMismatch { .. }
         | RestoredAnnotationError::MissingSourceProvenance { .. }
         | RestoredAnnotationError::EmptyTrustedPassage { .. }
         | RestoredAnnotationError::TrustedTextMismatch { .. }

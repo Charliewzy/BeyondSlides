@@ -1,10 +1,11 @@
 use std::{error::Error, time::Duration};
 
 use beyond_slides::{
-    ProposedTranscriptWindowAnalysis, RestoredTranscript, RestoredTranscriptSpan, Slide, SlideDeck,
-    SlideId, Transcript, TranscriptSegment, TranscriptSegmentId, ValidatedSources, WindowingConfig,
+    ContinuousReportError, ContinuousReportMedia, ProposedTranscriptWindowAnalysis,
+    ReportSlideImage, RestoredTranscript, RestoredTranscriptSpan, Slide, SlideDeck, SlideId,
+    Transcript, TranscriptSegment, TranscriptSegmentId, ValidatedSources, WindowingConfig,
     assemble_restored_window_analyses, build_restored_annotation_tasks, build_restored_windows,
-    project_window_analysis, render_continuous_report,
+    project_window_analysis, render_continuous_report, render_continuous_report_with_media,
 };
 
 #[test]
@@ -21,6 +22,59 @@ fn report_renders_authoritative_passages_in_continuous_order() -> Result<(), Box
     assert!(report.contains("data-novelty=\"3\""));
     assert!(report.contains("data-source-start=\"0\""));
     assert!(report.contains("data-time=\"00:00–00:01\""));
+    Ok(())
+}
+
+#[test]
+fn report_distinguishes_aligned_and_currently_viewed_slides() -> Result<(), Box<dyn Error>> {
+    let analysis = analysis()?;
+    let media = ContinuousReportMedia {
+        slide_images: vec![
+            ReportSlideImage {
+                source: "report.assets/slides/slide-0001.png".into(),
+                width: 960,
+                height: 540,
+            },
+            ReportSlideImage {
+                source: "report.assets/slides/slide-0002.png".into(),
+                width: 960,
+                height: 540,
+            },
+        ],
+    };
+
+    let report = render_continuous_report_with_media(&analysis, &media)?;
+
+    assert!(report.contains("data-slide-position=\"0\""));
+    assert!(report.contains("data-slide-id=\"0\""));
+    assert!(report.contains("data-slide-id=\"1\""));
+    assert!(report.contains("src=\"report.assets/slides/slide-0001.png\""));
+    assert!(report.contains("slide.classList.toggle(\"aligned\""));
+    assert!(report.contains("slide.classList.toggle(\"viewing\""));
+    assert!(report.contains("centerSlide(alignedSlide"));
+    Ok(())
+}
+
+#[test]
+fn report_requires_one_image_per_normalized_slide() -> Result<(), Box<dyn Error>> {
+    let analysis = analysis()?;
+    let media = ContinuousReportMedia {
+        slide_images: vec![ReportSlideImage {
+            source: "only-one.png".into(),
+            width: 960,
+            height: 540,
+        }],
+    };
+
+    let error = render_continuous_report_with_media(&analysis, &media)
+        .expect_err("partial slide image collections must be rejected");
+    assert_eq!(
+        error,
+        ContinuousReportError::SlideImageCountMismatch {
+            expected: 2,
+            actual: 1,
+        }
+    );
     Ok(())
 }
 

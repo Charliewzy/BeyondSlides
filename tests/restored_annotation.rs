@@ -63,6 +63,12 @@ fn exact_passage_boundaries_can_split_a_coarsely_sourced_restored_span()
 
     assert!(projection.is_exact());
     assert_eq!(analysis.passages.len(), 2);
+    assert!(
+        analysis
+            .passages
+            .iter()
+            .all(|passage| passage.slide_position == SlideId(1))
+    );
     assert_eq!(analysis.passages[0].source_start, TranscriptSegmentId(0));
     assert_eq!(analysis.passages[0].source_end, TranscriptSegmentId(1));
     assert_eq!(analysis.passages[1].source_start, TranscriptSegmentId(0));
@@ -131,6 +137,38 @@ fn related_slide_evidence_is_validated_after_text_projection() -> Result<(), Box
 }
 
 #[test]
+fn persisted_window_passages_cannot_change_the_inferred_slide_position()
+-> Result<(), Box<dyn Error>> {
+    let sources = sources();
+    let restored = restored_transcript();
+    let windows = build_restored_windows(&sources, &restored, windowing_config())?;
+    let tasks = build_restored_annotation_tasks(&sources, &windows, &[SlideId(1)])?;
+    let proposed: ProposedTranscriptWindowAnalysis = serde_json::from_value(serde_json::json!({
+        "passages": [{
+            "text": "所有权负责资源管理。借用让函数临时访问数据。",
+            "novelty": 2,
+            "connection_strength": 2,
+            "importance": 4,
+            "related_slides": [1]
+        }]
+    }))?;
+    let mut analysis = project_window_analysis(&sources, &tasks[0], proposed)?.0;
+    analysis.passages[0].slide_position = SlideId(0);
+
+    let error = beyond_slides::validate_restored_window_analysis(&sources, &tasks[0], &analysis)
+        .expect_err("persisted passages must retain their window's slide position");
+    assert_eq!(
+        error,
+        RestoredAnnotationError::PassageSlidePositionMismatch {
+            passage_index: 0,
+            expected: SlideId(1),
+            actual: SlideId(0),
+        }
+    );
+    Ok(())
+}
+
+#[test]
 fn projected_window_analyses_assemble_into_one_readable_lecture() -> Result<(), Box<dyn Error>> {
     let sources = sources();
     let restored = RestoredTranscript {
@@ -174,6 +212,8 @@ fn projected_window_analyses_assemble_into_one_readable_lecture() -> Result<(), 
     )?;
 
     assert_eq!(analysis.passages().len(), 2);
+    assert_eq!(analysis.passages()[0].slide_position, SlideId(0));
+    assert_eq!(analysis.passages()[1].slide_position, SlideId(1));
     assert_eq!(
         analysis
             .passages()

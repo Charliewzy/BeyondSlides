@@ -1,4 +1,5 @@
 mod analysis_run;
+mod report_assets;
 mod restoration_review_run;
 mod restoration_run;
 mod run_support;
@@ -56,7 +57,18 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
         [command, transcript_path, slides_path, run_directory]
             if command == OsStr::new("analyze") =>
         {
-            analysis_run::run_complete(transcript_path, slides_path, run_directory).await
+            analysis_run::run_complete(transcript_path, slides_path, run_directory, None).await
+        }
+        [command, transcript_path, slides_path, run_directory, flag, slide_pdf_path]
+            if command == OsStr::new("analyze") && flag == OsStr::new("--slides-pdf") =>
+        {
+            analysis_run::run_complete(
+                transcript_path,
+                slides_path,
+                run_directory,
+                Some(slide_pdf_path),
+            )
+            .await
         }
         [command, transcript_path, slides_path, analysis_path, report_path]
             if command == OsStr::new("render-analysis") =>
@@ -66,6 +78,19 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
                 slides_path,
                 analysis_path,
                 report_path,
+                None,
+            )
+        }
+        [command, transcript_path, slides_path, analysis_path, report_path, flag, slide_pdf_path]
+            if command == OsStr::new("render-analysis")
+                && flag == OsStr::new("--slides-pdf") =>
+        {
+            analysis_run::render_saved_analysis(
+                transcript_path,
+                slides_path,
+                analysis_path,
+                report_path,
+                Some(slide_pdf_path),
             )
         }
         [command, analysis_path, trace_path]
@@ -84,8 +109,8 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
             "usage: beyond-slides <transcript.json> <slides.json> <annotations.json> <result.html>\n\
              or:    beyond-slides summarize-trace <model-trace.jsonl>\n\
              or:    beyond-slides canary <transcript.json> <slides.json> <canary.json>\n\
-             or:    beyond-slides analyze <transcript.json> <slides.json> <run-directory>\n\
-             or:    beyond-slides render-analysis <transcript.json> <slides.json> <analysis.json> <result.html>\n\
+             or:    beyond-slides analyze <transcript.json> <slides.json> <run-directory> [--slides-pdf <slides.pdf>]\n\
+             or:    beyond-slides render-analysis <transcript.json> <slides.json> <analysis.json> <result.html> [--slides-pdf <slides.pdf>]\n\
              or:    beyond-slides evaluate-analysis <analysis.json> <model-trace.jsonl>\n\
              or:    beyond-slides restore-canary <transcript.json> <run-directory>\n\
              or:    beyond-slides restore <transcript.json> <run-directory>\n\

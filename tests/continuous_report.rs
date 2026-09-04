@@ -227,9 +227,13 @@ fn report_embeds_score_typography_and_escapes_restored_text() -> Result<(), Box<
     assert_eq!(analysis.passages()[0].text, "<所有权 & 资源管理>。");
     let report = render_continuous_report(&analysis);
 
-    assert!(report.contains(".passage[data-importance=\"5\"]"));
-    assert!(report.contains(".passage[data-novelty=\"5\"]"));
-    assert!(report.contains("text-decoration-thickness"));
+    assert!(report.contains("data-score-threshold=\"importance\""));
+    assert!(report.contains("data-score-threshold=\"novelty\""));
+    assert!(report.contains(".score-controls {\n  position: fixed;"));
+    assert!(report.contains(".passage.importance-emphasized"));
+    assert!(report.contains(".passage.novelty-emphasized"));
+    assert!(report.contains("function applyScoreThreshold(input, preserveScrollPosition)"));
+    assert!(!report.contains("legend-card"));
     assert!(!report.contains("href=\"http"));
     assert!(!report.contains("src=\"http"));
     assert!(report.contains("所有权"));

@@ -80,8 +80,6 @@ pub fn render_continuous_report_with_media(
             || "00:00".into(),
             |segment| format_timestamp(segment.end_ms),
         ),
-        importance_distribution: score_distribution(analysis, |passage| passage.importance.get()),
-        novelty_distribution: score_distribution(analysis, |passage| passage.novelty.get()),
         has_slides: !slides.is_empty(),
         has_audio: media.audio.is_some(),
         audio_source: media.audio.as_ref().map_or("", |audio| &audio.source),
@@ -96,8 +94,6 @@ pub fn render_continuous_report_with_media(
 struct ContinuousReportTemplate<'a> {
     passage_count: usize,
     duration: String,
-    importance_distribution: Vec<ScoreCount>,
-    novelty_distribution: Vec<ScoreCount>,
     has_slides: bool,
     has_audio: bool,
     audio_source: &'a str,
@@ -111,11 +107,6 @@ struct SlideView<'a> {
     source: &'a str,
     width: u32,
     height: u32,
-}
-
-struct ScoreCount {
-    score: usize,
-    count: usize,
 }
 
 struct PassageView {
@@ -193,21 +184,6 @@ impl fmt::Display for ContinuousReportError {
 }
 
 impl Error for ContinuousReportError {}
-
-fn score_distribution(
-    analysis: &ValidatedRestoredAnalysis,
-    score: impl Fn(&RestoredLecturePassage) -> u8,
-) -> Vec<ScoreCount> {
-    let mut counts = [0; 6];
-    for passage in analysis.passages() {
-        counts[usize::from(score(passage))] += 1;
-    }
-    counts
-        .into_iter()
-        .enumerate()
-        .map(|(score, count)| ScoreCount { score, count })
-        .collect()
-}
 
 fn format_timestamp(milliseconds: u64) -> String {
     let total_seconds = milliseconds / 1_000;

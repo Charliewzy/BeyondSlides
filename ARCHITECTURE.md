@@ -334,9 +334,13 @@ match the restored transcript.
 ### 5.8 Rendering and evaluation
 
 The continuous report renders authoritative passage text in lecture order.
-Importance maps to six font weights and novelty maps to six underline
-thicknesses. Hover, focus, or click reveals timestamps, raw source range,
-inferred slide position, and component scores.
+User-controlled discrete thresholds map importance to bold versus normal text
+and novelty to underlined versus plain text; the underlying `0..5` scores remain
+available in the inspector. The fixed upper-right controls range from
+highlighting every score through disabling a channel, and preserve the reader's
+viewport anchor when font-weight changes reflow the transcript. Hover, focus, or
+click reveals timestamps, raw source range, inferred slide position, and
+component scores.
 
 When audio and timed transcript tokens are supplied, rendering locally aligns
 each passage's restored text within its coarse source interval and projects its

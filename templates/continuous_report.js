@@ -11,6 +11,7 @@
   const audio = document.querySelector("[data-lecture-audio]");
   const audioStatus = document.querySelector("[data-audio-status]");
   const playbackModeButtons = [...document.querySelectorAll("[data-playback-mode]")];
+  const scoreThresholds = [...document.querySelectorAll("[data-score-threshold]")];
   const audioIntervals = passages.map(passage => ({
     passage,
     start: Number(passage.dataset.audioStartMs) / 1000,
@@ -28,6 +29,51 @@
     const matches = passagesBySlideId.get(passage.dataset.slidePosition) || [];
     matches.push(passage);
     passagesBySlideId.set(passage.dataset.slidePosition, matches);
+  }
+
+  function thresholdLabel(threshold) {
+    if (threshold === 0) return "全部";
+    if (threshold === 6) return "关闭";
+    return `≥${threshold}`;
+  }
+
+  function passageNearestViewportCenter() {
+    const viewportCenter = window.innerHeight / 2;
+    let nearest;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    for (const passage of passages) {
+      const bounds = passage.getBoundingClientRect();
+      const distance = Math.abs(bounds.top + bounds.height / 2 - viewportCenter);
+      if (distance < nearestDistance) {
+        nearest = passage;
+        nearestDistance = distance;
+      }
+    }
+    return nearest;
+  }
+
+  function applyScoreThreshold(input, preserveScrollPosition) {
+    const metric = input.dataset.scoreThreshold;
+    const threshold = Number(input.value);
+    const anchor = preserveScrollPosition ? passageNearestViewportCenter() : undefined;
+    const anchorTop = anchor?.getBoundingClientRect().top;
+    let emphasizedCount = 0;
+
+    for (const passage of passages) {
+      const score = Number(passage.dataset[metric]);
+      const emphasized = threshold <= 5 && score >= threshold;
+      passage.classList.toggle(`${metric}-emphasized`, emphasized);
+      emphasizedCount += Number(emphasized);
+    }
+
+    const label = thresholdLabel(threshold);
+    document.querySelector(`[data-threshold-output="${metric}"]`).textContent = label;
+    document.querySelector(`[data-threshold-count="${metric}"]`).textContent = `${emphasizedCount}/${passages.length} 段`;
+    input.setAttribute("aria-valuetext", label);
+
+    if (anchor && anchorTop !== undefined) {
+      window.scrollBy(0, anchor.getBoundingClientRect().top - anchorTop);
+    }
   }
 
   function updateViewingSlide() {
@@ -244,6 +290,11 @@
 
   for (const button of playbackModeButtons) {
     button.addEventListener("click", () => setPlaybackMode(button.dataset.playbackMode));
+  }
+
+  for (const input of scoreThresholds) {
+    applyScoreThreshold(input, false);
+    input.addEventListener("input", () => applyScoreThreshold(input, true));
   }
 
   if (rail) {

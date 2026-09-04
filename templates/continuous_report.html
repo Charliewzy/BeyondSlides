@@ -14,7 +14,7 @@
       <div>
         <p class="eyebrow">BeyondSlides</p>
         <h1>在连续讲稿中看见课堂价值</h1>
-        <p class="lede">文字越粗，重要性越高；文字下方的线越粗，新颖度越高。点击讲稿可查看评分和播放音频，点击幻灯片可反向定位全部对齐讲稿。</p>
+        <p class="lede">达到所选重要性阈值的讲稿以粗体显示，达到新颖度阈值的讲稿带有下划线。点击讲稿可查看评分和播放音频，点击幻灯片可反向定位全部对齐讲稿。</p>
       </div>
       <dl class="summary">
         <div><dt>讲稿时长</dt><dd>{{ duration }}</dd></div>
@@ -22,31 +22,28 @@
       </dl>
     </header>
 
-    <section class="legend-card" aria-label="视觉编码图例">
-      <div class="legend-block">
-        <h2>重要性 → 字重</h2>
-        <div class="legend-scale importance-scale">
-{% for item in importance_distribution %}
-          <span data-score="{{ item.score }}"><b>讲</b><small>{{ item.score }} · {{ item.count }}段</small></span>
-{% endfor %}
-        </div>
-      </div>
-      <div class="legend-block">
-        <h2>新颖度 → 下划线粗细</h2>
-        <div class="legend-scale novelty-scale">
-{% for item in novelty_distribution %}
-          <span data-score="{{ item.score }}"><b>稿</b><small>{{ item.score }} · {{ item.count }}段</small></span>
-{% endfor %}
-        </div>
-      </div>
-    </section>
-
     <div class="lecture-layout{% if has_slides %} has-slides{% endif %}">
       <section class="transcript-card" aria-labelledby="transcript-title">
         <header>
           <p class="section-kicker">Continuous lecture transcript</p>
           <h2 id="transcript-title">完整讲稿</h2>
         </header>
+        <aside class="score-controls" aria-label="讲稿突出显示阈值">
+          <p class="score-controls-title">突出显示</p>
+          <label class="score-control" for="importance-threshold">
+            <span><strong>重要性</strong><output data-threshold-output="importance" for="importance-threshold">≥4</output></span>
+            <input id="importance-threshold" type="range" min="0" max="6" step="1" value="4" list="score-threshold-stops" data-score-threshold="importance">
+            <span class="threshold-detail"><span>全部</span><span data-threshold-count="importance"></span><span>关闭</span></span>
+          </label>
+          <label class="score-control" for="novelty-threshold">
+            <span><strong>新颖度</strong><output data-threshold-output="novelty" for="novelty-threshold">≥3</output></span>
+            <input id="novelty-threshold" type="range" min="0" max="6" step="1" value="3" list="score-threshold-stops" data-score-threshold="novelty">
+            <span class="threshold-detail"><span>全部</span><span data-threshold-count="novelty"></span><span>关闭</span></span>
+          </label>
+          <datalist id="score-threshold-stops">
+            <option value="0"></option><option value="1"></option><option value="2"></option><option value="3"></option><option value="4"></option><option value="5"></option><option value="6"></option>
+          </datalist>
+        </aside>
         <p class="continuous-transcript">{% for passage in passages %}<span class="passage" tabindex="0" data-passage data-source-start="{{ passage.source_start }}" data-source-end="{{ passage.source_end }}" data-time="{{ passage.timestamp }}" data-audio-start-ms="{{ passage.audio_start_ms }}" data-audio-end-ms="{{ passage.audio_end_ms }}" data-audio-basis="{{ passage.audio_basis }}" data-slide-position="{{ passage.slide_position }}" data-slide-number="{{ passage.slide_number }}" data-importance="{{ passage.importance }}" data-novelty="{{ passage.novelty }}" data-connection="{{ passage.connection_strength }}">{{ passage.text }}</span>{% endfor %}</p>
       </section>
 

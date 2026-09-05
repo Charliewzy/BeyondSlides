@@ -1,0 +1,180 @@
+/* PROTOTYPE: remove this file after selecting a lecture-minimap direction. */
+
+[data-minimap-prototype][hidden],
+[data-minimap-tooltip][hidden] { display: none; }
+
+body.minimap-prototype-active {
+  --prototype-minimap-width: 3.6rem;
+}
+
+body.minimap-prototype-active .lecture-layout.has-slides {
+  grid-template-columns: minmax(0, 1fr) var(--prototype-minimap-width) minmax(24rem, 34rem);
+  gap: .8rem;
+}
+
+.lecture-minimap-prototype {
+  position: sticky;
+  top: 1rem;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 2rem);
+  min-height: 24rem;
+  padding: .35rem;
+  border: 1px solid rgb(216 211 201 / 90%);
+  border-radius: .8rem;
+  background: rgb(255 254 250 / 91%);
+  box-shadow: 0 12px 35px rgb(31 27 39 / 11%);
+  backdrop-filter: blur(12px);
+}
+
+.minimap-prototype-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid rgb(109 104 119 / 22%);
+  border-radius: .38rem;
+  background: rgb(240 238 233 / 82%);
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.minimap-prototype-stage:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.minimap-prototype-bands,
+.minimap-prototype-markers {
+  position: absolute;
+  inset: 0;
+}
+
+.minimap-prototype-passage {
+  position: absolute;
+  left: 0;
+  display: block;
+  width: 100%;
+  min-height: 1px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-bottom: 1px solid rgb(109 104 119 / 6%);
+  appearance: none;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.minimap-prototype-passage:hover,
+.minimap-prototype-passage:focus-visible {
+  z-index: 2;
+  outline: 1px solid rgb(21 19 26 / 42%);
+  outline-offset: -1px;
+  background: rgb(255 255 255 / 72%);
+}
+
+.minimap-prototype-viewport {
+  position: absolute;
+  z-index: 4;
+  right: 0;
+  left: 0;
+  min-height: .42rem;
+  border: 1px solid rgb(21 19 26 / 68%);
+  border-radius: .2rem;
+  background: rgb(255 255 255 / 20%);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 70%) inset;
+  cursor: grab;
+  touch-action: none;
+}
+
+.minimap-prototype-viewport:hover { background: rgb(255 255 255 / 32%); }
+.minimap-prototype-viewport:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.minimap-prototype-viewport.dragging { cursor: grabbing; background: rgb(255 255 255 / 38%); }
+
+.minimap-prototype-markers {
+  z-index: 5;
+  pointer-events: none;
+}
+
+.minimap-prototype-marker {
+  position: absolute;
+  z-index: 1;
+  right: 0;
+  left: 0;
+  height: 2px;
+  transform: translateY(-1px);
+  background: var(--aligned);
+  box-shadow: 0 0 3px rgb(25 118 210 / 55%);
+}
+
+.minimap-prototype-marker.selected {
+  z-index: 3;
+  height: 3px;
+  background: var(--accent);
+  box-shadow: 0 0 4px rgb(104 43 215 / 70%);
+}
+
+.minimap-prototype-marker.audio {
+  z-index: 4;
+  height: 3px;
+  background: #f49a1a;
+  box-shadow: 0 0 4px rgb(244 154 26 / 72%);
+}
+
+.minimap-prototype-tooltip {
+  position: fixed;
+  z-index: 30;
+  width: 15rem;
+  padding: .65rem .75rem;
+  border: 1px solid rgb(216 211 201 / 90%);
+  border-radius: .55rem;
+  background: rgb(21 19 26 / 94%);
+  color: white;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 24%);
+  font-size: .7rem;
+  line-height: 1.55;
+  pointer-events: none;
+}
+
+.minimap-prototype-tooltip strong { display: block; color: white; }
+.minimap-prototype-tooltip span { display: block; color: rgb(255 255 255 / 72%); }
+.minimap-prototype-tooltip span:last-child {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+/* Only qualifying passages emit signals from a neutral spine. */
+.minimap-binary-signals {
+  position: absolute;
+  inset: 0 2px;
+  display: grid;
+  grid-template-columns: 1fr 2px 1fr;
+  align-items: stretch;
+}
+
+.minimap-binary-signals b { grid-column: 2; background: rgb(21 19 26 / 15%); }
+.minimap-binary-signals i { opacity: 0; }
+.minimap-binary-signals .importance { grid-column: 1; grid-row: 1; background: var(--accent); }
+.minimap-binary-signals .novelty { grid-column: 3; grid-row: 1; background: var(--underline); }
+.minimap-prototype-passage[data-importance-active="true"] .minimap-binary-signals .importance,
+.minimap-prototype-passage[data-novelty-active="true"] .minimap-binary-signals .novelty { opacity: .96; }
+
+.passage.minimap-hover-preview {
+  border-radius: .16em;
+  background: rgb(21 19 26 / 17%);
+  box-shadow: inset 0 -.12em 0 rgb(21 19 26 / 32%);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+@media (max-width: 70rem) {
+  body.minimap-prototype-active .lecture-layout.has-slides { grid-template-columns: 1fr; }
+  .lecture-minimap-prototype { display: none; }
+}

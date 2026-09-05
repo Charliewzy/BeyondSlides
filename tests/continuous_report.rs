@@ -86,6 +86,12 @@ fn report_supports_reverse_navigation_from_slides_to_aligned_passages() -> Resul
     assert!(report.contains("aria-pressed=\"false\""));
     assert!(report.contains("const passagesBySlideId = new Map()"));
     assert!(report.contains("passage.classList.toggle(\"slide-aligned\""));
+    assert!(report.contains("function previewSlidePassages(slide, previewed)"));
+    assert!(report.contains("passage.classList.toggle(\"slide-hover-preview\", previewed)"));
+    assert!(report.contains("slide.addEventListener(\"pointerenter\""));
+    assert!(report.contains("slide.addEventListener(\"pointerleave\""));
+    assert!(report.contains(".passage.slide-hover-preview"));
+    assert!(report.contains(".passage:hover"));
     assert!(report.contains("slide.addEventListener(\"click\""));
     assert!(report.contains("slide.addEventListener(\"keydown\""));
     assert!(report.contains("first.scrollIntoView({ behavior: \"smooth\", block: \"center\" })"));

@@ -211,7 +211,7 @@ dd { margin: .2rem 0 0; font-size: 1.35rem; font-weight: 850; }
 .passage.importance-emphasized { font-weight: 760; }
 .passage.novelty-emphasized { text-decoration-line: underline; text-decoration-thickness: .1em; }
 
-.passage:hover, .passage:focus-visible, .passage.selected {
+.passage:focus-visible, .passage.selected {
   border-radius: .16em;
   outline: none;
   background: rgb(104 43 215 / 12%);
@@ -229,9 +229,26 @@ dd { margin: .2rem 0 0; font-size: 1.35rem; font-weight: 850; }
   box-shadow: inset 0 -.12em 0 rgb(25 118 210 / 28%);
 }
 
+.passage.slide-hover-preview {
+  border-radius: .16em;
+  background: rgb(25 118 210 / 25%);
+  box-shadow: inset 0 -.12em 0 rgb(25 118 210 / 42%);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
 .passage.audio-current {
   border-radius: .16em;
   background: rgb(244 154 26 / 20%);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.passage:hover {
+  border-radius: .16em;
+  outline: none;
+  background: rgb(104 43 215 / 24%);
+  box-shadow: inset 0 -.12em 0 rgb(104 43 215 / 38%);
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }

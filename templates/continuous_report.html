@@ -6,6 +6,7 @@
   <title>BeyondSlides · 连续讲稿价值分布</title>
   <style>
 {% include "continuous_report.css" %}
+{% include "continuous_report_minimap_prototype.css" %}
   </style>
 </head>
 <body>
@@ -14,7 +15,7 @@
       <div>
         <p class="eyebrow">BeyondSlides</p>
         <h1>在连续讲稿中看见课堂价值</h1>
-        <p class="lede">达到所选重要性阈值的讲稿以粗体显示，达到新颖度阈值的讲稿带有下划线。点击讲稿可查看评分和播放音频，点击幻灯片可反向定位全部对齐讲稿。</p>
+        <p class="lede">达到所选重要性阈值的讲稿以粗体显示，达到新颖度阈值的讲稿带有下划线。悬停讲稿可突出完整段落，点击可查看评分和播放音频；悬停幻灯片可临时预览其全部对齐讲稿。</p>
       </div>
       <dl class="summary">
         <div><dt>讲稿时长</dt><dd>{{ duration }}</dd></div>
@@ -48,6 +49,7 @@
       </section>
 
 {% if has_slides %}
+{% include "continuous_report_minimap_prototype.html" %}
       <aside class="slide-panel" aria-labelledby="slide-panel-title">
         <header class="slide-panel-header">
           <div>
@@ -93,6 +95,7 @@
 
   <script>
 {% include "continuous_report.js" %}
+{% include "continuous_report_minimap_prototype.js" %}
   </script>
 </body>
 </html>

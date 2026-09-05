@@ -228,6 +228,13 @@
     return matchedPassages;
   }
 
+  function previewSlidePassages(slide, previewed) {
+    const matchedPassages = passagesBySlideId.get(slide.dataset.slideId) || [];
+    for (const passage of matchedPassages) {
+      passage.classList.toggle("slide-hover-preview", previewed);
+    }
+  }
+
   function inspectSlide(slide) {
     for (const passage of passages) {
       passage.classList.remove("selected");
@@ -279,6 +286,8 @@
   }
 
   for (const slide of slides) {
+    slide.addEventListener("pointerenter", () => previewSlidePassages(slide, true));
+    slide.addEventListener("pointerleave", () => previewSlidePassages(slide, false));
     slide.addEventListener("click", () => inspectSlide(slide));
     slide.addEventListener("keydown", event => {
       if (event.key === "Enter" || event.key === " ") {

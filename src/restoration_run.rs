@@ -39,6 +39,7 @@ pub async fn run_canary(
     let transcript_path = PathBuf::from(transcript_path);
     let run_directory = PathBuf::from(run_directory);
     let provider = ProviderSettings::from_restoration_environment()?;
+    let _run_lock = crate::run_support::lock_run_directory(&run_directory)?;
     let (transcript, transcript_hash) = read_json_with_hash(&transcript_path, "transcript")?;
     let manifest = RestorationRunManifest::new(&provider, transcript_hash);
     initialize_run_directory_with(
@@ -94,6 +95,7 @@ pub async fn run_complete(
     let transcript_path = PathBuf::from(transcript_path);
     let run_directory = PathBuf::from(run_directory);
     let mut provider = ProviderSettings::from_restoration_environment()?;
+    let _run_lock = crate::run_support::lock_run_directory(&run_directory)?;
     if let Some(scheduler) = shared_scheduler {
         provider = provider.with_scheduler(scheduler);
     }

@@ -172,6 +172,7 @@ pub async fn run_complete(
     let timed_tokens_path = timed_tokens_path.map(PathBuf::from);
     let provider = ProviderSettings::from_annotation_environment()?;
     provider.worker.check_stop()?;
+    let _run_lock = crate::run_support::lock_run_directory(&run_directory)?;
     let restoration_directory = run_directory.join(RESTORATION_DIRECTORY);
     restoration_run::run_complete(
         transcript_path.as_os_str(),

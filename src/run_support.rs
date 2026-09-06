@@ -23,6 +23,24 @@ const ANNOTATION_CHAT_EXTRA_BODY_ENV: &str = "BEYOND_SLIDES_ANNOTATION_CHAT_EXTR
 const RESTORATION_CHAT_EXTRA_BODY_ENV: &str = "BEYOND_SLIDES_RESTORATION_CHAT_EXTRA_BODY";
 const MANIFEST_FILE: &str = "manifest.json";
 const MODEL_TRACE_FILE: &str = "model-trace.jsonl";
+const RUN_LOCK_FILE: &str = ".run.lock";
+
+/// Hold the returned file for the entire mutating run. Never unlink a lock
+/// file: another process may already be waiting on that same inode.
+pub(crate) fn lock_run_directory(directory: &Path) -> Result<fs::File, io::Error> {
+    fs::create_dir_all(directory)?;
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(directory.join(RUN_LOCK_FILE))?;
+    lock.try_lock().map_err(|error| {
+        io::Error::other(format!(
+            "run directory {} is already being written or cannot be locked: {error}",
+            directory.display()
+        ))
+    })?;
+    Ok(lock)
+}
 
 pub(crate) struct ProviderSettings {
     pub(crate) worker: crate::worker_control::WorkerControl,
@@ -277,6 +295,12 @@ where
         }
     } else {
         if fs::read_dir(run_directory)?.any(|entry| {
+            if entry
+                .as_ref()
+                .is_ok_and(|entry| entry.file_name() == RUN_LOCK_FILE)
+            {
+                return false;
+            }
             entry
                 .and_then(|entry| entry.file_type())
                 .map_or(true, |kind| !kind.is_dir())
@@ -477,6 +501,17 @@ fn optional_json_object(name: &str) -> Result<Option<Value>, io::Error> {
 mod tests {
     use super::*;
     use std::error::Error;
+
+    #[test]
+    fn run_lock_excludes_other_writers_and_releases_on_drop() -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let first = lock_run_directory(directory.path())?;
+        assert!(lock_run_directory(directory.path()).is_err());
+        initialize_run_directory(directory.path(), &serde_json::json!({"version": 1}), "test")?;
+        drop(first);
+        let _next = lock_run_directory(directory.path())?;
+        Ok(())
+    }
 
     #[test]
     fn execution_defaults_and_overrides_are_validated() {

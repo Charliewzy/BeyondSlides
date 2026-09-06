@@ -5,6 +5,45 @@ use beyond_slides::{
 };
 
 #[test]
+fn model_runs_reject_a_directory_locked_by_another_process() {
+    let directory = tempfile::tempdir().unwrap();
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(directory.path().join(".run.lock"))
+        .unwrap();
+    lock.try_lock().unwrap();
+    for command in ["restore", "restore-canary", "analyze"] {
+        let mut process = Command::new(beyond_slides_binary());
+        process
+            .arg(command)
+            .arg("examples/tiny_course/transcript.json");
+        if command == "analyze" {
+            process.arg("examples/tiny_course/slides.json");
+        }
+        let output = process
+            .arg(directory.path())
+            .env("BEYOND_SLIDES_API_BASE_URL", "http://127.0.0.1:9/v1")
+            .env("BEYOND_SLIDES_API_KEY", "dummy-lock-test")
+            .env("BEYOND_SLIDES_MODEL", "dummy-model")
+            .env_remove("BEYOND_SLIDES_CHAT_EXTRA_BODY")
+            .env_remove("BEYOND_SLIDES_RESTORATION_CHAT_EXTRA_BODY")
+            .env_remove("BEYOND_SLIDES_ANNOTATION_CHAT_EXTRA_BODY")
+            .env_remove("BEYOND_SLIDES_WORKER_CONTROL")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("already being written"),
+            "{command}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!directory.path().join("manifest.json").exists());
+        assert!(!directory.path().join("restoration").exists());
+    }
+}
+
+#[test]
 fn tiny_course_can_be_rendered_from_the_command_line() {
     let report_path = std::env::temp_dir().join(format!(
         "beyond-slides-tiny-course-{}.html",

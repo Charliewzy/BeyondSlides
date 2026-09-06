@@ -11,6 +11,29 @@ use serde_json::Value;
 
 pub const MODEL_TRACE_FORMAT_VERSION: u32 = 1;
 
+pub(crate) fn redact_credential(mut text: String, secret: &str) -> String {
+    for variant in credential_variants(secret) {
+        text = text.replace(&variant, "<REDACTED>");
+    }
+    text
+}
+
+fn credential_variants(secret: &str) -> Vec<String> {
+    if secret.is_empty() {
+        return Vec::new();
+    }
+    let json = serde_json::to_string(secret).expect("strings serialize to JSON");
+    let encoded: String = url::form_urlencoded::byte_serialize(secret.as_bytes()).collect();
+    let mut variants = vec![
+        secret.to_owned(),
+        json[1..json.len() - 1].to_owned(),
+        encoded,
+    ];
+    variants.sort_by_key(|value| std::cmp::Reverse(value.len()));
+    variants.dedup();
+    variants
+}
+
 /// An append-only, crash-tolerant record of model exchanges.
 ///
 /// The trace contains lecture text and model output, but never provider
@@ -18,6 +41,7 @@ pub const MODEL_TRACE_FORMAT_VERSION: u32 = 1;
 #[derive(Clone)]
 pub struct ModelExchangeTrace {
     inner: Arc<TraceInner>,
+    redacted_secrets: Vec<String>,
 }
 
 struct TraceInner {
@@ -90,6 +114,7 @@ impl ModelExchangeTrace {
         }
 
         Ok(Self {
+            redacted_secrets: Vec::new(),
             inner: Arc::new(TraceInner {
                 path,
                 state: Mutex::new(TraceState {
@@ -99,6 +124,39 @@ impl ModelExchangeTrace {
                 }),
             }),
         })
+    }
+
+    /// Configuration supplies credentials here; they never become trace fields.
+    pub(crate) fn with_redacted_secret(mut self, secret: &str) -> Self {
+        self.redacted_secrets.extend(credential_variants(secret));
+        self.redacted_secrets
+            .sort_by_key(|value| std::cmp::Reverse(value.len()));
+        self.redacted_secrets.dedup();
+        self
+    }
+
+    fn redact(&self, value: &mut Value) {
+        match value {
+            Value::String(text) => {
+                for secret in &self.redacted_secrets {
+                    *text = text.replace(secret, "<REDACTED>");
+                }
+            }
+            Value::Array(values) => values.iter_mut().for_each(|value| self.redact(value)),
+            Value::Object(fields) => {
+                for (key, value) in fields.iter_mut() {
+                    if matches!(
+                        key.to_ascii_lowercase().as_str(),
+                        "authorization" | "proxy-authorization" | "x-api-key"
+                    ) {
+                        *value = Value::String("<REDACTED>".into());
+                    } else {
+                        self.redact(value);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     pub(crate) fn record_request(
@@ -234,7 +292,9 @@ impl ModelExchangeTrace {
             request_kind: context.request_kind,
             event,
         };
-        let mut line = serde_json::to_vec(&record).map_err(|error| {
+        let mut safe_record = to_value(&record, "model trace record")?;
+        self.redact(&mut safe_record);
+        let mut line = serde_json::to_vec(&safe_record).map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("could not serialize model trace record: {error}"),

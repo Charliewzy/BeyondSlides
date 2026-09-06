@@ -311,6 +311,49 @@ async fn invalid_restoration_is_returned_to_the_model_for_repair() -> Result<(),
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn trace_redacts_credentials_echoed_by_success_and_error_responses()
+-> Result<(), Box<dyn Error>> {
+    let key = "dummy-trace-key/with+encoding";
+    let encoded: String = url::form_urlencoded::byte_serialize(key.as_bytes()).collect();
+    for success in [false, true] {
+        let api = MockServer::start().await;
+        let mut body = final_response("echo", restoration_json());
+        body["provider_debug"] =
+            json!({"key": key, "encoded": encoded, "message": "keep this diagnostic"});
+        Mock::given(any())
+            .respond_with(
+                ResponseTemplate::new(if success { 200 } else { 401 }).set_body_json(body),
+            )
+            .mount(&api)
+            .await;
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("trace.jsonl");
+        let client = beyond_slides::ChatCompletionsClient::new(
+            ChatCompletionsConfig::new(base_url(&api), key, "test-model")?
+                .with_model_trace(ModelExchangeTrace::open(&path)?),
+        );
+        let sources = sources()?;
+        let windows = build_windows(
+            &sources,
+            WindowingConfig::new(100, Duration::from_secs(60), 20)?,
+        );
+        let tasks = build_restoration_tasks(&windows);
+        let result = client.restore_window(&tasks[0]).await;
+        assert_eq!(result.is_ok(), success);
+        if let Err(error) = result {
+            assert!(!error.to_string().contains(key));
+            assert!(!error.to_string().contains(&encoded));
+        }
+        let trace = std::fs::read_to_string(&path)?;
+        assert!(!trace.contains(key), "plain credential leaked");
+        assert!(!trace.contains(&encoded), "encoded credential leaked");
+        assert!(trace.contains("keep this diagnostic"));
+        assert!(!read_model_trace(&path)?.is_empty());
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn trace_records_requests_responses_and_validation_repairs_without_credentials()
 -> Result<(), Box<dyn Error>> {
     let invalid = json!({

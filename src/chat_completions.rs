@@ -178,7 +178,7 @@ impl ChatCompletionsConfig {
 
     /// Records complete model exchanges without exposing credentials to the trace.
     pub fn with_model_trace(mut self, model_trace: ModelExchangeTrace) -> Self {
-        self.model_trace = Some(model_trace);
+        self.model_trace = Some(model_trace.with_redacted_secret(&self.api_key));
         self
     }
 
@@ -239,6 +239,7 @@ impl Error for ChatCompletionsConfigError {}
 /// and JSON output.
 pub struct ChatCompletionsClient {
     transport: Client,
+    api_key: String,
     target: ServiceTarget,
     options: ChatOptions,
     max_tool_rounds: usize,
@@ -257,7 +258,7 @@ impl ChatCompletionsClient {
         let model = config.model.clone();
         let target = ServiceTarget {
             endpoint: Endpoint::from_owned(endpoint.clone()),
-            auth: AuthData::from_single(config.api_key),
+            auth: AuthData::from_single(config.api_key.clone()),
             model: ModelIden::new(AdapterKind::OpenAI, model.clone()),
         };
         let mut options = ChatOptions::default()
@@ -271,6 +272,7 @@ impl ChatCompletionsClient {
 
         Self {
             transport: Client::default(),
+            api_key: config.api_key,
             target,
             options,
             max_tool_rounds: config.max_tool_rounds,
@@ -622,7 +624,7 @@ impl ChatCompletionsClient {
                             .map_err(ChatCompletionsError::ModelTrace)?;
                     }
                     if !will_retry {
-                        return Err(provider_error(error));
+                        return Err(provider_error(error, &self.api_key));
                     }
                     retries += 1;
                     tokio::time::sleep(retry_delay).await;
@@ -1546,7 +1548,7 @@ fn analysis_error_category(error: &AnalysisAssemblyError) -> &'static str {
     }
 }
 
-fn provider_error(error: genai::Error) -> ChatCompletionsError {
+fn provider_error(error: genai::Error, api_key: &str) -> ChatCompletionsError {
     let message = match error {
         genai::Error::ChatResponseGeneration { cause, .. } => {
             format!("the response could not be decoded: {cause}")
@@ -1554,7 +1556,7 @@ fn provider_error(error: genai::Error) -> ChatCompletionsError {
         error => error.to_string(),
     };
     ChatCompletionsError::Provider(
-        message
+        crate::model_trace::redact_credential(message, api_key)
             .chars()
             .take(MAX_PROVIDER_ERROR_CHARACTERS)
             .collect(),

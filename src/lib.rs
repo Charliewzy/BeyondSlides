@@ -2,6 +2,7 @@ mod alignment;
 mod analysis_artifact;
 mod annotation;
 mod chat_completions;
+mod comparative_ranking;
 mod continuous_report;
 mod domain;
 pub mod evaluation;
@@ -30,14 +31,22 @@ pub use chat_completions::{
     ChatCompletionsConfigError, ChatCompletionsError, RestorationDiagnostics,
     RestoredAnnotationResult, TranscriptWindowRestorationResult,
 };
+pub use comparative_ranking::{
+    ComparativeDecision, ComparativeMetric, ComparativeRankingBatchInfo,
+    ComparativeRankingBatchResult, ComparativeRankingConfig, ComparativeRankingConfigError,
+    ComparativeRankingError, ComparativeRankingProgress, ComparativeRankingProgressError,
+    ComparativeRankingSession, ComparativeRankingValidationError, ComparativeRankings,
+    CompleteComparativeRanking,
+};
 pub use continuous_report::{
     ContinuousReportError, ContinuousReportMedia, ReportAudio, ReportSlideImage,
     render_continuous_report, render_continuous_report_with_media,
 };
 pub use domain::{
-    LecturePassage, LecturePassages, RestoredLecturePassage, RestoredTranscript,
-    RestoredTranscriptSpan, Score5, ScoreOutOfRange, Slide, SlideDeck, SlideId, TimedTranscript,
-    TimedTranscriptToken, Transcript, TranscriptSegment, TranscriptSegmentId,
+    ComparativeScore, ComparativeScoreError, LecturePassage, LecturePassages,
+    RestoredLecturePassage, RestoredTranscript, RestoredTranscriptSpan, Score5, ScoreOutOfRange,
+    Slide, SlideDeck, SlideId, TimedTranscript, TimedTranscriptToken, Transcript,
+    TranscriptSegment, TranscriptSegmentId,
 };
 pub use model_trace::{
     MODEL_TRACE_FORMAT_VERSION, ModelExchangeTrace, ModelProviderError, ModelRequestKind,

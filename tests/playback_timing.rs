@@ -134,6 +134,8 @@ fn passage(text: &str) -> RestoredLecturePassage {
         novelty: score(0),
         connection_strength: score(0),
         importance: score(0),
+        comparative_novelty: None,
+        comparative_importance: None,
         related_slides: Vec::new(),
         summary: None,
         comparison_note: None,

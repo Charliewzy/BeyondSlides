@@ -301,6 +301,8 @@ fn workflow_name(workflow: ModelWorkflow) -> &'static str {
     match workflow {
         ModelWorkflow::Annotation => "annotation",
         ModelWorkflow::Restoration => "restoration",
+        ModelWorkflow::ImportanceComparison => "importance_comparison",
+        ModelWorkflow::NoveltyComparison => "novelty_comparison",
     }
 }
 

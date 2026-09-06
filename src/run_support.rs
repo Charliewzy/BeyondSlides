@@ -153,6 +153,23 @@ pub(crate) fn window_progress_bar(
     Ok(progress)
 }
 
+pub(crate) fn ranking_progress_bar(
+    total_batches: usize,
+    completed_batches: usize,
+) -> Result<ProgressBar, indicatif::style::TemplateError> {
+    let progress = ProgressBar::new(total_batches as u64);
+    progress.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{elapsed_precise}] [{bar:40.magenta/blue}] \
+             {pos}/{len} comparison batches {msg}",
+        )?
+        .progress_chars("=>-"),
+    );
+    progress.set_position(completed_batches as u64);
+    progress.enable_steady_tick(Duration::from_millis(100));
+    Ok(progress)
+}
+
 pub(crate) fn read_json<T: DeserializeOwned>(path: &Path, kind: &str) -> Result<T, io::Error> {
     let bytes = fs::read(path).map_err(|error| {
         io::Error::new(

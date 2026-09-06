@@ -1,17 +1,18 @@
 use std::{
     error::Error,
     ffi::OsStr,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use beyond_slides::{
-    ChatCompletionsClient, ContinuousReportMedia, DenseSlideScorer, HybridSlideScorer,
-    LectureAnalysisConfig, LectureAnalysisProgressError, LectureAnalysisSession,
-    LexicalSlideScorer, ModelExchangeTrace, PlaybackTimingBasis, RestoredAnalysisArtifact,
-    RestoredTranscript, SlideDeck, TimedTranscript, Transcript, ValidatedRestoredAnalysis,
-    ValidatedSources, WindowingConfig,
+    ChatCompletionsClient, ComparativeMetric, ComparativeRankingConfig,
+    ComparativeRankingProgressError, ComparativeRankingSession, ContinuousReportMedia,
+    DenseSlideScorer, HybridSlideScorer, LectureAnalysisConfig, LectureAnalysisProgressError,
+    LectureAnalysisSession, LexicalSlideScorer, ModelExchangeTrace, PlaybackTimingBasis,
+    RestoredAnalysisArtifact, RestoredTranscript, SlideDeck, TimedTranscript, Transcript,
+    ValidatedRestoredAnalysis, ValidatedSources, WindowingConfig,
     evaluation::{render_annotation_quality, summarize_annotation_quality},
     project_passage_playback_intervals, read_model_trace, render_continuous_report_with_media,
 };
@@ -20,15 +21,16 @@ use serde_json::Value;
 
 use crate::run_support::{
     ProviderSettings, checkpoint_path, display_token_count, initialize_run_directory,
-    model_trace_path, open_output_model_trace, open_run_model_trace, read_json,
-    read_json_with_hash, sha256, window_progress_bar, write_json_atomically, write_text_atomically,
+    model_trace_path, open_output_model_trace, open_run_model_trace, ranking_progress_bar,
+    read_json, read_json_with_hash, sha256, window_progress_bar, write_json_atomically,
+    write_text_atomically,
 };
 use crate::{
     report_assets::{prepare_audio_asset, render_pdf_slides},
     restoration_run,
 };
 
-const ANALYSIS_RUN_FORMAT_VERSION: u32 = 5;
+const ANALYSIS_RUN_FORMAT_VERSION: u32 = 6;
 const MAX_OWNED_CHARACTERS: usize = 400;
 const MAX_OWNED_DURATION_SECONDS: u64 = 60;
 const CONTEXT_CHARACTERS: usize = 150;
@@ -39,12 +41,20 @@ const MAX_PROVIDER_RETRIES: usize = 5;
 const MINIMUM_REQUEST_INTERVAL_SECONDS: u64 = 5;
 const MAX_SEARCH_RESULTS: usize = 5;
 const MAX_OUTPUT_TOKENS: u32 = 16_384;
+const COMPARATIVE_ROUNDS: usize = 8;
+const IMPORTANCE_COMPARISONS_PER_BATCH: usize = 16;
+const NOVELTY_COMPARISONS_PER_BATCH: usize = 8;
+const MAX_CONCURRENT_COMPARISON_BATCHES: usize = 4;
+const COMPARATIVE_RETRIEVAL_CANDIDATES: usize = 5;
+const COMPARATIVE_SLIDE_NEIGHBORHOOD_RADIUS: usize = 3;
+const COMPARATIVE_SEED: u64 = 20_260_905;
 const DENSE_MODEL: &str = "BAAI/bge-small-zh-v1.5";
 const RETRIEVAL_MODE: &str = "hybrid-rrf";
 const ANALYSIS_FILE: &str = "analysis.json";
 const REPORT_FILE: &str = "report.html";
 const QUALITY_FILE: &str = "annotation-quality.json";
 const RESTORATION_DIRECTORY: &str = "restoration";
+const COMPARISON_DIRECTORY: &str = "comparisons";
 
 pub async fn run_canary(
     transcript_path: &OsStr,
@@ -86,7 +96,7 @@ pub async fn run_canary(
         &hybrid,
         lecture_config()?,
     )?;
-    eprintln!("Sending transcript window 1 as the canary...");
+    eprintln!("Sending transcript window 1 as the passage-preparation canary...");
     let canary = session.analyze_canary().await?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -96,7 +106,7 @@ pub async fn run_canary(
 
     write_json_atomically(&output_path, canary, "canary analysis")?;
     println!(
-        "Wrote {} canary passages to {} ({} tool rounds, {} final-answer repairs, prompt tokens: {}, completion tokens: {})",
+        "Wrote {} preliminary canary passages to {} (importance and novelty are assigned only by a complete run; {} tool rounds, {} final-answer repairs, prompt tokens: {}, completion tokens: {})",
         canary.analysis.passages.len(),
         output_path.display(),
         canary.diagnostics.tool_rounds,
@@ -162,10 +172,11 @@ pub async fn run_complete(
     )?;
     restore_checkpoints(&mut session, &run_directory)?;
 
-    let progress = window_progress_bar(session.window_count(), session.completed_window_count())?;
+    let passage_progress =
+        window_progress_bar(session.window_count(), session.completed_window_count())?;
     if session.window_count() > 0 {
         if session.completed_window_count() == 0 {
-            progress.set_message("running canary");
+            passage_progress.set_message("running passage-partition canary");
         }
         let canary = session
             .analyze_canary()
@@ -176,10 +187,10 @@ pub async fn run_complete(
             canary,
             "window checkpoint",
         )?;
-        progress.set_position(session.completed_window_count() as u64);
+        passage_progress.set_position(session.completed_window_count() as u64);
     }
 
-    progress.set_message("analyzing transcript windows");
+    passage_progress.set_message("preparing lecture passages");
     let result = session
         .complete_analysis_with_progress(|event| {
             let window_number = event.window_index + 1;
@@ -189,30 +200,82 @@ pub async fn run_complete(
                 "window checkpoint",
             )
             .map_err(|error| Box::new(error) as LectureAnalysisProgressError)?;
-            progress.set_position(event.completed_windows as u64);
-            progress.set_message(format!("completed window {window_number}"));
+            passage_progress.set_position(event.completed_windows as u64);
+            passage_progress.set_message(format!("completed window {window_number}"));
             Ok(())
         })
         .await;
     let result = match result {
         Ok(result) => result,
         Err(error) => {
-            progress.abandon_with_message("analysis interrupted; validated checkpoints preserved");
+            passage_progress
+                .abandon_with_message("passage preparation interrupted; checkpoints preserved");
             return Err(error.into());
         }
     };
+    passage_progress.finish_with_message("passage preparation complete");
+
+    eprintln!("Preparing lecture-wide importance and novelty comparisons...");
+    let mut ranking_session = ComparativeRankingSession::prepare(
+        &client,
+        result.analysis(),
+        &hybrid,
+        comparative_ranking_config()?,
+    )?;
+    let comparison_directory = run_directory.join(COMPARISON_DIRECTORY);
+    fs::create_dir_all(&comparison_directory)?;
+    restore_comparison_checkpoints(&mut ranking_session, &comparison_directory)?;
+    let ranking_progress = ranking_progress_bar(
+        ranking_session.batch_count(),
+        ranking_session.completed_batch_count(),
+    )?;
+    ranking_progress.set_message("running metric canaries, then remaining batches");
+    let ranking_result = ranking_session
+        .complete_with_progress(|event| {
+            let path = comparison_checkpoint_path(
+                &comparison_directory,
+                event.batch.metric,
+                event.batch.batch_index,
+            );
+            write_json_atomically(&path, event.result, "comparison checkpoint")
+                .map_err(|error| Box::new(error) as ComparativeRankingProgressError)?;
+            ranking_progress.set_position(event.completed_batches as u64);
+            ranking_progress.set_message(format!(
+                "completed {} batch {}",
+                event.batch.metric.name(),
+                event.batch.batch_index + 1
+            ));
+            Ok(())
+        })
+        .await;
+    let ranking_result = match ranking_result {
+        Ok(result) => result,
+        Err(error) => {
+            ranking_progress.abandon_with_message(
+                "comparative ranking interrupted; validated checkpoints preserved",
+            );
+            return Err(error.into());
+        }
+    };
+    ranking_progress.finish_with_message("comparative ranking complete");
+
+    let window_diagnostics = result.window_diagnostics().to_vec();
+    let window_projections = result.window_projections().to_vec();
+    let analysis = result
+        .into_analysis()
+        .with_comparative_rankings(ranking_result.into_rankings())?;
 
     let output = RestoredAnalysisArtifact {
-        restored_transcript: result.analysis().restored_transcript().clone(),
-        passages: result.analysis().passages().to_vec(),
-        window_diagnostics: result.window_diagnostics().to_vec(),
-        window_projections: result.window_projections().to_vec(),
+        restored_transcript: analysis.restored_transcript().clone(),
+        passages: analysis.passages().to_vec(),
+        window_diagnostics,
+        window_projections,
     };
     let output_path = run_directory.join(ANALYSIS_FILE);
     write_json_atomically(&output_path, &output, "complete analysis")?;
     let report_path = run_directory.join(REPORT_FILE);
     write_analysis_report(
-        result.analysis(),
+        &analysis,
         &report_path,
         slide_pdf_path.as_deref(),
         audio_path.as_deref(),
@@ -222,7 +285,6 @@ pub async fn run_complete(
     let quality = summarize_annotation_quality(&output, &trace);
     let quality_path = run_directory.join(QUALITY_FILE);
     write_json_atomically(&quality_path, &quality, "annotation quality summary")?;
-    progress.finish_with_message("analysis complete");
     println!(
         "Wrote complete lecture analysis to {} and report to {}",
         output_path.display(),
@@ -356,6 +418,8 @@ struct AnalysisRunManifest {
     slides_sha256: String,
     restored_transcript_sha256: String,
     annotation_prompt_sha256: String,
+    importance_comparison_prompt_sha256: String,
+    novelty_comparison_prompt_sha256: String,
     api_base_url: String,
     model: String,
     #[serde(default)]
@@ -372,6 +436,13 @@ struct AnalysisRunManifest {
     minimum_request_interval_seconds: u64,
     max_search_results: usize,
     max_output_tokens: u32,
+    comparative_rounds: usize,
+    importance_comparisons_per_batch: usize,
+    novelty_comparisons_per_batch: usize,
+    max_concurrent_comparison_batches: usize,
+    comparative_retrieval_candidates: usize,
+    comparative_slide_neighborhood_radius: usize,
+    comparative_seed: u64,
 }
 
 impl AnalysisRunManifest {
@@ -390,6 +461,14 @@ impl AnalysisRunManifest {
                 env!("CARGO_MANIFEST_DIR"),
                 "/prompts/restored_annotation.md"
             ))),
+            importance_comparison_prompt_sha256: sha256(include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/prompts/comparative_importance.md"
+            ))),
+            novelty_comparison_prompt_sha256: sha256(include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/prompts/comparative_novelty.md"
+            ))),
             api_base_url: provider.base_url().into(),
             model: provider.model().into(),
             chat_extra_body: provider.extra_body().cloned(),
@@ -405,6 +484,13 @@ impl AnalysisRunManifest {
             minimum_request_interval_seconds: MINIMUM_REQUEST_INTERVAL_SECONDS,
             max_search_results: MAX_SEARCH_RESULTS,
             max_output_tokens: MAX_OUTPUT_TOKENS,
+            comparative_rounds: COMPARATIVE_ROUNDS,
+            importance_comparisons_per_batch: IMPORTANCE_COMPARISONS_PER_BATCH,
+            novelty_comparisons_per_batch: NOVELTY_COMPARISONS_PER_BATCH,
+            max_concurrent_comparison_batches: MAX_CONCURRENT_COMPARISON_BATCHES,
+            comparative_retrieval_candidates: COMPARATIVE_RETRIEVAL_CANDIDATES,
+            comparative_slide_neighborhood_radius: COMPARATIVE_SLIDE_NEIGHBORHOOD_RADIUS,
+            comparative_seed: COMPARATIVE_SEED,
         }
     }
 }
@@ -419,6 +505,58 @@ fn lecture_config() -> Result<LectureAnalysisConfig, Box<dyn Error>> {
         windowing,
         MAX_CONCURRENT_WINDOWS,
     )?)
+}
+
+fn comparative_ranking_config() -> Result<ComparativeRankingConfig, Box<dyn Error>> {
+    Ok(
+        ComparativeRankingConfig::new(MAX_CONCURRENT_COMPARISON_BATCHES)?
+            .with_rounds(COMPARATIVE_ROUNDS)?
+            .with_comparisons_per_batch(
+                IMPORTANCE_COMPARISONS_PER_BATCH,
+                NOVELTY_COMPARISONS_PER_BATCH,
+            )?
+            .with_evidence_limits(
+                COMPARATIVE_RETRIEVAL_CANDIDATES,
+                COMPARATIVE_SLIDE_NEIGHBORHOOD_RADIUS,
+            )
+            .with_seed(COMPARATIVE_SEED),
+    )
+}
+
+fn comparison_checkpoint_path(
+    directory: &Path,
+    metric: ComparativeMetric,
+    batch_index: usize,
+) -> PathBuf {
+    directory.join(format!(
+        "{}-batch-{:04}.json",
+        metric.name(),
+        batch_index + 1
+    ))
+}
+
+fn restore_comparison_checkpoints(
+    session: &mut ComparativeRankingSession<'_>,
+    directory: &Path,
+) -> Result<(), Box<dyn Error>> {
+    for batch_plan_index in 0..session.batch_count() {
+        let batch = session
+            .batch_info(batch_plan_index)
+            .expect("a batch-plan index below batch_count exists");
+        let path = comparison_checkpoint_path(directory, batch.metric, batch.batch_index);
+        if path.exists() {
+            let result = read_json(&path, "comparison checkpoint")?;
+            session.restore_batch_result(batch_plan_index, result)?;
+        }
+    }
+    let restored = session.completed_batch_count();
+    if restored > 0 {
+        eprintln!(
+            "Restored {restored}/{} validated comparison batches",
+            session.batch_count()
+        );
+    }
+    Ok(())
 }
 
 fn restore_checkpoints(

@@ -3,7 +3,8 @@ use std::{collections::HashSet, error::Error, fmt, ops::Range};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    PassageProjection, PassageProjectionError, RestoredLecturePassage, RestoredTranscriptSpan,
+    ComparativeRankings, ComparativeScore, ComparativeScoreError, PassageProjection,
+    PassageProjectionError, RestoredLecturePassage, RestoredTranscriptSpan,
     RestoredTranscriptWindow, RestoredWindowingError, Score5, Slide, SlideId, ValidatedSources,
     WindowingConfig, build_restored_windows, project_passage_boundaries,
     windowing::validate_restored_transcript,
@@ -76,11 +77,10 @@ pub struct RestoredAnnotationMessage {
 
 /// One model-proposed passage before its copied text is projected onto source.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProposedLecturePassage {
     pub text: String,
-    pub novelty: Score5,
     pub connection_strength: Score5,
-    pub importance: Score5,
     pub related_slides: Vec<SlideId>,
     pub summary: Option<String>,
     pub comparison_note: Option<String>,
@@ -88,6 +88,7 @@ pub struct ProposedLecturePassage {
 
 /// The untrusted structured response produced for one restored transcript window.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProposedTranscriptWindowAnalysis {
     pub passages: Vec<ProposedLecturePassage>,
 }
@@ -125,6 +126,20 @@ impl ValidatedRestoredAnalysis {
             None,
         )
         .map_err(RestoredAnalysisValidationError::Passages)?;
+        let ranked_passages = passages
+            .iter()
+            .filter(|passage| {
+                passage.comparative_importance.is_some() && passage.comparative_novelty.is_some()
+            })
+            .count();
+        if ranked_passages != 0 && ranked_passages != passages.len() {
+            return Err(
+                RestoredAnalysisValidationError::IncompleteComparativeRanking {
+                    ranked_passages,
+                    passage_count: passages.len(),
+                },
+            );
+        }
 
         Ok(Self {
             sources,
@@ -148,6 +163,47 @@ impl ValidatedRestoredAnalysis {
     pub fn passages(&self) -> &[RestoredLecturePassage] {
         &self.passages
     }
+
+    /// Replaces preliminary per-window score placeholders with lecture-wide
+    /// comparative evidence and its derived presentation levels.
+    pub fn with_comparative_rankings(
+        mut self,
+        rankings: ComparativeRankings,
+    ) -> Result<Self, RestoredAnalysisValidationError> {
+        validate_score_count("importance", self.passages.len(), rankings.importance.len())?;
+        validate_score_count("novelty", self.passages.len(), rankings.novelty.len())?;
+
+        for ((passage, importance), novelty) in self
+            .passages
+            .iter_mut()
+            .zip(rankings.importance)
+            .zip(rankings.novelty)
+        {
+            passage.importance = importance.display_level;
+            passage.novelty = novelty.display_level;
+            passage.comparative_importance = Some(importance);
+            passage.comparative_novelty = Some(novelty);
+        }
+
+        Self::new(self.sources, self.restored_transcript, self.passages)
+    }
+}
+
+fn validate_score_count(
+    metric: &'static str,
+    expected: usize,
+    actual: usize,
+) -> Result<(), RestoredAnalysisValidationError> {
+    if actual != expected {
+        return Err(
+            RestoredAnalysisValidationError::ComparativeScoreCountMismatch {
+                metric,
+                expected,
+                actual,
+            },
+        );
+    }
+    Ok(())
 }
 
 /// Builds one restored-transcript annotation task per inferred slide position.
@@ -229,9 +285,11 @@ pub fn project_window_analysis(
             source_start,
             source_end,
             slide_position: task.slide_position,
-            novelty: proposed.novelty,
+            novelty: Score5::ZERO,
             connection_strength: proposed.connection_strength,
-            importance: proposed.importance,
+            importance: Score5::ZERO,
+            comparative_novelty: None,
+            comparative_importance: None,
             related_slides: proposed.related_slides,
             summary: proposed.summary,
             comparison_note: proposed.comparison_note,
@@ -305,11 +363,55 @@ fn validate_passage_partition(
             });
         }
         validate_related_slides(sources, passage_index, &passage.related_slides)?;
+        validate_comparative_scores(passage_index, passage)?;
         next_byte = passage_range.end;
     }
 
     if next_byte != source.len() {
         return Err(RestoredAnnotationError::UncoveredOwnedText { byte: next_byte });
+    }
+    Ok(())
+}
+
+fn validate_comparative_scores(
+    passage_index: usize,
+    passage: &RestoredLecturePassage,
+) -> Result<(), RestoredAnnotationError> {
+    match (passage.comparative_importance, passage.comparative_novelty) {
+        (None, None) => Ok(()),
+        (Some(importance), Some(novelty)) => {
+            validate_comparative_score(
+                passage_index,
+                "importance",
+                importance,
+                passage.importance,
+            )?;
+            validate_comparative_score(passage_index, "novelty", novelty, passage.novelty)
+        }
+        _ => Err(RestoredAnnotationError::IncompleteComparativeScores { passage_index }),
+    }
+}
+
+fn validate_comparative_score(
+    passage_index: usize,
+    metric: &'static str,
+    score: ComparativeScore,
+    display_level: Score5,
+) -> Result<(), RestoredAnnotationError> {
+    score
+        .validate()
+        .map_err(|source| RestoredAnnotationError::InvalidComparativeScore {
+            passage_index,
+            metric,
+            source,
+        })?;
+    if score.display_level != display_level {
+        return Err(RestoredAnnotationError::ComparativeDisplayLevelMismatch {
+            passage_index,
+            metric,
+            expected: score.display_level,
+            actual: display_level,
+        });
     }
     Ok(())
 }
@@ -457,6 +559,20 @@ pub enum RestoredAnnotationError {
         actual_start: crate::TranscriptSegmentId,
         actual_end: crate::TranscriptSegmentId,
     },
+    IncompleteComparativeScores {
+        passage_index: usize,
+    },
+    InvalidComparativeScore {
+        passage_index: usize,
+        metric: &'static str,
+        source: ComparativeScoreError,
+    },
+    ComparativeDisplayLevelMismatch {
+        passage_index: usize,
+        metric: &'static str,
+        expected: Score5,
+        actual: Score5,
+    },
 }
 
 impl fmt::Display for RestoredAnnotationError {
@@ -538,6 +654,29 @@ impl fmt::Display for RestoredAnnotationError {
                 "lecture passage {passage_index} should cite source segments {} through {} but cites {} through {}",
                 expected_start.0, expected_end.0, actual_start.0, actual_end.0
             ),
+            Self::IncompleteComparativeScores { passage_index } => write!(
+                formatter,
+                "lecture passage {passage_index} must contain both importance and novelty comparative evidence or neither"
+            ),
+            Self::InvalidComparativeScore {
+                passage_index,
+                metric,
+                source,
+            } => write!(
+                formatter,
+                "lecture passage {passage_index} has invalid comparative {metric} evidence: {source}"
+            ),
+            Self::ComparativeDisplayLevelMismatch {
+                passage_index,
+                metric,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "lecture passage {passage_index} has comparative {metric} display level {} but its score field is {}",
+                expected.get(),
+                actual.get()
+            ),
         }
     }
 }
@@ -546,6 +685,7 @@ impl Error for RestoredAnnotationError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::PassageProjection(error) => Some(error),
+            Self::InvalidComparativeScore { source, .. } => Some(source),
             Self::SlidePositionCountMismatch { .. }
             | Self::EmptyOwnedText { .. }
             | Self::UnknownSlidePosition { .. }
@@ -557,7 +697,9 @@ impl Error for RestoredAnnotationError {
             | Self::EmptyTrustedPassage { .. }
             | Self::TrustedTextMismatch { .. }
             | Self::UncoveredOwnedText { .. }
-            | Self::SourceProvenanceMismatch { .. } => None,
+            | Self::SourceProvenanceMismatch { .. }
+            | Self::IncompleteComparativeScores { .. }
+            | Self::ComparativeDisplayLevelMismatch { .. } => None,
         }
     }
 }
@@ -622,6 +764,15 @@ impl Error for RestoredAnalysisAssemblyError {
 pub enum RestoredAnalysisValidationError {
     RestoredTranscript(RestoredWindowingError),
     Passages(RestoredAnnotationError),
+    ComparativeScoreCountMismatch {
+        metric: &'static str,
+        expected: usize,
+        actual: usize,
+    },
+    IncompleteComparativeRanking {
+        ranked_passages: usize,
+        passage_count: usize,
+    },
 }
 
 impl fmt::Display for RestoredAnalysisValidationError {
@@ -631,6 +782,21 @@ impl fmt::Display for RestoredAnalysisValidationError {
                 write!(formatter, "invalid restored transcript: {error}")
             }
             Self::Passages(error) => write!(formatter, "invalid lecture passages: {error}"),
+            Self::ComparativeScoreCountMismatch {
+                metric,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "comparative {metric} ranking contains {actual} scores for {expected} lecture passages"
+            ),
+            Self::IncompleteComparativeRanking {
+                ranked_passages,
+                passage_count,
+            } => write!(
+                formatter,
+                "comparative ranking covers {ranked_passages} of {passage_count} lecture passages"
+            ),
         }
     }
 }
@@ -640,6 +806,8 @@ impl Error for RestoredAnalysisValidationError {
         match self {
             Self::RestoredTranscript(error) => Some(error),
             Self::Passages(error) => Some(error),
+            Self::ComparativeScoreCountMismatch { .. } => None,
+            Self::IncompleteComparativeRanking { .. } => None,
         }
     }
 }

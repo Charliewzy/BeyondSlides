@@ -16,10 +16,13 @@ The system preserves two kinds of evidence:
   which it was restored;
 - semantic judgments may cite related slides from the immutable slide deck.
 
-Novelty, connection strength, and importance are graded from 0 through 5. They
-remain uncertain semantic judgments, not objective facts. Optional comparison
-notes support debugging and evaluation but are neither required nor shown to a
-learner by default.
+Importance and novelty are ranked relative to other passages in the same
+lecture through repeated best--worst comparisons. Their stored comparison
+counts and percentiles remain uncertain semantic judgments, not objective
+facts or cross-lecture measurements. Reports derive `1..5` display levels from
+those percentiles. Connection strength remains a per-passage `0..5` judgment.
+Optional comparison notes support debugging and evaluation but are neither
+required nor shown to a learner by default.
 
 ## 2. Current user experience
 
@@ -74,10 +77,10 @@ supplies local context and never proves the latter.
 
 ### Make expensive stages resumable and observable
 
-Restoration and annotation each persist validated window checkpoints before
-counting them complete. Run manifests bind checkpoints to source identities,
-prompts, models, and deterministic configuration. Complete model exchanges are
-recorded without credentials.
+Restoration and passage preparation persist validated window checkpoints;
+comparative ranking persists validated metric batches. Run manifests bind all
+checkpoints to source identities, prompts, models, and deterministic
+configuration. Complete model exchanges are recorded without credentials.
 
 ### Keep presentation downstream
 
@@ -153,6 +156,8 @@ struct RestoredLecturePassage {
     novelty: Score5,
     connection_strength: Score5,
     importance: Score5,
+    comparative_novelty: Option<ComparativeScore>,
+    comparative_importance: Option<ComparativeScore>,
     related_slides: Vec<SlideId>,
     summary: Option<String>,
     comparison_note: Option<String>,
@@ -161,8 +166,13 @@ struct RestoredLecturePassage {
 
 Lecture passages partition the readable restored transcript in chronological
 order. Their `text` is authoritative restored text, never trusted model copy.
-All scores are validated inclusive `0..5` values. Related slide IDs must exist
-and contain no duplicates. Summary and comparison note remain optional.
+`novelty` and `importance` are coarse display levels derived from their
+lecture-wide comparative scores. Comparative evidence stores comparison count,
+most and least selections, and percentile in basis points. The optional form
+keeps older preliminary artifacts readable; a newly completed analysis has
+both comparative scores for every passage. Connection strength remains a
+validated inclusive `0..5` value. Related slide IDs must exist and contain no
+duplicates. Summary and comparison note remain optional.
 
 ## 5. Pipeline
 
@@ -193,13 +203,24 @@ transcript adapter       PDF text adapter
               |                     |
               +----------+----------+
                          v
-            model annotation + slide tools
+       model passage preparation + slide tools
                          |
                          v
              fuzzy boundary projection
                          |
                          v
              validation and assembly
+                         |
+              +----------+----------+
+              |                     |
+              v                     v
+    importance comparisons   novelty comparisons
+                                    |
+                           slide evidence sets
+              |                     |
+              +----------+----------+
+                         v
+             best--worst aggregation
                          |
                          v
               artifact and HTML report
@@ -268,7 +289,7 @@ Dynamic programming consumes one all-slide score row per restored window. It
 selects a soft, non-strictly-monotonic slide position path: nearby forward or
 backward moves are cheap, and large jumps remain possible with higher cost.
 
-### 5.5 Annotation conversation
+### 5.5 Passage-preparation conversation
 
 The model receives left context, owned readable text, right context, inferred
 slide position, and a nearby slide neighborhood. It may call:
@@ -278,15 +299,17 @@ inspect_slide(slide_id)
 search_slides(query, max_results)
 ```
 
-Search covers the entire deck so the model can challenge an apparent novelty
-claim. A per-window tool session suppresses duplicate slide text after first
-exposure. Tool rounds are bounded. After the last permitted tool result, the
-client removes tool definitions and tool choice from the next request, forcing
-a final-answer attempt at the protocol level rather than trusting the model to
-count rounds.
+Search covers the entire deck so the model can find semantic slide evidence
+beyond its inferred position. A per-window tool session suppresses duplicate
+slide text after first exposure. Tool rounds are bounded. After the last
+permitted tool result, the client removes tool definitions and tool choice from
+the next request, forcing a final-answer attempt at the protocol level rather
+than trusting the model to count rounds.
 
-The model returns proposed passages containing copied text and judgments. It
-never supplies trusted offsets or raw source IDs.
+The model returns proposed passages containing copied text, connection
+strength, and related-slide evidence. It does not evaluate importance or
+novelty, so those scores cannot influence its semantic boundaries. It never
+supplies trusted offsets or raw source IDs.
 
 ### 5.6 Source-backed passage projection
 
@@ -310,7 +333,39 @@ counts per accepted window.
 Each projected byte range is mapped to the first and last supporting restored
 span. Those spans supply the passage's coarse raw transcript provenance.
 
-### 5.7 Assembly and persisted artifacts
+### 5.7 Comparative importance and novelty
+
+After the complete passage partition is assembled, the comparative-ranking
+module builds deterministic best--worst groups. The default plan uses groups of
+four across eight independently shuffled rounds. Each passage therefore
+appears repeatedly against different lecture peers. Small lectures use the
+largest possible group of at least two; a one-passage lecture receives a
+neutral percentile without a model request.
+
+Importance and novelty are separate conversations:
+
+- importance compares the learning loss if a student omitted each passage;
+- novelty compares how much useful, non-obvious content each passage adds
+  beyond a supplied set of slide evidence.
+
+Novelty evidence combines the inferred slide-position neighborhood,
+related-slide evidence collected during passage preparation, and the highest
+hybrid retrieval candidates. Slide text is deduplicated within each request.
+Neither metric sees preliminary absolute scores or the other metric's result.
+
+Every response must return each requested comparison exactly once, select two
+different members of that group, and add no unknown passage IDs. One batch for
+each metric runs as a canary before remaining batches run with bounded
+concurrency. Validated batches are checkpointed independently and can be
+resumed.
+
+For each metric, aggregation computes `(most - least) / comparisons`, ranks
+that balance across the lecture with average ranks for ties, and stores the
+percentile in basis points. Percentile bands produce `1..5` display levels.
+Those levels intentionally improve within-lecture visual discrimination; they
+must not be interpreted as calibrated absolute scores.
+
+### 5.8 Assembly and persisted artifacts
 
 Per-window checkpoints contain source-backed passages, model diagnostics, and
 projection diagnostics. Restoring a checkpoint reruns deterministic
@@ -322,7 +377,7 @@ and lecture-wide passage partition through the same shared partition routine.
 
 - the complete restored transcript;
 - all chronological lecture passages, each carrying its inferred slide
-  position;
+  position and comparative importance/novelty evidence;
 - per-window model diagnostics;
 - per-window projection diagnostics.
 
@@ -331,12 +386,13 @@ transcript and slide deck before rendering. Metadata arrays must agree on their
 window count, slide positions must exist, and passage text/provenance must still
 match the restored transcript.
 
-### 5.8 Rendering and evaluation
+### 5.9 Rendering and evaluation
 
 The continuous report renders authoritative passage text in lecture order.
 User-controlled discrete thresholds map importance to bold versus normal text
-and novelty to underlined versus plain text; the underlying `0..5` scores remain
-available in the inspector. The fixed upper-right controls range from
+and novelty to underlined versus plain text; the underlying display levels and
+comparative percentiles remain available to report consumers. The fixed
+upper-right controls range from
 highlighting every score through disabling a channel, and preserve the reader's
 viewport anchor when font-weight changes reflow the transcript. Hover, focus, or
 click reveals timestamps, raw source range, inferred slide position, and
@@ -389,11 +445,13 @@ Completions endpoint through `genai`; model names are not used to infer a
 provider. JSON mode is requested, while deterministic schema and domain
 validation remain local.
 
-The first window of each stage runs alone as a canary. After it succeeds,
-remaining windows run with bounded concurrency. Annotation request starts are
-paced across concurrent conversations. Timeouts, HTTP 408/429, transport
-failures, and 5xx responses have a bounded retry policy; numeric `Retry-After`
-is respected, while 429 without that header uses longer exponential backoff.
+The first window of each windowed stage runs alone as a canary. Comparative
+ranking instead accepts one batch for importance and one for novelty before
+launching either metric's remaining batches with bounded concurrency. Request
+starts are paced across concurrent conversations. Timeouts, HTTP 408/429,
+transport failures, and 5xx responses have a bounded retry policy; numeric
+`Retry-After` is respected, while 429 without that header uses longer
+exponential backoff.
 
 `BEYOND_SLIDES_CHAT_EXTRA_BODY` supplies optional provider-specific JSON.
 `BEYOND_SLIDES_RESTORATION_CHAT_EXTRA_BODY` and
@@ -403,10 +461,13 @@ annotation retains it.
 
 Every provider attempt appends typed JSONL events for request, response,
 provider error, validation, or processing failure. Records correlate an
-exchange with workflow, zero-based window index, conversation turn, and request
-kind. API keys and authorization headers are never recorded. Complete records
-are flushed individually. On resume, a malformed non-newline-terminated crash
-tail is truncated; corruption in any completed line is rejected.
+exchange with workflow, zero-based work-item index, conversation turn, and
+request kind. The trace's legacy `window_index` field is a transcript-window
+index for restoration and passage preparation, and a batch-plan index for
+comparative workflows. API keys and authorization headers are never recorded.
+Complete records are flushed individually. On resume, a malformed
+non-newline-terminated crash tail is truncated; corruption in any completed
+line is rejected.
 
 ## 7. Run layout and resumability
 
@@ -417,6 +478,11 @@ run/lecture-analysis/
 |-- window-0001.json
 |-- window-0002.json
 |-- ...
+|-- comparisons/
+|   |-- importance-batch-0001.json
+|   |-- ...
+|   |-- novelty-batch-0001.json
+|   `-- ...
 |-- analysis.json
 |-- annotation-quality.json
 |-- report.html
@@ -438,9 +504,10 @@ run/lecture-analysis/
 
 Each stage has its own manifest, trace, and checkpoints. Manifests record source
 hashes, embedded prompt hash, endpoint and model identity, optional extra body,
-windowing, concurrency, retrieval, request pacing, retry limits, and output
-limits. Secrets are excluded. A directory resumes only when the requested
-configuration exactly matches its manifest.
+windowing, comparative grouping and evidence limits, concurrency, retrieval,
+request pacing, retry limits, and output limits. Secrets are excluded. A
+directory resumes only when the requested configuration exactly matches its
+manifest.
 
 When a recording is supplied for rendering, the report stages it under
 `report.assets/` (normally as a hard link). Passage selection uses projected
@@ -455,9 +522,10 @@ translate them to one-based window numbers only at the boundary.
 
 Synthetic fixtures test domain invariants, Chinese retrieval, restored
 windowing, exact and fuzzy projection, rejection at the 5% boundary, tool
-sessions, provider conversations, resumability, artifact validation, and HTML
-escaping. Mock endpoints verify tool-budget enforcement, structured repairs,
-rate-limit retry, request pacing, and trace records.
+sessions, comparative group coverage and aggregation, provider conversations,
+resumability, artifact validation, and HTML escaping. Mock endpoints verify
+tool-budget enforcement, structured repairs, rate-limit retry, request pacing,
+and trace records.
 
 Real-course evaluation separates uncertain components:
 
@@ -465,7 +533,8 @@ Real-course evaluation separates uncertain components:
 - labeled slide retrieval recall;
 - restoration evidence review;
 - exact/fuzzy/rejected passage-partition rates;
-- human review of novelty, connection strength, and importance;
+- human review of comparative novelty and importance stability, and of
+  connection strength;
 - whether continuous score typography helps a learner locate useful oral
   additions without destroying lecture context.
 
@@ -476,6 +545,8 @@ tuned from labeled evidence rather than one aesthetically pleasing report.
 
 - A model can preserve wording yet choose poor semantic passage boundaries;
   projection verifies source fidelity, not judgment quality.
+- Comparative percentiles improve within-lecture separation by construction;
+  they do not reveal whether a lecture is uniformly novel or uniformly useful.
 - Slide-level evidence may prove too coarse; exact slide excerpts can be added
   if evaluation requires them.
 - Dense retrieval currently loads one fixed local Chinese embedding model.

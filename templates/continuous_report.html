@@ -45,7 +45,7 @@
             <option value="0"></option><option value="1"></option><option value="2"></option><option value="3"></option><option value="4"></option><option value="5"></option><option value="6"></option>
           </datalist>
         </aside>
-        <p class="continuous-transcript">{% for passage in passages %}<span class="passage" tabindex="0" data-passage data-source-start="{{ passage.source_start }}" data-source-end="{{ passage.source_end }}" data-time="{{ passage.timestamp }}" data-audio-start-ms="{{ passage.audio_start_ms }}" data-audio-end-ms="{{ passage.audio_end_ms }}" data-audio-basis="{{ passage.audio_basis }}" data-slide-position="{{ passage.slide_position }}" data-slide-number="{{ passage.slide_number }}" data-importance="{{ passage.importance }}" data-novelty="{{ passage.novelty }}" data-connection="{{ passage.connection_strength }}">{{ passage.text }}</span>{% endfor %}</p>
+        <p class="continuous-transcript">{% for passage in passages %}<span class="passage" tabindex="0" data-passage data-source-start="{{ passage.source_start }}" data-source-end="{{ passage.source_end }}" data-time="{{ passage.timestamp }}" data-audio-start-ms="{{ passage.audio_start_ms }}" data-audio-end-ms="{{ passage.audio_end_ms }}" data-audio-basis="{{ passage.audio_basis }}" data-slide-position="{{ passage.slide_position }}" data-slide-number="{{ passage.slide_number }}" data-importance="{{ passage.importance }}" data-novelty="{{ passage.novelty }}" data-importance-percentile="{{ passage.importance_percentile }}" data-novelty-percentile="{{ passage.novelty_percentile }}" data-connection="{{ passage.connection_strength }}">{{ passage.text }}</span>{% endfor %}</p>
       </section>
 
 {% if has_slides %}

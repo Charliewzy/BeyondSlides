@@ -120,6 +120,8 @@ struct PassageView {
     slide_number: usize,
     importance: u8,
     novelty: u8,
+    importance_percentile: String,
+    novelty_percentile: String,
     connection_strength: u8,
     text: String,
 }
@@ -156,6 +158,14 @@ impl PassageView {
             slide_number: passage.slide_position.index() + 1,
             importance: passage.importance.get(),
             novelty: passage.novelty.get(),
+            importance_percentile: passage
+                .comparative_importance
+                .map(|score| format!("{:.1}", score.percentile()))
+                .unwrap_or_default(),
+            novelty_percentile: passage
+                .comparative_novelty
+                .map(|score| format!("{:.1}", score.percentile()))
+                .unwrap_or_default(),
             connection_strength: passage.connection_strength.get(),
             text: passage.text.clone(),
         }

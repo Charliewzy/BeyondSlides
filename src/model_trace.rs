@@ -229,7 +229,7 @@ impl ModelExchangeTrace {
             timestamp_unix_ms: timestamp_milliseconds()?,
             exchange_id,
             workflow: context.workflow,
-            window_index: context.window_index,
+            window_index: context.work_item_index,
             conversation_turn: context.conversation_turn,
             request_kind: context.request_kind,
             event,
@@ -276,7 +276,7 @@ impl ModelExchangeTrace {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ModelTraceContext {
     pub workflow: ModelWorkflow,
-    pub window_index: usize,
+    pub work_item_index: usize,
     pub conversation_turn: usize,
     pub request_kind: ModelRequestKind,
 }
@@ -294,6 +294,8 @@ pub(crate) struct ModelProviderFailure {
 pub enum ModelWorkflow {
     Annotation,
     Restoration,
+    ImportanceComparison,
+    NoveltyComparison,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -413,10 +415,10 @@ mod tests {
 
     use super::*;
 
-    fn context(window_index: usize) -> ModelTraceContext {
+    fn context(work_item_index: usize) -> ModelTraceContext {
         ModelTraceContext {
             workflow: ModelWorkflow::Restoration,
-            window_index,
+            work_item_index,
             conversation_turn: 0,
             request_kind: ModelRequestKind::Initial,
         }

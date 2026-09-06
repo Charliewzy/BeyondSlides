@@ -415,9 +415,7 @@ impl Respond for WindowAnalysisResponder {
         let content = json!({
             "passages": [{
                 "text": owned_text,
-                "novelty": 2,
                 "connection_strength": 1,
-                "importance": 3,
                 "related_slides": [related_slide]
             }]
         })

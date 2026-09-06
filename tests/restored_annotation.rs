@@ -1,10 +1,11 @@
 use std::{error::Error, time::Duration};
 
 use beyond_slides::{
-    ProposedTranscriptWindowAnalysis, RestoredAnnotationError, RestoredTranscript,
-    RestoredTranscriptSpan, Slide, SlideDeck, SlideId, Transcript, TranscriptSegment,
-    TranscriptSegmentId, ValidatedSources, WindowingConfig, assemble_restored_window_analyses,
-    build_restored_annotation_tasks, build_restored_windows, project_window_analysis,
+    ComparativeRankings, ComparativeScore, ProposedTranscriptWindowAnalysis,
+    RestoredAnnotationError, RestoredTranscript, RestoredTranscriptSpan, Slide, SlideDeck, SlideId,
+    Transcript, TranscriptSegment, TranscriptSegmentId, ValidatedSources, WindowingConfig,
+    assemble_restored_window_analyses, build_restored_annotation_tasks, build_restored_windows,
+    project_window_analysis,
 };
 
 #[test]
@@ -30,7 +31,28 @@ fn annotation_message_contains_readable_text_without_raw_segment_ids() -> Result
     assert!(!message.input.contains("source_start"));
     assert!(message.instructions.contains("逐字符完全相同"));
     assert!(message.instructions.contains("只允许在原文中选择分界位置"));
+    assert!(
+        message
+            .instructions
+            .contains("不得评价或输出 novelty 或 importance")
+    );
     Ok(())
+}
+
+#[test]
+fn passage_preparation_rejects_absolute_importance_and_novelty_fields() {
+    let error = serde_json::from_value::<ProposedTranscriptWindowAnalysis>(serde_json::json!({
+        "passages": [{
+            "text": "所有权负责资源管理。",
+            "connection_strength": 2,
+            "related_slides": [0],
+            "importance": 4,
+            "novelty": 3
+        }]
+    }))
+    .expect_err("preparation must not accept the former absolute ratings");
+
+    assert!(error.to_string().contains("unknown field"));
 }
 
 #[test]
@@ -44,16 +66,12 @@ fn exact_passage_boundaries_can_split_a_coarsely_sourced_restored_span()
         "passages": [
             {
                 "text": "所有权负责资源管理。",
-                "novelty": 1,
                 "connection_strength": 2,
-                "importance": 4,
                 "related_slides": [0]
             },
             {
                 "text": "借用让函数临时访问数据。",
-                "novelty": 3,
                 "connection_strength": 2,
-                "importance": 5,
                 "related_slides": [1]
             }
         ]
@@ -73,6 +91,10 @@ fn exact_passage_boundaries_can_split_a_coarsely_sourced_restored_span()
     assert_eq!(analysis.passages[0].source_end, TranscriptSegmentId(1));
     assert_eq!(analysis.passages[1].source_start, TranscriptSegmentId(0));
     assert_eq!(analysis.passages[1].source_end, TranscriptSegmentId(1));
+    assert!(analysis.passages.iter().all(|passage| {
+        passage.novelty == beyond_slides::Score5::ZERO
+            && passage.importance == beyond_slides::Score5::ZERO
+    }));
     assert_eq!(
         analysis
             .passages
@@ -94,9 +116,7 @@ fn small_copying_errors_are_replaced_with_authoritative_restored_text() -> Resul
     let proposed: ProposedTranscriptWindowAnalysis = serde_json::from_value(serde_json::json!({
         "passages": [{
             "text": "所有权负责资源管理。借用让函数临时访问据。",
-            "novelty": 2,
             "connection_strength": 2,
-            "importance": 4,
             "related_slides": [1]
         }]
     }))?;
@@ -117,9 +137,7 @@ fn related_slide_evidence_is_validated_after_text_projection() -> Result<(), Box
     let proposed: ProposedTranscriptWindowAnalysis = serde_json::from_value(serde_json::json!({
         "passages": [{
             "text": "所有权负责资源管理。借用让函数临时访问数据。",
-            "novelty": 2,
             "connection_strength": 2,
-            "importance": 4,
             "related_slides": [1, 1]
         }]
     }))?;
@@ -146,9 +164,7 @@ fn persisted_window_passages_cannot_change_the_inferred_slide_position()
     let proposed: ProposedTranscriptWindowAnalysis = serde_json::from_value(serde_json::json!({
         "passages": [{
             "text": "所有权负责资源管理。借用让函数临时访问数据。",
-            "novelty": 2,
             "connection_strength": 2,
-            "importance": 4,
             "related_slides": [1]
         }]
     }))?;
@@ -194,9 +210,7 @@ fn projected_window_analyses_assemble_into_one_readable_lecture() -> Result<(), 
             serde_json::from_value(serde_json::json!({
                 "passages": [{
                     "text": task.window().owned_text(),
-                    "novelty": 2,
                     "connection_strength": 2,
-                    "importance": 4,
                     "related_slides": [task.slide_position()]
                 }]
             }))?;
@@ -209,11 +223,26 @@ fn projected_window_analyses_assemble_into_one_readable_lecture() -> Result<(), 
         config,
         &[SlideId(0), SlideId(1)],
         analyses,
-    )?;
+    )?
+    .with_comparative_rankings(ComparativeRankings {
+        importance: vec![comparative_score(0), comparative_score(10_000)],
+        novelty: vec![comparative_score(10_000), comparative_score(0)],
+    })?;
 
     assert_eq!(analysis.passages().len(), 2);
     assert_eq!(analysis.passages()[0].slide_position, SlideId(0));
     assert_eq!(analysis.passages()[1].slide_position, SlideId(1));
+    assert_eq!(analysis.passages()[0].importance.get(), 1);
+    assert_eq!(analysis.passages()[1].importance.get(), 5);
+    assert_eq!(analysis.passages()[0].novelty.get(), 5);
+    assert_eq!(analysis.passages()[1].novelty.get(), 1);
+    assert_eq!(
+        analysis.passages()[0]
+            .comparative_importance
+            .expect("comparative evidence")
+            .percentile(),
+        0.0
+    );
     assert_eq!(
         analysis
             .passages()
@@ -223,6 +252,10 @@ fn projected_window_analyses_assemble_into_one_readable_lecture() -> Result<(), 
         analysis.restored_transcript().text()
     );
     Ok(())
+}
+
+fn comparative_score(percentile_basis_points: u16) -> ComparativeScore {
+    ComparativeScore::new(8, 1, 1, percentile_basis_points).expect("valid comparative score")
 }
 
 fn sources() -> ValidatedSources {

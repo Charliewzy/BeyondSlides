@@ -813,9 +813,7 @@ fn restored_analysis_json(text: &str) -> String {
     json!({
         "passages": [{
             "text": text,
-            "novelty": 2,
             "connection_strength": 3,
-            "importance": 4,
             "related_slides": [0]
         }]
     })

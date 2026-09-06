@@ -1,8 +1,8 @@
 use std::error::Error;
 
 use beyond_slides::{
-    RestoredAnalysisArtifact, RestoredAnalysisArtifactError, SlideDeck, SlideId, Transcript,
-    ValidatedSources,
+    ComparativeScore, RestoredAnalysisArtifact, RestoredAnalysisArtifactError, SlideDeck, SlideId,
+    Transcript, ValidatedSources,
 };
 
 #[test]
@@ -67,6 +67,22 @@ fn persisted_analysis_rejects_an_unknown_passage_slide_position() -> Result<(), 
             .to_string()
             .contains("unknown inferred slide position 9")
     );
+    Ok(())
+}
+
+#[test]
+fn persisted_analysis_rejects_a_display_level_that_disagrees_with_comparative_evidence()
+-> Result<(), Box<dyn Error>> {
+    let mut artifact = artifact()?;
+    artifact.passages[0].comparative_importance = Some(ComparativeScore::new(8, 8, 0, 10_000)?);
+    artifact.passages[0].comparative_novelty = Some(ComparativeScore::new(8, 0, 8, 0)?);
+
+    let error = artifact
+        .validate(sources()?)
+        .expect_err("the display level must be derived from comparative evidence");
+
+    assert!(error.to_string().contains("display level 5"));
+    assert!(error.to_string().contains("score field is 4"));
     Ok(())
 }
 

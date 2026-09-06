@@ -27,6 +27,8 @@ impl SlideId {
 pub struct Score5(u8);
 
 impl Score5 {
+    pub const ZERO: Self = Self(0);
+
     pub const fn get(self) -> u8 {
         self.0
     }
@@ -54,6 +56,129 @@ impl fmt::Display for ScoreOutOfRange {
 }
 
 impl Error for ScoreOutOfRange {}
+
+/// Lecture-wide best--worst evidence underlying one displayed score level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComparativeScore {
+    pub comparisons: u32,
+    pub most_selections: u32,
+    pub least_selections: u32,
+    pub percentile_basis_points: u16,
+    pub display_level: Score5,
+}
+
+impl ComparativeScore {
+    pub fn new(
+        comparisons: u32,
+        most_selections: u32,
+        least_selections: u32,
+        percentile_basis_points: u16,
+    ) -> Result<Self, ComparativeScoreError> {
+        if most_selections
+            .checked_add(least_selections)
+            .is_none_or(|selections| selections > comparisons)
+        {
+            return Err(ComparativeScoreError::SelectionsExceedComparisons {
+                comparisons,
+                most_selections,
+                least_selections,
+            });
+        }
+        if percentile_basis_points > 10_000 {
+            return Err(ComparativeScoreError::PercentileOutOfRange(
+                percentile_basis_points,
+            ));
+        }
+        let display_level = Score5::try_from(
+            u8::try_from((percentile_basis_points / 2_000 + 1).min(5))
+                .expect("a percentile display level fits in u8"),
+        )
+        .expect("a percentile display level is between one and five");
+        Ok(Self {
+            comparisons,
+            most_selections,
+            least_selections,
+            percentile_basis_points,
+            display_level,
+        })
+    }
+
+    pub fn validate(self) -> Result<(), ComparativeScoreError> {
+        let expected = Self::new(
+            self.comparisons,
+            self.most_selections,
+            self.least_selections,
+            self.percentile_basis_points,
+        )?;
+        if self.display_level != expected.display_level {
+            return Err(ComparativeScoreError::DisplayLevelMismatch {
+                percentile_basis_points: self.percentile_basis_points,
+                expected: expected.display_level,
+                actual: self.display_level,
+            });
+        }
+        Ok(())
+    }
+
+    pub fn best_worst_score(self) -> f64 {
+        if self.comparisons == 0 {
+            return 0.0;
+        }
+        (f64::from(self.most_selections) - f64::from(self.least_selections))
+            / f64::from(self.comparisons)
+    }
+
+    pub fn percentile(self) -> f64 {
+        f64::from(self.percentile_basis_points) / 100.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComparativeScoreError {
+    SelectionsExceedComparisons {
+        comparisons: u32,
+        most_selections: u32,
+        least_selections: u32,
+    },
+    PercentileOutOfRange(u16),
+    DisplayLevelMismatch {
+        percentile_basis_points: u16,
+        expected: Score5,
+        actual: Score5,
+    },
+}
+
+impl fmt::Display for ComparativeScoreError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SelectionsExceedComparisons {
+                comparisons,
+                most_selections,
+                least_selections,
+            } => write!(
+                formatter,
+                "{most_selections} most and {least_selections} least selections exceed {comparisons} comparisons"
+            ),
+            Self::PercentileOutOfRange(percentile) => write!(
+                formatter,
+                "comparative percentile {percentile} basis points is outside 0..=10000"
+            ),
+            Self::DisplayLevelMismatch {
+                percentile_basis_points,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "percentile {percentile_basis_points} basis points maps to display level {} rather than {}",
+                expected.get(),
+                actual.get()
+            ),
+        }
+    }
+}
+
+impl Error for ComparativeScoreError {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TranscriptSegment {
@@ -180,9 +305,15 @@ pub struct RestoredLecturePassage {
     /// This is coarse provenance, not an exact playback boundary.
     pub source_end: TranscriptSegmentId,
     pub slide_position: SlideId,
+    /// Coarse presentation level derived from `comparative_novelty` when present.
     pub novelty: Score5,
     pub connection_strength: Score5,
+    /// Coarse presentation level derived from `comparative_importance` when present.
     pub importance: Score5,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comparative_novelty: Option<ComparativeScore>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comparative_importance: Option<ComparativeScore>,
     pub related_slides: Vec<SlideId>,
     pub summary: Option<String>,
     pub comparison_note: Option<String>,

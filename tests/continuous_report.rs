@@ -1,12 +1,12 @@
 use std::{error::Error, time::Duration};
 
 use beyond_slides::{
-    ContinuousReportError, ContinuousReportMedia, PassagePlaybackInterval, PlaybackTimingBasis,
-    ProposedTranscriptWindowAnalysis, ReportAudio, ReportSlideImage, RestoredTranscript,
-    RestoredTranscriptSpan, Slide, SlideDeck, SlideId, Transcript, TranscriptSegment,
-    TranscriptSegmentId, ValidatedSources, WindowingConfig, assemble_restored_window_analyses,
-    build_restored_annotation_tasks, build_restored_windows, project_window_analysis,
-    render_continuous_report, render_continuous_report_with_media,
+    ComparativeRankings, ComparativeScore, ContinuousReportError, ContinuousReportMedia,
+    PassagePlaybackInterval, PlaybackTimingBasis, ProposedTranscriptWindowAnalysis, ReportAudio,
+    ReportSlideImage, RestoredTranscript, RestoredTranscriptSpan, Slide, SlideDeck, SlideId,
+    Transcript, TranscriptSegment, TranscriptSegmentId, ValidatedSources, WindowingConfig,
+    assemble_restored_window_analyses, build_restored_annotation_tasks, build_restored_windows,
+    project_window_analysis, render_continuous_report, render_continuous_report_with_media,
 };
 
 #[test]
@@ -21,6 +21,8 @@ fn report_renders_authoritative_passages_in_continuous_order() -> Result<(), Box
     assert!(first < second);
     assert!(report.contains("data-importance=\"4\""));
     assert!(report.contains("data-novelty=\"3\""));
+    assert!(report.contains("data-importance-percentile=\"60.0\""));
+    assert!(report.contains("data-novelty-percentile=\"40.0\""));
     assert!(report.contains("data-source-start=\"0\""));
     assert!(report.contains("data-time=\"00:00–00:01\""));
     Ok(())
@@ -278,16 +280,12 @@ fn analysis() -> Result<beyond_slides::ValidatedRestoredAnalysis, Box<dyn Error>
         "passages": [
             {
                 "text": "<所有权 & 资源管理>。",
-                "novelty": 2,
                 "connection_strength": 2,
-                "importance": 4,
                 "related_slides": [0]
             },
             {
                 "text": "借用让函数临时访问数据。",
-                "novelty": 3,
                 "connection_strength": 2,
-                "importance": 5,
                 "related_slides": [1]
             }
         ]
@@ -299,7 +297,15 @@ fn analysis() -> Result<beyond_slides::ValidatedRestoredAnalysis, Box<dyn Error>
         config,
         &[SlideId(0)],
         vec![window_analysis],
-    )?)
+    )?
+    .with_comparative_rankings(ComparativeRankings {
+        importance: vec![comparative_score(6_000), comparative_score(10_000)],
+        novelty: vec![comparative_score(2_000), comparative_score(4_000)],
+    })?)
+}
+
+fn comparative_score(percentile_basis_points: u16) -> ComparativeScore {
+    ComparativeScore::new(8, 1, 1, percentile_basis_points).expect("valid comparative score")
 }
 
 fn segment(id: u32) -> TranscriptSegment {

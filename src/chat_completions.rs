@@ -20,12 +20,14 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::{
+    ComparativeMetric, ComparativeRankingBatchResult, ComparativeRankingValidationError,
     ModelExchangeTrace, ModelProviderError, ModelRequestKind, ModelWorkflow,
     PassageProjectionDiagnostics, PassageProjectionError, SlideId, SlideScorer, ValidatedSources,
     annotation::{
         AnalysisAssemblyError, AnnotationToolError, AnnotationToolSession,
         TranscriptWindowAnalysis, TranscriptWindowTask, validate_window_analysis,
     },
+    comparative_ranking::{ComparativeRankingTask, ProposedComparativeRanking},
     model_trace::{ModelProviderFailure, ModelTraceContext},
     restoration::{
         RestorationError, TranscriptRestorationTask, TranscriptWindowRestoration,
@@ -349,6 +351,27 @@ impl ChatCompletionsClient {
         Ok(TranscriptWindowRestorationResult {
             restoration: outcome.output,
             diagnostics: RestorationDiagnostics::from(outcome.diagnostics),
+        })
+    }
+
+    /// Runs one validated batch of lecture-wide best--worst comparisons.
+    pub(crate) async fn compare_passages(
+        &self,
+        task: &ComparativeRankingTask,
+    ) -> Result<ComparativeRankingBatchResult, ChatCompletionsError> {
+        let message = task
+            .message()
+            .map_err(ChatCompletionsError::SerializeTask)?;
+        let request = ChatRequest::from_user(message.input).with_system(message.instructions);
+        let outcome = self
+            .run_conversation(request, ComparativeRankingWorkflow { task })
+            .await?;
+
+        Ok(ComparativeRankingBatchResult {
+            metric: task.metric(),
+            batch_index: task.batch_index(),
+            comparisons: outcome.output,
+            diagnostics: AnnotationDiagnostics::from(outcome.diagnostics),
         })
     }
 
@@ -743,7 +766,7 @@ impl ConversationWorkflow for AnnotationWorkflow<'_, '_> {
     ) -> ModelTraceContext {
         ModelTraceContext {
             workflow: ModelWorkflow::Annotation,
-            window_index: self.task.window_number.saturating_sub(1),
+            work_item_index: self.task.window_number.saturating_sub(1),
             conversation_turn,
             request_kind,
         }
@@ -814,7 +837,7 @@ impl ConversationWorkflow for RestoredAnnotationWorkflow<'_, '_> {
     ) -> ModelTraceContext {
         ModelTraceContext {
             workflow: ModelWorkflow::Annotation,
-            window_index: self.task.window_index(),
+            work_item_index: self.task.window_index(),
             conversation_turn,
             request_kind,
         }
@@ -864,7 +887,7 @@ impl ConversationWorkflow for RestorationWorkflow<'_> {
     ) -> ModelTraceContext {
         ModelTraceContext {
             workflow: ModelWorkflow::Restoration,
-            window_index: self.task.window_index,
+            work_item_index: self.task.window_index,
             conversation_turn,
             request_kind,
         }
@@ -890,6 +913,55 @@ impl ConversationWorkflow for RestorationWorkflow<'_> {
 
     fn repair_instruction(&self, error: &ChatCompletionsError) -> String {
         restoration_repair_instruction(error)
+    }
+}
+
+struct ComparativeRankingWorkflow<'task> {
+    task: &'task ComparativeRankingTask,
+}
+
+impl ConversationWorkflow for ComparativeRankingWorkflow<'_> {
+    type Output = Vec<crate::ComparativeDecision>;
+
+    fn trace_context(
+        &self,
+        conversation_turn: usize,
+        request_kind: ModelRequestKind,
+    ) -> ModelTraceContext {
+        ModelTraceContext {
+            workflow: match self.task.metric() {
+                ComparativeMetric::Importance => ModelWorkflow::ImportanceComparison,
+                ComparativeMetric::Novelty => ModelWorkflow::NoveltyComparison,
+            },
+            work_item_index: self.task.task_index(),
+            conversation_turn,
+            request_kind,
+        }
+    }
+
+    fn tool_responses(
+        &mut self,
+        _tool_calls: &[ToolCall],
+    ) -> Result<Option<Vec<ToolResponse>>, ChatCompletionsError> {
+        Ok(None)
+    }
+
+    fn parse_and_validate(
+        &self,
+        content: &str,
+    ) -> Result<(Self::Output, bool), ChatCompletionsError> {
+        let (proposed, accepted_json_fence) =
+            parse_json_content::<ProposedComparativeRanking>(content)
+                .map_err(ChatCompletionsError::InvalidComparativeRankingJson)?;
+        let decisions = self
+            .task
+            .validate(proposed)
+            .map_err(ChatCompletionsError::InvalidComparativeRanking)?;
+        Ok((decisions, accepted_json_fence))
+    }
+
+    fn repair_instruction(&self, error: &ChatCompletionsError) -> String {
+        comparative_ranking_repair_instruction(error)
     }
 }
 
@@ -1049,6 +1121,8 @@ pub enum ChatCompletionsError {
     InvalidRestoredWindowAnalysis(RestoredAnnotationError),
     InvalidRestorationJson(serde_json::Error),
     InvalidWindowRestoration(RestorationError),
+    InvalidComparativeRankingJson(serde_json::Error),
+    InvalidComparativeRanking(ComparativeRankingValidationError),
 }
 
 impl fmt::Display for ChatCompletionsError {
@@ -1060,7 +1134,7 @@ impl fmt::Display for ChatCompletionsError {
             Self::ModelTrace(error) => write!(formatter, "could not record model exchange: {error}"),
             Self::SerializeTask(error) => write!(
                 formatter,
-                "could not serialize the transcript-window task: {error}"
+                "could not serialize the model task: {error}"
             ),
             Self::UnexpectedChoiceCount { actual } => {
                 write!(
@@ -1125,6 +1199,14 @@ impl fmt::Display for ChatCompletionsError {
                     "the model returned an invalid transcript-window restoration: {error}"
                 )
             }
+            Self::InvalidComparativeRankingJson(error) => write!(
+                formatter,
+                "the model's final content is not a comparative-ranking JSON object: {error}"
+            ),
+            Self::InvalidComparativeRanking(error) => write!(
+                formatter,
+                "the model returned an invalid comparative-ranking result: {error}"
+            ),
         }
     }
 }
@@ -1137,11 +1219,13 @@ impl Error for ChatCompletionsError {
             | Self::SerializeTool(error)
             | Self::InvalidAnalysisJson(error)
             | Self::InvalidRestoredAnalysisJson(error)
-            | Self::InvalidRestorationJson(error) => Some(error),
+            | Self::InvalidRestorationJson(error)
+            | Self::InvalidComparativeRankingJson(error) => Some(error),
             Self::Tool(error) => Some(error),
             Self::InvalidWindowAnalysis(error) => Some(error),
             Self::InvalidRestoredWindowAnalysis(error) => Some(error),
             Self::InvalidWindowRestoration(error) => Some(error),
+            Self::InvalidComparativeRanking(error) => Some(error),
             Self::FinalAnswerRepairLimit { source, .. } => Some(source.as_ref()),
             Self::Provider(_)
             | Self::UnexpectedChoiceCount { .. }
@@ -1295,7 +1379,9 @@ fn trace_error_category(error: &ChatCompletionsError) -> &'static str {
     match error {
         ChatCompletionsError::InvalidAnalysisJson(_)
         | ChatCompletionsError::InvalidRestoredAnalysisJson(_)
-        | ChatCompletionsError::InvalidRestorationJson(_) => "malformed_json",
+        | ChatCompletionsError::InvalidRestorationJson(_)
+        | ChatCompletionsError::InvalidComparativeRankingJson(_) => "malformed_json",
+        ChatCompletionsError::InvalidComparativeRanking(_) => "invalid_comparative_ranking",
         ChatCompletionsError::InvalidWindowRestoration(error) => restoration_error_category(error),
         ChatCompletionsError::InvalidWindowAnalysis(error) => analysis_error_category(error),
         ChatCompletionsError::InvalidRestoredWindowAnalysis(error) => {
@@ -1329,6 +1415,9 @@ fn restored_analysis_error_category(error: &RestoredAnnotationError) -> &'static
         | RestoredAnnotationError::TrustedTextMismatch { .. }
         | RestoredAnnotationError::UncoveredOwnedText { .. }
         | RestoredAnnotationError::SourceProvenanceMismatch { .. }
+        | RestoredAnnotationError::IncompleteComparativeScores { .. }
+        | RestoredAnnotationError::InvalidComparativeScore { .. }
+        | RestoredAnnotationError::ComparativeDisplayLevelMismatch { .. }
         | RestoredAnnotationError::PassageProjection(
             PassageProjectionError::EmptySource
             | PassageProjectionError::NonMonotonicProjection { .. },
@@ -1452,6 +1541,12 @@ fn restored_analysis_repair_instruction(error: &ChatCompletionsError) -> String 
 fn restoration_repair_instruction(error: &ChatCompletionsError) -> String {
     format!(
         "你上一条最终答案未通过验证：{error}\n请返回修正后的完整 TranscriptWindowRestoration JSON 对象，不要只返回局部修改。spans 必须按顺序、无重叠、无遗漏地完整划分 owned_region；不要输出 Markdown 或解释。"
+    )
+}
+
+fn comparative_ranking_repair_instruction(error: &ChatCompletionsError) -> String {
+    format!(
+        "你上一条最终答案未通过验证：{error}\n请返回修正后的完整比较 JSON 对象，不要只返回局部修改。必须恰好包含输入中的每个 comparison_id 一次；most 和 least 必须是该组内不同的 passage_id。不要输出 Markdown 或解释。"
     )
 }
 

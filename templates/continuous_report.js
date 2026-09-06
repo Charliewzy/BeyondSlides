@@ -172,7 +172,15 @@
   function showPassageDetails(passage, prefix = "") {
     const label = `来源片段 #${passage.dataset.sourceStart}–${passage.dataset.sourceEnd} · ${passage.dataset.time}`;
     range.textContent = prefix ? `${prefix} · ${label}` : label;
-    details.textContent = `对齐页 ${passage.dataset.slideNumber} · 重要性 ${passage.dataset.importance} · 新颖度 ${passage.dataset.novelty} · 连接强度 ${passage.dataset.connection}`;
+    const importancePercentile = passage.dataset.importancePercentile;
+    const noveltyPercentile = passage.dataset.noveltyPercentile;
+    const importance = importancePercentile
+      ? `${passage.dataset.importance}（全讲 ${importancePercentile}%）`
+      : passage.dataset.importance;
+    const novelty = noveltyPercentile
+      ? `${passage.dataset.novelty}（全讲 ${noveltyPercentile}%）`
+      : passage.dataset.novelty;
+    details.textContent = `对齐页 ${passage.dataset.slideNumber} · 重要性 ${importance} · 新颖度 ${novelty} · 连接强度 ${passage.dataset.connection}`;
   }
 
   function setAudioCurrentPassage(passage, forceScroll) {

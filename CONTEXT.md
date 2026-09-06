@@ -92,7 +92,8 @@ _Avoid_: Reason, explanation
 
 **Novelty**:
 The degree to which the useful content of a lecture passage is absent from the
-written source.
+written source. Final novelty is ranked relative to other passages in the same
+lecture from slide-grounded comparisons; it is not calibrated across lectures.
 _Avoid_: Uniqueness
 
 **Connection strength**:
@@ -102,5 +103,24 @@ _Avoid_: Relatedness
 
 **Importance**:
 The learning value of a lecture passage for understanding or applying the
-course.
+course. Final importance is ranked relative to other passages in the same
+lecture; it is not an absolute or cross-course grade.
 _Avoid_: Novelty, relevance
+
+**Comparative judgment**:
+A best--worst choice within a small group of lecture passages for exactly one
+metric. It names the most and least passage in that group and does not assign
+absolute scores.
+_Avoid_: Absolute rating, quartet score
+
+**Comparative score**:
+The lecture-wide evidence aggregated from a passage's comparative judgments.
+It stores comparison count and most and least selections, from which the
+best--worst balance and percentile rank are derived.
+_Avoid_: Model score, confidence
+
+**Display level**:
+A discrete `1..5` band derived from a comparative percentile for report
+typography and threshold controls. It is presentation data, not an absolute
+semantic measurement.
+_Avoid_: Absolute score, rating

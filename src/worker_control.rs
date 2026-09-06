@@ -9,6 +9,7 @@ use crate::run_support::{read_json, write_json_atomically};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Stage {
+    Transcription,
     Restoration,
     Retrieval,
     Passages,

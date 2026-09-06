@@ -21,6 +21,8 @@ pub(super) struct Job {
     pub created_ms: u64,
     pub preview: Preview,
     pub recording: Option<String>,
+    #[serde(default)]
+    pub transcribe_recording: bool,
     pub runs: Vec<Run>,
 }
 
@@ -29,6 +31,8 @@ pub(super) struct Preview {
     pub slide_count: usize,
     pub segment_count: usize,
     pub duration_ms: u64,
+    #[serde(default)]
+    pub recording_duration_ms: Option<u64>,
     pub transcript_sample: String,
     pub slide_sample: String,
     pub warnings: Vec<String>,
@@ -168,10 +172,28 @@ pub(super) fn import_job(
     if imported.slide_deck.slides.is_empty() {
         return Err("The PDF contains no slides".into());
     }
-    let input =
-        fs::read_to_string(directory.join("transcript-upload")).map_err(|e| e.to_string())?;
+    let transcribe_recording = transcript_extension.is_empty();
+    let recording_duration_ms = if let Some(recording) = &recording {
+        Some(probe_recording(
+            &directory.join(recording),
+            transcribe_recording,
+        )?)
+    } else {
+        None
+    };
+    if transcribe_recording && recording.is_none() {
+        return Err("Provide a transcript or a recording to transcribe".into());
+    }
+    let input = if transcribe_recording {
+        String::new()
+    } else {
+        fs::read_to_string(directory.join("transcript-upload")).map_err(|e| e.to_string())?
+    };
     let transcript: Transcript =
         match transcript_extension {
+            "" => Transcript {
+                segments: Vec::new(),
+            },
             "json" => serde_json::from_str(&input)
                 .map_err(|e| format!("Invalid normalized transcript JSON: {e}"))?,
             "tsv" => funasr::import_tsv(&input).map_err(|e| e.to_string())?,
@@ -180,7 +202,7 @@ pub(super) fn import_job(
                     .into(),
             ),
         };
-    if transcript.segments.is_empty() {
+    if !transcribe_recording && transcript.segments.is_empty() {
         return Err("The transcript contains no segments".into());
     }
     let sources =
@@ -191,6 +213,7 @@ pub(super) fn import_job(
         slide_count: deck.slides.len(),
         segment_count: transcript.segments.len(),
         duration_ms: transcript.segments.last().map_or(0, |s| s.end_ms),
+        recording_duration_ms,
         transcript_sample: transcript
             .segments
             .iter()
@@ -203,12 +226,14 @@ pub(super) fn import_job(
         slide_sample: deck.slides[0].text.chars().take(700).collect(),
         warnings: imported.warnings.iter().map(|w| format!("{w:?}")).collect(),
     };
-    write_json_atomically(
-        &directory.join("transcript.json"),
-        transcript,
-        "normalized transcript",
-    )
-    .map_err(|e| e.to_string())?;
+    if !transcribe_recording {
+        write_json_atomically(
+            &directory.join("transcript.json"),
+            transcript,
+            "normalized transcript",
+        )
+        .map_err(|e| e.to_string())?;
+    }
     write_json_atomically(&directory.join("slides.json"), deck, "normalized slides")
         .map_err(|e| e.to_string())?;
     let job = Job {
@@ -217,10 +242,49 @@ pub(super) fn import_job(
         created_ms: now_ms(),
         preview,
         recording,
+        transcribe_recording,
         runs: Vec::new(),
     };
     save_job(directory, &job).map_err(|e| e.to_string())?;
     Ok(job)
+}
+
+fn probe_recording(path: &Path, require_audio: bool) -> Result<u64, String> {
+    let output = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration:stream=codec_type",
+            "-of",
+            "json",
+        ])
+        .arg(path)
+        .output()
+        .map_err(|e| format!("Could not inspect recording with ffprobe: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Invalid recording: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let data: Value = serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
+    if require_audio
+        && !data["streams"]
+            .as_array()
+            .is_some_and(|streams| streams.iter().any(|s| s["codec_type"] == "audio"))
+    {
+        return Err("The recording has no audio track to transcribe".into());
+    }
+    let seconds: f64 = data["format"]["duration"]
+        .as_str()
+        .ok_or("Recording duration is unavailable")?
+        .parse()
+        .map_err(|_| "Invalid recording duration")?;
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return Err("Recording duration must be positive".into());
+    }
+    Ok((seconds * 1000.0).round() as u64)
 }
 
 /// Copy only reusable restoration artifacts. The pipeline revalidates every

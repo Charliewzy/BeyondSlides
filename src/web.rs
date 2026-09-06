@@ -1,4 +1,6 @@
+mod export;
 mod jobs;
+mod transcription;
 mod usage;
 pub(crate) mod worker;
 
@@ -99,6 +101,7 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
             post(start).layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .route("/api/jobs/{id}/stop", post(stop))
+        .route("/api/jobs/{id}/export", get(export_report))
         .route("/reports/{id}/{*file}", get(report_file))
         .layer(DefaultBodyLimit::max(4 * 1024 * 1024 * 1024_usize))
         .layer(middleware::from_fn_with_state(app.clone(), local_only))
@@ -254,8 +257,10 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
         }
         output.flush().await?;
     }
-    if !fields.contains("slides") || !fields.contains("transcript") {
-        return Err(AppError::bad("Upload both slides and a transcript"));
+    if !fields.contains("slides") || (!fields.contains("transcript") && recording.is_none()) {
+        return Err(AppError::bad(
+            "Upload slides and either a transcript or a recording",
+        ));
     }
     let root = app.root.clone();
     let job = tokio::task::spawn_blocking(move || {
@@ -452,6 +457,7 @@ async fn start(
         .append(true)
         .open(path.join("worker.log"))?;
     let mut command = tokio::process::Command::new(std::env::current_exe()?);
+    let asr_python = std::env::var_os("BEYOND_SLIDES_ASR_PYTHON");
     command
         .arg("application-worker")
         .arg(&directory)
@@ -462,6 +468,9 @@ async fn start(
         std::env::vars_os().filter(|(name, _)| name.to_string_lossy().starts_with("BEYOND_SLIDES_"))
     {
         command.env_remove(name);
+    }
+    if let Some(python) = asr_python {
+        command.env("BEYOND_SLIDES_ASR_PYTHON", python);
     }
     command
         .env("BEYOND_SLIDES_API_BASE_URL", &run.settings.base_url)
@@ -572,4 +581,42 @@ async fn report_file(
         .try_call(request)
         .await?
         .into_response())
+}
+
+async fn export_report(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Result<Response, AppError> {
+    let directory = job_path(&app.root, &id)?;
+    let job = read_job(&directory)?;
+    let run = job
+        .runs
+        .last()
+        .ok_or_else(|| AppError::bad("No completed report to export"))?;
+    let path = run.directory(&directory);
+    let outcome: Outcome = read_json(&path.join("outcome.json"), "worker outcome")?;
+    if !matches!(outcome.status, OutcomeStatus::Complete) {
+        return Err(AppError::conflict(
+            "Wait for a complete report before exporting",
+        ));
+    }
+    let destination = path.join("reader.zip");
+    if !destination.is_file() {
+        let target = destination.clone();
+        tokio::task::spawn_blocking(move || export::build(&path.join("analysis"), &target))
+            .await
+            .map_err(AppError::bad)??;
+    }
+    let mut response = ServeFile::new(destination)
+        .try_call(request)
+        .await?
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        "attachment; filename=BeyondSlides-lecture.zip"
+            .parse()
+            .unwrap(),
+    );
+    Ok(response)
 }

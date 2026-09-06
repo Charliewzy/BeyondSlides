@@ -8,10 +8,12 @@ Requires a built binary, Poppler, and the already-cached dense retrieval model.
 No paid model endpoint is used. Artifacts are retained for browser inspection.
 """
 import argparse
+import io
 import json
 import subprocess
 import threading
 import time
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -49,6 +51,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("output", type=Path)
     parser.add_argument("--binary", type=Path, default=Path("target/debug/beyond-slides"))
+    parser.add_argument("--recording", type=Path, help="Exercise real local ASR on this recording instead of uploading a transcript")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     model = ThreadingHTTPServer(("127.0.0.1", 0), Model)
@@ -86,15 +89,19 @@ def main():
         assert client.post("/api/jobs", headers={"Origin": "https://attacker.example"}).status_code == 403
         text = "泛型允许我们用统一的形式表达不同类型上的相同操作。这一段讲解通过编译期检查保证类型安全，同时避免重复实现同样的逻辑。"
         transcript = {"segments": [dict(id=i, start_ms=i * 10000, end_ms=(i + 1) * 10000, text=text) for i in range(24)]}
-        response = client.post("/api/jobs", data={"name": "本地应用完整流程验证"}, files={
+        files = {
             "slides": ("slides.pdf", Path("tests/fixtures/pdf_import.pdf").read_bytes(), "application/pdf"),
             "transcript": ("transcript.json", json.dumps(transcript, ensure_ascii=False).encode(), "application/json"),
             "recording": ("recording.mp4", Path("tests/fixtures/visual_alignment.mp4").read_bytes(), "video/mp4"),
-        })
+        }
+        if args.recording:
+            del files["transcript"]
+            files["recording"] = (args.recording.name, args.recording.read_bytes(), "application/octet-stream")
+        response = client.post("/api/jobs", data={"name": "本地应用完整流程验证"}, files=files)
         response.raise_for_status()
         job = response.json()
         job_id = job["id"]
-        assert job["preview"]["segment_count"] == 24
+        assert job["preview"]["segment_count"] == (0 if args.recording else 24)
         assert status()["state"] == "ready"
         payload = {"api_key": "local-test-secret", "settings": {
             "base_url": f"http://127.0.0.1:{model.server_port}/v1", "model": "local-test-model", "extra_body": None,
@@ -110,6 +117,8 @@ def main():
         checkpoints = list((args.output / job_id / "run-0001/analysis/restoration").glob("window-*.json"))
         assert checkpoints
         before = {p.name: p.read_bytes() for p in checkpoints}
+        asr_checkpoint = args.output / job_id / "transcription/checkpoint.json"
+        asr_before = asr_checkpoint.read_bytes() if args.recording else None
 
         payload["settings"]["request_interval_ms"] = 5
         client.post(f"/api/jobs/{job_id}/start", json=payload).raise_for_status()
@@ -119,6 +128,9 @@ def main():
         server.wait(timeout=10)
         server, client = start_server()
         done = wait(lambda s: s["state"] == "complete")
+        if args.recording:
+            assert done["job"]["preview"]["segment_count"] > 0
+            assert asr_checkpoint.read_bytes() == asr_before
         assert done["usage"]["known_input_tokens"] == Model.calls * 100
         assert done["usage"]["known_output_tokens"] == Model.calls * 50
         assert done["usage"]["active_requests"] == 0
@@ -127,14 +139,24 @@ def main():
         report = client.get(done["report_url"])
         assert report.status_code == 200 and "data-passage" in report.text
         assert client.get(f"/reports/{job_id}/manifest.json").status_code == 404
-        audio = client.get(f"/reports/{job_id}/report.assets/lecture-audio.mp4", headers={"Range": "bytes=0-31"})
+        extension = args.recording.suffix if args.recording else ".mp4"
+        audio = client.get(f"/reports/{job_id}/report.assets/lecture-audio{extension}", headers={"Range": "bytes=0-31"})
         assert audio.status_code == 206 and len(audio.content) == 32
+        exported = client.get(f"/api/jobs/{job_id}/export")
+        exported.raise_for_status()
+        with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
+            assert "report.html" in archive.namelist()
+            assert f"report.assets/lecture-audio{extension}" in archive.namelist()
+            assert all(name in ("report.html", "README.txt") or name.startswith("report.assets/") for name in archive.namelist())
+            assert archive.read("report.html") == report.content
         saved = (args.output / job_id / "job.json").read_text()
         assert "local-test-secret" not in saved
         payload["settings"]["boundary_passages"] = False
         changed = client.post(f"/api/jobs/{job_id}/start", json=payload)
         assert changed.status_code == 409 and "keep restoration" in changed.json()["error"]
-        summary = {"job_id": job_id, "model_calls": Model.calls, "status": done, "verified": ["import", "preview", "duplicate-start rejection", "graceful stop", "checkpoint resume", "controller restart while worker runs", "token totals", "report and ranged media", "cross-origin rejection", "settings-change confirmation", "key absent from metadata"]}
+        summary = {"job_id": job_id, "model_calls": Model.calls, "status": done, "verified": ["import", "preview", "duplicate-start rejection", "graceful stop", "checkpoint resume", "controller restart while worker runs", "token totals", "report and ranged media", "shareable ZIP excludes private run files", "cross-origin rejection", "settings-change confirmation", "key absent from metadata"]}
+        if args.recording:
+            summary["verified"].append("real CPU ASR and transcription checkpoint reuse")
         (args.output / "verification.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2))
         print(json.dumps({"job_id": job_id, "model_calls": Model.calls, "state": done["state"]}))
     finally:

@@ -47,24 +47,28 @@ function tokenUsage(known, missing, responses) {
 function render(status) {
   const { job, usage, state } = status;
   $("lecture-title").textContent = job.name;
-  $("lecture-meta").textContent = `${job.preview.slide_count} 张幻灯片 · ${job.preview.segment_count} 个转写片段 · 转写时长 ${duration(job.preview.duration_ms)}${job.recording ? " · 已附录音/视频" : " · 无录音回放"}`;
-  $("transcript-preview").textContent = job.preview.transcript_sample;
+  $("lecture-meta").textContent = `${job.preview.slide_count} 张幻灯片 · ${job.preview.segment_count ? `${job.preview.segment_count} 个转写片段` : "等待本地转写"} · ${job.preview.duration_ms ? `转写时长 ${duration(job.preview.duration_ms)}` : `录音时长 ${duration(job.preview.recording_duration_ms || 0)}`}${job.recording ? " · 已附录音/视频" : " · 无录音回放"}`;
+  $("transcript-preview").textContent = job.preview.transcript_sample || "开始处理后，先用本机 CPU 转写录音，再进行分析。";
   $("slide-preview").textContent = job.preview.slide_sample;
   $("source-warnings").textContent = job.preview.warnings.join("\n");
   const active = state === "running" || state === "stopping";
   $("processing-panel").hidden = state === "ready";
   $("start-button").hidden = active;
-  $("start-button").textContent = state === "ready" ? "开始分析" : state === "complete" ? "更改设置后重新分析" : "恢复处理";
+  $("start-button").textContent = state === "ready" ? (job.transcribe_recording ? "开始转写与分析" : "开始分析") : state === "complete" ? "更改设置后重新分析" : "恢复处理";
   $("stop-button").hidden = !active; $("stop-button").disabled = state === "stopping";
   $("open-report").hidden = !status.report_url;
   if (status.report_url) $("open-report").href = status.report_url;
+  $("export-report").hidden = !status.report_url;
+  $("export-report").href = `/api/jobs/${job.id}/export`;
+  $("export-report").textContent = job.recording ? "下载分享包（含录音）" : "下载分享包";
   const stateLabels = { running: "正在处理", stopping: "正在完成当前任务…", paused: "已暂停，可继续", failed: "处理失败，检查后可恢复", interrupted: "运行中断，可恢复", complete: "处理完成" };
   $("run-state").textContent = stateLabels[state] || "准备就绪";
   $("elapsed").textContent = `已处理 ${duration(status.elapsed_ms)}`;
-  $("run-description").textContent = state === "stopping" ? "不再启动新任务。已开始的窗口/批次会完成重试、修复并保存结果，可能还需要一段时间。" : "关闭或刷新这个页面不会停止后端处理。恢复前需要重新输入 API key。";
+  $("run-description").textContent = state === "stopping" ? "不再启动新任务。当前本地转写或模型窗口/批次会完成并保存结果，可能还需要一段时间。" : "关闭或刷新这个页面不会停止后端处理。恢复前需要重新输入 API key。";
   $("stage-progress").replaceChildren();
-  const labels = { restoration: "恢复可读转写", retrieval: "建立幻灯片检索", passages: "语义分段与幻灯片对齐", comparisons: "重要性与新颖度比较", rendering: "生成阅读报告" };
+  const labels = { transcription: "本地 CPU 转写", restoration: "恢复可读转写", retrieval: "建立幻灯片检索", passages: "语义分段与幻灯片对齐", comparisons: "重要性与新颖度比较", rendering: "生成阅读报告" };
   for (const [stage, label] of Object.entries(labels)) {
+    if (stage === "transcription" && !job.transcribe_recording) continue;
     const data = status.progress.stages[stage];
     const row = document.createElement("div"); row.className = "stage";
     const heading = document.createElement("div"); heading.className = "stage-label";
@@ -91,13 +95,21 @@ $("new-lecture").addEventListener("click", () => {
   currentId = null; clearTimeout(pollingTimer); history.replaceState(null, "", "/");
   $("workspace").hidden = true; $("import-panel").hidden = false; notice("");
 });
+$("source-mode").addEventListener("change", () => {
+  const fromRecording = $("source-mode").value === "recording";
+  const transcript = document.querySelector('[name="transcript"]');
+  transcript.disabled = fromRecording; transcript.required = !fromRecording;
+  $("transcript-upload-label").hidden = fromRecording;
+  document.querySelector('[name="recording"]').required = fromRecording;
+  $("recording-label").textContent = fromRecording ? "② 录音 / 视频（必选，将在本机转写）" : "录音 / 视频（可选，用于回放）";
+});
 $("import-form").addEventListener("submit", async (event) => {
   event.preventDefault(); notice(""); $("import-button").disabled = true; $("import-status").textContent = "正在上传并检查文件…";
   try {
     const form = new FormData(event.target);
     if (!form.get("recording")?.size) form.delete("recording");
     const job = await api("/api/jobs", { method: "POST", body: form });
-    await refreshLibrary(); await select(job.id); event.target.reset();
+    await refreshLibrary(); await select(job.id); event.target.reset(); $("source-mode").dispatchEvent(new Event("change"));
   } catch (error) { notice(error.message); }
   finally { $("import-button").disabled = false; $("import-status").textContent = ""; }
 });

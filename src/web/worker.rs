@@ -9,19 +9,28 @@ pub(crate) async fn run(directory: &OsStr) -> Result<(), Box<dyn Error>> {
     let directory = Path::new(directory);
     let lock = worker_lock(directory)?;
     lock.try_lock()?;
-    let job = read_job(directory)?;
-    let run = job.runs.last().ok_or("lecture job has no configured run")?;
+    let mut job = read_job(directory)?;
+    let run = job
+        .runs
+        .last()
+        .ok_or("lecture job has no configured run")?
+        .clone();
     let run_directory = run.directory(directory);
     let started = Instant::now();
-    let recording = job.recording.as_ref().map(|file| directory.join(file));
-    let result = crate::analysis_run::run_complete(
-        directory.join("transcript.json").as_os_str(),
-        directory.join("slides.json").as_os_str(),
-        run_directory.join("analysis").as_os_str(),
-        Some(directory.join("slides.pdf").as_os_str()),
-        recording.as_deref().map(Path::as_os_str),
-        None,
-    )
+    let result = async {
+        super::transcription::prepare(directory, &run_directory, &mut job).await?;
+        let recording = job.recording.as_ref().map(|file| directory.join(file));
+        let timing = directory.join("timed-tokens.json");
+        crate::analysis_run::run_complete(
+            directory.join("transcript.json").as_os_str(),
+            directory.join("slides.json").as_os_str(),
+            run_directory.join("analysis").as_os_str(),
+            Some(directory.join("slides.pdf").as_os_str()),
+            recording.as_deref().map(Path::as_os_str),
+            timing.is_file().then_some(timing.as_os_str()),
+        )
+        .await
+    }
     .await;
     let status = match &result {
         Ok(()) => OutcomeStatus::Complete,

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BeyondSlides · 分段前后对照</title>
+<style>
+:root{color-scheme:light;font-family:system-ui,"Noto Sans CJK SC",sans-serif;color:#242338;background:#f4f3f8}
+*{box-sizing:border-box}body{margin:0}header{padding:16px 24px;background:#fff;border-bottom:1px solid #ddd9e8}
+h1{font-size:23px;margin:0 0 6px}p{margin:6px 0;line-height:1.6}.muted{color:#625e74;font-size:13px}
+.toolbar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:12px}select,button{font:inherit;font-size:14px;border:1px solid #bab2ce;border-radius:6px;background:white;padding:6px 9px}button{cursor:pointer}a{color:#5d35ad}label{font-size:14px}input[type=range]{width:200px}
+main{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:14px 20px;height:calc(100dvh - 245px);min-height:300px}
+.column{display:flex;flex-direction:column;min-width:0;background:white;border:1px solid #d9d4e5;border-radius:10px;overflow:hidden}
+.column h2{font-size:16px;margin:0;padding:12px 16px;background:#eee9f7}.column h2 span{font-size:12px;color:#625e74;font-weight:400}
+.pane{overflow:auto;flex:1;padding:12px;scroll-behavior:auto}.passage{padding:10px 12px;margin:0 0 9px;border-left:3px solid #c9c2d8;border-radius:5px;background:#f8f7fb;cursor:pointer;white-space:pre-wrap;line-height:1.85;font-size:16px;font-weight:400;outline-offset:2px}.passage:hover{background:#eeebf7}.passage.window-edge{border-left-color:#d57c39}.passage.selected{outline:2px solid #397ace;background:#eaf1ff}.passage small{display:block;color:#70667c;line-height:1.5;font-size:11px;font-weight:400;text-decoration:none;margin-bottom:5px}.importance .passage[data-important="true"] .text{font-weight:750}.novelty .passage[data-novel="true"] .text{text-decoration:underline;text-decoration-color:#c52361;text-decoration-thickness:2px;text-underline-offset:4px}
+footer{padding:6px 24px 12px;background:white;border-top:1px solid #ddd9e8;font-size:13px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}audio{height:32px;max-width:350px}#selection{flex:1;min-width:260px}#statistics{font-variant-numeric:tabular-nums}
+@media(max-width:800px){header{padding:10px}main{padding:8px;gap:6px;height:65dvh}.pane{padding:6px}.passage{font-size:14px;padding:7px}h1{font-size:19px}input[type=range]{width:120px}footer{padding:8px}}
+</style>
+<header>
+<h1>同一堂课，分段前后对照</h1>
+<p class="muted">原文逐字相同，只改变分段。点击任一段，两侧标出覆盖同一原文范围的段落。橙色左边线表示旧处理窗口强制结束的位置。</p>
+<p id="statistics" class="muted"></p>
+<div class="toolbar">
+<label>检查样本 <select id="samples" aria-label="检查样本"></select></label>
+<button id="previous">上一处</button><button id="next">下一处</button>
+<label>全课位置 <input id="position" type="range" min="0" value="0" aria-label="全课位置"></label>
+<label><input id="importance" type="checkbox">粗体：重要性 ≥4</label>
+<label><input id="novelty" type="checkbox">下划线：新颖度 ≥3</label>
+<a id="old-report" target="_blank" rel="noopener">旧版完整报告</a><a id="new-report" target="_blank" rel="noopener">新版幻灯片 / 音频报告</a>
+</div>
+<p class="muted">两侧评分分别重新比较得到；段落不同，分数变化不等于模型准确性提高。默认关闭评分突出显示，先检查语义边界。</p>
+</header>
+<main>
+<section class="column"><h2>之前 · 窗口内分段 <span id="old-count"></span></h2><div id="old" class="pane" tabindex="0" aria-label="旧分段"></div></section>
+<section class="column"><h2>之后 · 全局语义边界 <span id="new-count"></span></h2><div id="new" class="pane" tabindex="0" aria-label="新分段"></div></section>
+</main>
+<footer><span id="selection" aria-live="polite">选择段落查看对应关系</span><button id="play">播放所选段落</button><audio id="audio" controls preload="metadata"></audio></footer>
+<script id="review-data" type="application/json">__REVIEW_DATA__</script>
+<script>
+const data=JSON.parse(document.getElementById('review-data').textContent);
+const panes={old:document.getElementById('old'),new:document.getElementById('new')};
+const audio=document.getElementById('audio'); let selected=null,stopAt=null;
+for(const side of ['old','new']){
+  document.getElementById(side+'-count').textContent=`${data[side].length} 段`;
+  document.getElementById(side+'-report').href=data.reports[side];
+  data[side].forEach((p,i)=>{
+    const el=document.createElement('div');el.className='passage'+(p.window_edge?' window-edge':'');el.tabIndex=0;el.setAttribute('role','button');
+    el.dataset.index=i;el.dataset.important=p.importance>=4;el.dataset.novel=p.novelty>=3;
+    const label=document.createElement('small');
+    label.textContent=`P${i+1} · ${p.timestamp} · ${p.end-p.start} 字符 · I ${p.importance} / N ${p.novelty}`+(p.window_edge?' · 窗口末尾':'');
+    const text=document.createElement('span');text.className='text';text.textContent=p.text;
+    el.append(label,text);panes[side].append(el);
+    el.addEventListener('click',()=>select(side,i));
+    el.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();select(side,i);}});
+  });
+}
+const a=data.stats.old,b=data.stats.new;
+document.getElementById('statistics').textContent=`${data.characters.toLocaleString()} 字符完全覆盖 · 中位长度 ${a.median_characters} → ${b.median_characters} · 非句末标点结束 ${a.nonterminal_endings} → ${b.nonterminal_endings}（只是线索，不是准确率）`;
+const samples=document.getElementById('samples');
+data.samples.forEach(i=>{const o=document.createElement('option');o.value=i;o.textContent=`旧 P${i+1} · ${data.old[i].text.slice(0,18)}…`;samples.append(o);});
+function reveal(side,i){const pane=panes[side],el=pane.children[i];pane.scrollTop+=el.getBoundingClientRect().top-pane.getBoundingClientRect().top-20;}
+function select(side,index){
+  audio.pause();stopAt=null;selected=data[side][index];const p=selected;
+  const counts={};
+  for(const name of ['old','new']){
+    const matches=[];data[name].forEach((other,i)=>{const hit=other.start<p.end&&other.end>p.start;panes[name].children[i].classList.toggle('selected',hit);if(hit)matches.push(i);});
+    counts[name]=matches.map(i=>'P'+(i+1)).join(', ');if(matches.length)reveal(name,matches[0]);
+  }
+  document.getElementById('position').value=p.start;
+  document.getElementById('selection').textContent=`原文字符 [${p.start}, ${p.end}) · 旧 ${counts.old} ↔ 新 ${counts.new} · 播放：${side==='old'?'旧':'新'} P${index+1}`;
+}
+samples.addEventListener('change',()=>select('old',Number(samples.value)));
+for(const [id,delta] of [['previous',-1],['next',1]])document.getElementById(id).addEventListener('click',()=>{samples.selectedIndex=Math.max(0,Math.min(samples.options.length-1,samples.selectedIndex+delta));select('old',Number(samples.value));});
+const position=document.getElementById('position');position.max=data.characters-1;
+position.addEventListener('input',()=>{const at=Number(position.value);select('new',data.new.findIndex(p=>p.start<=at&&p.end>at));});
+for(const metric of ['importance','novelty'])document.getElementById(metric).addEventListener('change',event=>document.body.classList.toggle(metric,event.target.checked));
+if(data.audio){audio.src=data.audio;}else{audio.hidden=true;document.getElementById('play').disabled=true;}
+document.getElementById('play').addEventListener('click',()=>{if(!selected)return;stopAt=selected.audio_end_ms/1000;audio.currentTime=selected.audio_start_ms/1000;audio.play().catch(error=>{document.getElementById('selection').textContent='音频无法播放：'+error.message;});});
+audio.addEventListener('timeupdate',()=>{if(stopAt!==null&&audio.currentTime>=stopAt){audio.pause();stopAt=null;}});
+select('old',0);
+</script>
+</html>

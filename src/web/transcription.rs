@@ -202,7 +202,11 @@ pub(super) async fn prepare(
         .insert("finalizing".into(), saving.elapsed().as_secs_f64());
     progress.phase = "complete".into();
     publish_progress(run, &progress)?;
-    control.progress(Stage::Transcription, 1, Some(1))?;
+    if progress.reused {
+        control.baseline(Stage::Transcription, 1, 1)?;
+    } else {
+        control.progress(Stage::Transcription, 1, Some(1))?;
+    }
     control.check_stop()?;
     Ok(())
 }

@@ -112,10 +112,10 @@ pub async fn run_complete(
         TranscriptRestorationSession::prepare(&client, transcript, restoration_config(&provider)?)?
             .with_stop_signal(provider.worker.stop_signal());
     restore_checkpoints(&mut session, &run_directory)?;
-    provider.worker.progress(
+    provider.worker.baseline(
         crate::worker_control::Stage::Restoration,
         session.completed_window_count(),
-        Some(session.window_count()),
+        session.window_count(),
     )?;
 
     let progress = window_progress_bar(session.window_count(), session.completed_window_count())?;

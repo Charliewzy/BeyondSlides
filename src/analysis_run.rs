@@ -276,10 +276,10 @@ pub async fn run_complete(
         boundary_identity.as_ref(),
     )?;
     restore_comparison_checkpoints(&mut ranking_session, &comparison_directories)?;
-    provider.worker.progress(
+    provider.worker.baseline(
         crate::worker_control::Stage::Comparisons,
         ranking_session.completed_batch_count(),
-        Some(ranking_session.batch_count()),
+        ranking_session.batch_count(),
     )?;
     let ranking_progress = ranking_progress_bar(
         ranking_session.batch_count(),
@@ -391,10 +391,10 @@ async fn prepare_window_passages(
     )?
     .with_stop_signal(provider.worker.stop_signal());
     restore_checkpoints(&mut session, run_directory)?;
-    provider.worker.progress(
+    provider.worker.baseline(
         crate::worker_control::Stage::Passages,
         session.completed_window_count(),
-        Some(session.window_count()),
+        session.window_count(),
     )?;
 
     let passage_progress =

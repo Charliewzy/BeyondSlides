@@ -74,15 +74,27 @@ def main():
             status.update(state="running", transcription=observed)
             status["job"]["transcribe_recording"] = True
             status["progress"]["stages"]["transcription"] = dict(completed=0, total=None)
+            status["progress"]["current"] = "passages"
+            status["progress"]["stages"]["passages"] = dict(completed=21, total=147, elapsed_ms=397000, eta_ms=613000, reused=False)
+            status["job"]["preview"]["warnings"] = ["SparseText { page: 3, non_whitespace_characters: 5 }", "SparseText { page: 11, non_whitespace_characters: 7 }"]
             page.route(f"**/api/jobs/{job}", lambda route: route.fulfill(json=status))
             page.wait_for_function("document.getElementById('stage-progress').textContent.includes('识别语音 · 25%')")
             bar = page.get_by_role("progressbar", name="本地 CPU 转写")
             assert bar.get_attribute("value") == "1000"
             assert bar.get_attribute("max") == "4000"
+            assert "预计剩余 10分13秒" in page.locator("#stage-progress").inner_text()
+            assert "预计阶段总用时 16分50秒" in page.locator("#stage-progress").inner_text()
+            page.get_by_text("检查导入内容", exact=True).click()
+            assert "3（5 字符）、11（7 字符）" in page.locator("#source-warnings").inner_text()
+            assert "SparseText" not in page.locator("#source-warnings").inner_text()
+            assert "非模型重试" in page.evaluate("readableLog('--- attempt 1788696565049 ---')")
+            page.screenshot(path=str(args.workspace / "browser-stage-timing.png"), full_page=True)
             observed["phase"] = "loading_models"
             page.wait_for_function("document.querySelector('progress[aria-label=\"本地 CPU 转写\"]').getAttribute('value') === null")
             status["state"] = "paused"
+            page.wait_for_function("document.getElementById('run-state').textContent === '已暂停，可继续'")
             page.wait_for_function("document.querySelector('progress[aria-label=\"本地 CPU 转写\"]').value === 0")
+            assert "预计剩余" not in page.locator("#stage-progress").inner_text()
             page.unroute(f"**/api/jobs/{job}")
             page.wait_for_function("document.getElementById('run-state').textContent === '处理完成'")
             with page.expect_popup() as opened:

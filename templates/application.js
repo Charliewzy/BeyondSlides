@@ -13,6 +13,34 @@ async function api(path, options = {}) {
 }
 function notice(message) { $("notice").textContent = message; $("notice").hidden = !message; }
 function duration(ms) { const seconds = Math.floor(ms / 1000); return `${Math.floor(seconds / 60)}分${String(seconds % 60).padStart(2, "0")}秒`; }
+// Old jobs keep their original metadata; translate legacy diagnostics only for display.
+function importWarnings(warnings) {
+  const sparse = [], messages = [];
+  for (const warning of warnings) {
+    const match = /^SparseText \{ page: (\d+), non_whitespace_characters: (\d+) \}$/.exec(warning);
+    const glyphs = /^SuspiciousGlyphs \{ page: (\d+), glyphs: (.+) \}$/.exec(warning);
+    if (match) sparse.push(`${match[1]}（${match[2]} 字符）`);
+    else if (glyphs) messages.push(`第 ${glyphs[1]} 页包含疑似无法正确提取的字符：${glyphs[2]}。请对照原始幻灯片检查。`);
+    else messages.push(warning);
+  }
+  if (sparse.length) messages.unshift(`以下页面提取到的文字较少（不计空白）：${sparse.join("、")}。标题页或图片页可能正常；请对照原始幻灯片检查，不代表导入失败。`);
+  return messages.join("\n");
+}
+function readableLog(text) {
+  return text.replace(/^--- attempt (\d+) ---$/gm, (_, ms) => {
+    const date = new Date(Number(ms));
+    return Number.isNaN(date.getTime()) ? _ : `--- 日志记录开始：${date.toLocaleString()}（本次子进程输出，非模型重试）---`;
+  });
+}
+function stageTiming(data, isCurrent) {
+  if (data.elapsed_ms == null) return "耗时未记录（旧版运行）";
+  const elapsed = `累计用时 ${duration(data.elapsed_ms)}`;
+  if (data.reused) return `${elapsed} · 复用已保存结果`;
+  if (data.total !== null && data.completed >= data.total) return `${elapsed} · 完成`;
+  if (!isCurrent) return elapsed;
+  if (data.eta_ms == null) return `${elapsed} · 暂无剩余时间估计`;
+  return `${elapsed} · 预计剩余 ${duration(data.eta_ms)} · 预计阶段总用时 ${duration(data.elapsed_ms + data.eta_ms)}`;
+}
 function setSettings(settings) {
   if (!settings) return;
   $("base-url").value = settings.base_url; $("model").value = settings.model;
@@ -69,7 +97,7 @@ function render(status) {
   $("lecture-meta").textContent = `${job.preview.slide_count} 张幻灯片 · ${job.preview.segment_count ? `${job.preview.segment_count} 个转写片段` : "等待本地转写"} · ${job.preview.duration_ms !== null ? `转写时长 ${duration(job.preview.duration_ms)}` : job.preview.segment_count ? "无转写时间戳" : `录音时长 ${duration(job.preview.recording_duration_ms || 0)}`}${job.recording ? " · 已附录音/视频" : " · 无录音回放"}`;
   $("transcript-preview").textContent = job.preview.transcript_sample || "开始处理后，先用本机 CPU 转写录音，再进行分析。";
   $("slide-preview").textContent = job.preview.slide_sample;
-  $("source-warnings").textContent = job.preview.warnings.join("\n");
+  $("source-warnings").textContent = importWarnings(job.preview.warnings);
   const active = state === "running" || state === "stopping";
   $("processing-panel").hidden = state === "ready";
   $("start-button").hidden = active;
@@ -98,6 +126,11 @@ function render(status) {
     if (data?.total !== null) { progress.max = data?.total || 1; progress.value = data?.total === 0 ? 1 : data?.completed || 0; }
     row.append(progress); $("stage-progress").append(row);
     if (stage === "transcription" && status.transcription) transcriptionProgress(row, progress, count, status.transcription, active);
+    if (data) {
+      const timing = document.createElement("small"); timing.className = "stage-timing";
+      timing.textContent = stageTiming(data, active && status.progress.current === stage);
+      row.append(timing);
+    }
   }
   $("input-tokens").textContent = tokenUsage(usage.known_input_tokens, usage.missing_input_usage, usage.responses);
   $("output-tokens").textContent = tokenUsage(usage.known_output_tokens, usage.missing_output_usage, usage.responses);
@@ -117,7 +150,7 @@ async function pollDebug() {
     $("debug-download").href = `/api/jobs/${id}/logs/${kind}/download`;
     $("debug-download").hidden = !log.available;
     if ($("debug-follow").checked || !$("debug-output").textContent) {
-      $("debug-output").textContent = log.text;
+      $("debug-output").textContent = readableLog(log.text);
       if ($("debug-follow").checked) $("debug-output").scrollTop = $("debug-output").scrollHeight;
     }
     $("debug-status").textContent = !log.available ? "尚无此版本捕获的日志。旧日志仅保存在本地；下次启动或恢复后开始捕获。" : !$("debug-follow").checked ? "显示已暂停，后台继续记录。勾选跟随可查看最新输出。" : log.truncated ? "显示最近 128 KiB；更早的输出请下载完整日志。" : "实时更新（约每秒）；后台持续保存日志。";

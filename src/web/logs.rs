@@ -98,8 +98,14 @@ pub(super) async fn capture(
         .append(true)
         .open(path)
         .await?;
-    file.write_all(format!("\n--- attempt {} ---\n", super::jobs::now_ms()).as_bytes())
-        .await?;
+    file.write_all(
+        format!(
+            "\n--- 日志记录开始：{}（本次子进程输出，非模型重试）---\n",
+            httpdate::fmt_http_date(std::time::SystemTime::now())
+        )
+        .as_bytes(),
+    )
+    .await?;
     let file = Arc::new(Mutex::new(Sink {
         file,
         redactor: Redactor::new(key),

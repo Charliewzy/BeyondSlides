@@ -160,6 +160,11 @@ def main():
         server.wait(timeout=10)
         server, client = start_server()
         done = wait(lambda s: s["state"] == "complete")
+        for stage in ("restoration", "retrieval", "passages", "comparisons", "rendering"):
+            measured = done["progress"]["stages"][stage]
+            assert measured["elapsed_ms"] is not None
+            assert measured["completed"] == measured["total"]
+            assert measured["eta_ms"] is None
         if args.recording:
             assert done["job"]["preview"]["segment_count"] > 0
             assert asr_checkpoint.read_bytes() == asr_before
@@ -169,6 +174,8 @@ def main():
         debug = client.get(f"/api/jobs/{job_id}/logs/worker")
         debug.raise_for_status()
         assert debug.json()["available"] and debug.json()["text"]
+        assert "日志记录开始" in debug.json()["text"]
+        assert "--- attempt " not in debug.json()["text"]
         assert "local-test-secret" not in debug.text
         download = client.get(f"/api/jobs/{job_id}/logs/worker/download")
         assert download.status_code == 200 and "local-test-secret" not in download.text
@@ -205,6 +212,7 @@ def main():
         payload["confirm_reprocessing"] = True
         client.post(f"/api/jobs/{job_id}/start", json=payload).raise_for_status()
         revised = wait(lambda s: s["state"] == "complete" and len(s["job"]["runs"]) == 2)
+        assert revised["progress"]["stages"]["restoration"]["reused"]
         for filename, content in restoration_before.items():
             assert (args.output / job_id / "run-0002/analysis/restoration" / filename).read_bytes() == content
         assert old_report.read_bytes() == old_report_bytes

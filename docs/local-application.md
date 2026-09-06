@@ -123,6 +123,27 @@ Worker elapsed time is checkpointed once per second. After a hard interruption,
 the UI shows the last recorded lower bound rather than counting time spent
 offline; a subsequent resume carries that recorded work time forward.
 
+Each pipeline stage also checkpoints cumulative active elapsed time once per
+second. Completed durations remain visible; paused/offline time is excluded.
+Measurable stages show remaining time directly from indicatif's `ProgressBar::eta`
+and the corresponding elapsed-plus-remaining stage total. The estimator only
+sees newly completed work after the checkpoint baseline, never restored counts.
+It restarts on resume; no ETA appears until new work completes. Preparation and
+whole-call CPU transcription have no invented ETA. Speech-recognition progress
+still reports its measured work percentage separately.
+
+Reused stages are labeled. A hard kill may lose up to the last timing heartbeat;
+old progress files without timings show “耗时未记录” rather than fabricated
+historical durations. A worker already running older code will not acquire the
+new telemetry merely because the controller is rebuilt.
+
+New debug captures have readable GMT start timestamps and explicitly identify
+subprocess output, not model retries. The UI translates old numeric markers for
+display without rewriting old logs. Sparse PDF text warnings group affected
+pages, retain extracted character counts, and explain that title/image pages
+can legitimately contain little extractable text. Old job warnings are also
+translated at display time without changing saved source metadata.
+
 Scheduling changes reuse the same validated checkpoints. Changes to provider,
 model, or request options require confirmation and create a new run revision.
 Changing passage preparation alone copies restoration artifacts into the new

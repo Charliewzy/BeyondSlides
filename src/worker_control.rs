@@ -1,7 +1,14 @@
 //! Machine-readable worker status. Never includes model prompts or credentials.
-use std::{collections::BTreeMap, env, io, path::PathBuf, time::Duration};
+use std::{
+    collections::BTreeMap,
+    env, io,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use beyond_slides::processing::StopSignal;
+use indicatif::ProgressBar;
 use serde::{Deserialize, Serialize};
 
 use crate::run_support::{read_json, write_json_atomically};
@@ -17,10 +24,71 @@ pub(crate) enum Stage {
     Rendering,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StageProgress {
     pub completed: usize,
     pub total: Option<usize>,
+    #[serde(default)]
+    pub elapsed_ms: Option<u64>,
+    #[serde(default)]
+    pub eta_ms: Option<u64>,
+    #[serde(default)]
+    pub reused: bool,
+}
+
+struct StageClock {
+    stage: Stage,
+    started: Instant,
+    elapsed_before_ms: u64,
+    baseline: usize,
+    progress: StageProgress,
+    estimate: ProgressBar,
+}
+
+impl StageClock {
+    fn snapshot(&mut self) {
+        self.progress.elapsed_ms = Some(
+            self.elapsed_before_ms
+                .saturating_add(self.started.elapsed().as_millis() as u64),
+        );
+        self.progress.eta_ms = (self.progress.total.is_some()
+            && self.progress.completed > self.baseline)
+            .then(|| self.estimate.eta().as_millis() as u64);
+    }
+}
+
+struct StageTiming {
+    path: PathBuf,
+    active: Option<StageClock>,
+}
+
+impl StageTiming {
+    fn read(&self) -> io::Result<WorkerProgress> {
+        if self.path.exists() {
+            read_json(&self.path, "worker progress")
+        } else {
+            Ok(WorkerProgress::default())
+        }
+    }
+
+    fn save(&mut self, finish: bool) -> io::Result<()> {
+        let mut progress = self.read()?;
+        if let Some(clock) = &mut self.active {
+            clock.snapshot();
+            if finish {
+                clock.progress.eta_ms = None;
+            }
+            progress.current = Some(clock.stage);
+            // Serialize while holding the timing lock; heartbeat and callbacks
+            // must never overwrite one another's progress.
+            progress.stages.insert(clock.stage, clock.progress.clone());
+            write_json_atomically(&self.path, &progress, "worker progress")?;
+        }
+        if finish {
+            self.active = None;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -33,6 +101,7 @@ pub(crate) struct WorkerControl {
     directory: Option<PathBuf>,
     stop: StopSignal,
     monitor: Option<tokio::task::JoinHandle<()>>,
+    timing: Option<Arc<Mutex<StageTiming>>>,
 }
 
 impl WorkerControl {
@@ -43,6 +112,12 @@ impl WorkerControl {
 
     pub fn new(directory: Option<PathBuf>) -> Result<Self, io::Error> {
         let stop = StopSignal::default();
+        let timing = directory.as_ref().map(|directory| {
+            Arc::new(Mutex::new(StageTiming {
+                path: directory.join("progress.json"),
+                active: None,
+            }))
+        });
         let monitor = if let Some(directory) = &directory {
             std::fs::create_dir_all(directory)?;
             let path = directory.join("stop-requested");
@@ -50,11 +125,20 @@ impl WorkerControl {
                 stop.request_stop();
             }
             let stop = stop.clone();
+            let timing = timing
+                .clone()
+                .expect("a control directory has timing state");
             Some(tokio::spawn(async move {
+                let mut last_saved = Instant::now();
                 loop {
                     if path.exists() {
                         stop.request_stop();
-                        break;
+                    }
+                    if last_saved.elapsed() >= Duration::from_secs(1) {
+                        if let Err(error) = timing.lock().unwrap().save(false) {
+                            eprintln!("Could not checkpoint stage timing: {error}");
+                        }
+                        last_saved = Instant::now();
                     }
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
@@ -66,6 +150,7 @@ impl WorkerControl {
             directory,
             stop,
             monitor,
+            timing,
         })
     }
 
@@ -99,20 +184,80 @@ impl WorkerControl {
         completed: usize,
         total: Option<usize>,
     ) -> Result<(), io::Error> {
-        let Some(directory) = &self.directory else {
+        self.update(stage, completed, total, false)
+    }
+
+    /// Establishes checkpoint coverage without treating restored work as speed.
+    pub fn baseline(&self, stage: Stage, completed: usize, total: usize) -> io::Result<()> {
+        self.update(stage, completed, Some(total), true)
+    }
+
+    fn update(
+        &self,
+        stage: Stage,
+        completed: usize,
+        total: Option<usize>,
+        baseline: bool,
+    ) -> io::Result<()> {
+        let Some(timing) = &self.timing else {
             return Ok(());
         };
-        let path = directory.join("progress.json");
-        let mut progress: WorkerProgress = if path.exists() {
-            read_json(&path, "worker progress")?
-        } else {
-            WorkerProgress::default()
-        };
-        progress.current = Some(stage);
-        progress
-            .stages
-            .insert(stage, StageProgress { completed, total });
-        write_json_atomically(&path, &progress, "worker progress")
+        let mut timing = timing.lock().unwrap();
+        if timing.active.is_none()
+            && !baseline
+            && total == Some(completed)
+            && timing
+                .read()?
+                .stages
+                .get(&stage)
+                .is_some_and(|s| s.total == total && s.completed == completed)
+        {
+            return Ok(());
+        }
+        if timing
+            .active
+            .as_ref()
+            .is_none_or(|clock| clock.stage != stage)
+        {
+            timing.save(true)?;
+            let saved = timing.read()?;
+            let elapsed_before_ms = saved
+                .stages
+                .get(&stage)
+                .and_then(|s| s.elapsed_ms)
+                .unwrap_or(0);
+            timing.active = Some(StageClock {
+                stage,
+                started: Instant::now(),
+                elapsed_before_ms,
+                baseline: completed,
+                progress: StageProgress {
+                    completed,
+                    total,
+                    elapsed_ms: None,
+                    eta_ms: None,
+                    reused: false,
+                },
+                estimate: ProgressBar::hidden(),
+            });
+        }
+        let clock = timing.active.as_mut().unwrap();
+        if baseline {
+            clock.baseline = completed;
+            clock.estimate.reset();
+        }
+        clock.progress.completed = completed;
+        clock.progress.total = total;
+        clock.progress.reused = baseline && total == Some(completed) && completed > 0;
+        if let Some(total) = total {
+            clock
+                .estimate
+                .set_length(total.saturating_sub(clock.baseline) as u64);
+            clock
+                .estimate
+                .set_position(completed.saturating_sub(clock.baseline) as u64);
+        }
+        timing.save(total == Some(completed))
     }
 }
 
@@ -121,12 +266,100 @@ impl Drop for WorkerControl {
         if let Some(monitor) = &self.monitor {
             monitor.abort();
         }
+        if let Some(timing) = &self.timing
+            && let Err(error) = timing.lock().unwrap().save(true)
+        {
+            eprintln!("Could not checkpoint final stage timing: {error}");
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_progress_has_unknown_timing() -> Result<(), serde_json::Error> {
+        let progress: StageProgress = serde_json::from_str(r#"{"completed":2,"total":5}"#)?;
+        assert!(progress.elapsed_ms.is_none());
+        assert!(progress.eta_ms.is_none());
+        assert!(!progress.reused);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resume_keeps_elapsed_but_checkpoints_do_not_contribute_to_speed() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("progress.json");
+        let control = WorkerControl::new(Some(directory.path().into()))?;
+        control.baseline(Stage::Restoration, 80, 100)?;
+        {
+            let mut timing = control.timing.as_ref().unwrap().lock().unwrap();
+            let clock = timing.active.as_mut().unwrap();
+            clock.started -= Duration::from_secs(20);
+            assert_eq!(clock.estimate.position(), 0);
+            assert_eq!(clock.estimate.length(), Some(20));
+            timing.save(false)?;
+        }
+        let saved: WorkerProgress = read_json(&path, "progress")?;
+        assert!(saved.stages[&Stage::Restoration].eta_ms.is_none());
+        control.progress(Stage::Restoration, 81, Some(100))?;
+        {
+            let timing = control.timing.as_ref().unwrap().lock().unwrap();
+            let clock = timing.active.as_ref().unwrap();
+            assert_eq!(clock.estimate.position(), 1);
+            let saved: WorkerProgress = read_json(&path, "progress")?;
+            let eta = saved.stages[&Stage::Restoration].eta_ms.unwrap();
+            // No second estimator or custom rounding: this is indicatif's value.
+            assert!(eta.abs_diff(clock.estimate.eta().as_millis() as u64) < 100);
+        }
+        drop(control);
+        let saved: WorkerProgress = read_json(&path, "progress")?;
+        let elapsed = saved.stages[&Stage::Restoration].elapsed_ms.unwrap();
+        assert!(elapsed >= 20_000);
+        assert!(saved.stages[&Stage::Restoration].eta_ms.is_none());
+        let resumed = WorkerControl::new(Some(directory.path().into()))?;
+        resumed.baseline(Stage::Restoration, 81, 100)?;
+        let saved: WorkerProgress = read_json(&path, "progress")?;
+        assert!(
+            saved.stages[&Stage::Restoration]
+                .elapsed_ms
+                .unwrap()
+                .abs_diff(elapsed)
+                < 1000
+        );
+        assert!(saved.stages[&Stage::Restoration].eta_ms.is_none());
+        resumed.progress(Stage::Restoration, 100, Some(100))?;
+        drop(resumed);
+        let reused = WorkerControl::new(Some(directory.path().into()))?;
+        reused.baseline(Stage::Restoration, 100, 100)?;
+        reused.progress(Stage::Restoration, 100, Some(100))?;
+        let saved: WorkerProgress = read_json(&path, "progress")?;
+        assert!(saved.stages[&Stage::Restoration].reused);
+        assert!(saved.stages[&Stage::Restoration].elapsed_ms.unwrap() >= elapsed);
+        assert!(saved.stages[&Stage::Restoration].eta_ms.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn heartbeat_updates_waiting_time_and_completed_stage_stays_frozen() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let control = WorkerControl::new(Some(directory.path().into()))?;
+        control.progress(Stage::Retrieval, 0, None)?;
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        let path = directory.path().join("progress.json");
+        let saved: WorkerProgress = read_json(&path, "progress")?;
+        assert!(saved.stages[&Stage::Retrieval].elapsed_ms.unwrap() >= 1000);
+        assert!(saved.stages[&Stage::Retrieval].eta_ms.is_none());
+        control.progress(Stage::Retrieval, 1, Some(1))?;
+        let saved: WorkerProgress = read_json(&path, "progress")?;
+        let elapsed = saved.stages[&Stage::Retrieval].elapsed_ms;
+        control.baseline(Stage::Passages, 0, 10)?;
+        drop(control);
+        let saved: WorkerProgress = read_json(&path, "progress")?;
+        assert_eq!(saved.stages[&Stage::Retrieval].elapsed_ms, elapsed);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn status_is_persistent_and_stop_is_seen_before_work_starts()

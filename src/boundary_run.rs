@@ -99,10 +99,10 @@ pub(crate) async fn prepare(
         }
     }
     let restored_count = results.iter().flatten().count();
-    provider.worker.progress(
+    provider.worker.baseline(
         crate::worker_control::Stage::Passages,
         restored_count,
-        Some(tasks.len()),
+        tasks.len(),
     )?;
     if restored_count > 0 {
         eprintln!(

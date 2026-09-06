@@ -245,7 +245,7 @@ pub(super) fn import_job(
             .take(700)
             .collect(),
         slide_sample: deck.slides[0].text.chars().take(700).collect(),
-        warnings: imported.warnings.iter().map(|w| format!("{w:?}")).collect(),
+        warnings: import_warnings(&imported.warnings),
     };
     if !transcribe_recording && !transcript.has_timestamps() {
         preview.warnings.push("此转写未提供时间戳。可以分析文本，但无法按段落定位或播放录音；不会凭文字长度猜测时间。".into());
@@ -271,6 +271,31 @@ pub(super) fn import_job(
     };
     save_job(directory, &job).map_err(|e| e.to_string())?;
     Ok(job)
+}
+
+fn import_warnings(warnings: &[pdf::ImportWarning]) -> Vec<String> {
+    let mut messages = Vec::new();
+    let mut sparse_pages = Vec::new();
+    for warning in warnings {
+        match warning {
+            pdf::ImportWarning::SparseText {
+                page,
+                non_whitespace_characters,
+            } => {
+                sparse_pages.push(format!("{page}（{non_whitespace_characters} 字符）"));
+            }
+            pdf::ImportWarning::SuspiciousGlyphs { page, glyphs } => {
+                messages.push(format!(
+                    "第 {page} 页包含疑似无法正确提取的字符：{}。请对照原始幻灯片检查。",
+                    glyphs.iter().collect::<String>()
+                ));
+            }
+        }
+    }
+    if !sparse_pages.is_empty() {
+        messages.insert(0, format!("以下页面提取到的文字较少（不计空白）：{}。标题页或图片页可能正常；请对照原始幻灯片检查，不代表导入失败。", sparse_pages.join("、")));
+    }
+    messages
 }
 
 fn probe_recording(path: &Path, require_audio: bool) -> Result<u64, String> {
@@ -330,6 +355,29 @@ pub(super) fn copy_restoration(previous: &Path, next: &Path) -> Result<(), io::E
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pdf_import_warnings_group_pages_and_explain_the_caveat() {
+        let warnings = import_warnings(&[
+            pdf::ImportWarning::SparseText {
+                page: 3,
+                non_whitespace_characters: 5,
+            },
+            pdf::ImportWarning::SparseText {
+                page: 11,
+                non_whitespace_characters: 7,
+            },
+            pdf::ImportWarning::SuspiciousGlyphs {
+                page: 12,
+                glyphs: vec!['\u{fffd}'],
+            },
+        ]);
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings[0].contains("3（5 字符）、11（7 字符）"));
+        assert!(warnings[0].contains("不代表导入失败"));
+        assert!(warnings[1].contains("第 12 页"));
+        assert!(warnings[1].contains('\u{fffd}'));
+    }
     #[test]
     fn job_paths_cannot_escape_the_application_root() {
         for invalid in [

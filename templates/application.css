@@ -6,6 +6,7 @@ body { margin: 0; display: grid; grid-template-columns: 260px minmax(0,1fr); min
 .brand { font-size: 24px; letter-spacing: -.8px; font-weight: 750; text-decoration: none; color: inherit; }
 .brand span { color: var(--accent); }
 .muted, small { color: #777385; font-size: 13px; line-height: 1.7; }
+.stage-timing { display: block; font-variant-numeric: tabular-nums; }
 .library .muted { margin-bottom: 30px; }
 .local-badge { color: #3c806b; font-size: 13px; padding-top: 20px; margin-top: auto; }
 .local-badge small { display: block; }

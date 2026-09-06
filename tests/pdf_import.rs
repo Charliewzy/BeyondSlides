@@ -4,6 +4,25 @@ use beyond_slides::ingestion::pdf::{ImportWarning, import};
 use beyond_slides::{Slide, SlideId};
 
 #[test]
+fn saved_page_text_uses_the_same_checks_and_can_have_multiple_warnings() {
+    use beyond_slides::ingestion::pdf::page_text_warnings;
+    assert_eq!(
+        page_text_warnings(7, " □ □ � "),
+        vec![
+            ImportWarning::SparseText {
+                page: 7,
+                non_whitespace_characters: 3
+            },
+            ImportWarning::SuspiciousGlyphs {
+                page: 7,
+                glyphs: vec!['□', '�']
+            },
+        ]
+    );
+    assert!(page_text_warnings(1, "正常文字提取共八字").is_empty());
+}
+
+#[test]
 fn pdf_pages_become_slides_without_a_repeated_footer() -> Result<(), Box<dyn Error>> {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pdf_import.pdf");
 

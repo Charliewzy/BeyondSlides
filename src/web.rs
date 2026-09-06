@@ -1,6 +1,7 @@
 mod export;
 mod jobs;
 mod logs;
+mod slide_review;
 mod transcription;
 mod usage;
 pub(crate) mod worker;
@@ -44,6 +45,7 @@ struct App {
     port: u16,
     launching: Arc<Mutex<HashSet<String>>>,
     cursors: Arc<Mutex<HashMap<PathBuf, TraceCursor>>>,
+    preview_renders: Arc<tokio::sync::Semaphore>,
 }
 
 pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>> {
@@ -60,6 +62,7 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
         port,
         launching: Arc::default(),
         cursors: Arc::default(),
+        preview_renders: Arc::new(tokio::sync::Semaphore::new(2)),
     };
     let router = Router::new()
         .route(
@@ -97,6 +100,8 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
         )
         .route("/api/jobs", get(list_jobs).post(upload))
         .route("/api/jobs/{id}", get(job_status))
+        .route("/api/jobs/{id}/slide-review", get(review_pages))
+        .route("/api/jobs/{id}/slide-review/{page}", get(review_image))
         .route(
             "/api/jobs/{id}/start",
             post(start).layer(DefaultBodyLimit::max(64 * 1024)),
@@ -612,6 +617,25 @@ async fn stop(
         .ok_or_else(|| AppError::bad("No run to stop"))?;
     fs::write(run.directory(&directory).join("control/stop-requested"), [])?;
     Ok(Json(json!({"stopping": true})))
+}
+
+async fn review_pages(
+    State(app): State<App>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<slide_review::ReviewPage>>, AppError> {
+    let directory = job_path(&app.root, &id)?;
+    read_job(&directory)?;
+    Ok(Json(slide_review::pages(&directory)?))
+}
+
+async fn review_image(
+    State(app): State<App>,
+    Path((id, page)): Path<(String, u32)>,
+) -> Result<Response, AppError> {
+    let directory = job_path(&app.root, &id)?;
+    read_job(&directory)?;
+    let image = slide_review::image(&directory, page, &app.preview_renders).await?;
+    Ok(([(header::CONTENT_TYPE, "image/png")], image).into_response())
 }
 
 async fn report_file(

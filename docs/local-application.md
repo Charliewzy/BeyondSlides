@@ -25,6 +25,15 @@ and the existing dense-retrieval model may download on first use.
    requires an audio track. The whole upload is limited to 4 GiB.
 2. Inspect the text preview and extraction warnings. Upload/preview does not
    contact the analysis provider.
+   “建议检查的页面” lists flagged pages in a horizontal thumbnail strip, with
+   page numbers and warnings. Click to compare an enlarged page with its
+   extracted text; arrow buttons, keyboard focus, and native scrolling support
+   browsing. Review is optional and never blocks analysis. Existing imports
+   use the same warning checks against saved slide text; no migration or model
+   call is required. Only requested flagged pages are rendered, with two
+   concurrent Poppler renders at most and a 30-second rendering timeout.
+   Preview PNGs live in a separate per-job `slide-review/` cache, not report
+   assets or analysis checkpoints. Preview failures leave analysis available.
 3. Enter your OpenAI-compatible base URL, exact model name, and API key. Text
    is sent to that endpoint; original media is not attached to model requests.
    Advanced settings accept provider-specific request JSON. For GLM, disabling

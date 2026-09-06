@@ -84,25 +84,7 @@ fn normalize_pages(extracted: &str) -> Result<ImportedDeck, ImportError> {
             .map_err(|_| ImportError::TooManyPages)?;
         let page = id.0.checked_add(1).ok_or(ImportError::TooManyPages)?;
         let text = lines.join("\n");
-        let non_whitespace_characters = text
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .count();
-        if non_whitespace_characters < SPARSE_TEXT_THRESHOLD {
-            warnings.push(ImportWarning::SparseText {
-                page,
-                non_whitespace_characters,
-            });
-        }
-        let glyphs: Vec<_> = text
-            .chars()
-            .filter(|character| matches!(character, '\u{25a1}' | '\u{fffd}'))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        if !glyphs.is_empty() {
-            warnings.push(ImportWarning::SuspiciousGlyphs { page, glyphs });
-        }
+        warnings.extend(page_text_warnings(page, &text));
         slides.push(Slide { id, text });
     }
 
@@ -110,6 +92,29 @@ fn normalize_pages(extracted: &str) -> Result<ImportedDeck, ImportError> {
         slide_deck: SlideDeck { slides },
         warnings,
     })
+}
+
+/// Checks extracted page text, including saved imports. `page` is the PDF's
+/// one-based page number, used only to locate warnings in the original document.
+pub fn page_text_warnings(page: u32, text: &str) -> Vec<ImportWarning> {
+    let mut warnings = Vec::new();
+    let non_whitespace_characters = text.chars().filter(|c| !c.is_whitespace()).count();
+    if non_whitespace_characters < SPARSE_TEXT_THRESHOLD {
+        warnings.push(ImportWarning::SparseText {
+            page,
+            non_whitespace_characters,
+        });
+    }
+    let glyphs: Vec<_> = text
+        .chars()
+        .filter(|c| matches!(c, '\u{25a1}' | '\u{fffd}'))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if !glyphs.is_empty() {
+        warnings.push(ImportWarning::SuspiciousGlyphs { page, glyphs });
+    }
+    warnings
 }
 
 fn repeated_footer(pages: &[Vec<String>]) -> Option<String> {

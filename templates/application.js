@@ -4,6 +4,51 @@ let currentId = null;
 let pollingTimer;
 let jobs = [];
 let debugLoading = false;
+let reviewJob = null;
+let reviewLoading = false;
+let reviewLoaded = false;
+
+function showReviewPage(page, source) {
+  $("review-page-title").textContent = `第 ${page.page} 页`;
+  $("review-page-warning").textContent = page.warnings.join("；");
+  $("review-page-image").src = source;
+  $("review-page-image").alt = `第 ${page.page} 页原始幻灯片`;
+  $("review-page-text").textContent = page.text || "（未提取到文字）";
+  $("review-dialog").showModal();
+}
+async function loadSlideReview() {
+  if (!currentId || !$("source-preview").open || reviewLoading || reviewLoaded) return;
+  const id = currentId;
+  reviewLoading = true;
+  $("review-status").textContent = "正在检查已保存的幻灯片文字…";
+  $("review-retry").hidden = true;
+  try {
+    const pages = await api(`/api/jobs/${id}/slide-review`);
+    if (id !== currentId) return;
+    $("review-strip").replaceChildren();
+    for (const page of pages) {
+      const source = `/api/jobs/${id}/slide-review/${page.page}`;
+      const button = document.createElement("button"); button.type = "button"; button.className = "review-card";
+      button.setAttribute("aria-label", `检查第 ${page.page} 页`);
+      const image = document.createElement("img"); image.src = source; image.alt = `第 ${page.page} 页预览`; image.loading = "lazy";
+      image.addEventListener("error", () => { image.alt = "预览暂不可用；点击仍可查看提取文字"; });
+      const title = document.createElement("strong"); title.textContent = `第 ${page.page} 页`;
+      const warning = document.createElement("small"); warning.textContent = page.warnings.join("\n");
+      button.append(image, title, warning); button.addEventListener("click", () => showReviewPage(page, source));
+      $("review-strip").append(button);
+    }
+    reviewLoaded = true;
+    $("review-status").textContent = pages.length ? `${pages.length} 页建议检查 · 可左右滚动` : "未发现文字稀少或疑似异常字符的页面。此检查不保证提取完整。";
+    updateReviewArrows();
+  } catch (error) {
+    if (id === currentId) { $("review-status").textContent = `预览暂不可用：${error.message}。不影响开始分析。`; $("review-retry").hidden = false; reviewLoaded = true; }
+  } finally { if (id === currentId) reviewLoading = false; }
+}
+function updateReviewArrows() {
+  const strip = $("review-strip");
+  $("review-left").disabled = strip.scrollLeft <= 1;
+  $("review-right").disabled = strip.scrollLeft + strip.clientWidth >= strip.scrollWidth - 1;
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { "X-BeyondSlides": "local-ui", ...(typeof options.body === "string" ? { "Content-Type": "application/json" } : {}), ...options.headers } });
@@ -93,6 +138,12 @@ function transcriptionProgress(row, progress, count, observed, active) {
 }
 function render(status) {
   const { job, usage, state } = status;
+  if (reviewJob !== job.id) {
+    reviewJob = job.id; reviewLoading = false; reviewLoaded = false;
+    $("review-strip").replaceChildren(); $("review-status").textContent = "";
+    $("review-dialog").close();
+  }
+  loadSlideReview();
   $("lecture-title").textContent = job.name;
   $("lecture-meta").textContent = `${job.preview.slide_count} 张幻灯片 · ${job.preview.segment_count ? `${job.preview.segment_count} 个转写片段` : "等待本地转写"} · ${job.preview.duration_ms !== null ? `转写时长 ${duration(job.preview.duration_ms)}` : job.preview.segment_count ? "无转写时间戳" : `录音时长 ${duration(job.preview.recording_duration_ms || 0)}`}${job.recording ? " · 已附录音/视频" : " · 无录音回放"}`;
   $("transcript-preview").textContent = job.preview.transcript_sample || "开始处理后，先用本机 CPU 转写录音，再进行分析。";
@@ -166,6 +217,15 @@ async function poll() {
   if (id === currentId) { clearTimeout(pollingTimer); pollingTimer = setTimeout(poll, 1000); }
 }
 $("debug-panel").addEventListener("toggle", pollDebug);
+$("source-preview").addEventListener("toggle", () => { loadSlideReview(); updateReviewArrows(); });
+$("review-retry").addEventListener("click", () => { reviewLoaded = false; loadSlideReview(); });
+$("review-close").addEventListener("click", () => $("review-dialog").close());
+$("review-page-image").addEventListener("error", () => { $("review-page-image").alt = "图片预览暂不可用，请稍后重试；仍可检查右侧提取文字。"; });
+$("review-strip").addEventListener("scroll", updateReviewArrows, { passive: true });
+window.addEventListener("resize", updateReviewArrows);
+for (const [id, direction] of [["review-left", -1], ["review-right", 1]]) {
+  $(id).addEventListener("click", () => $("review-strip").scrollBy({ left: direction * $("review-strip").clientWidth * .8, behavior: "smooth" }));
+}
 $("debug-kind").addEventListener("change", () => { $("debug-output").textContent = ""; $("debug-download").hidden = true; pollDebug(); });
 $("debug-follow").addEventListener("change", pollDebug);
 $("debug-output").addEventListener("scroll", () => {

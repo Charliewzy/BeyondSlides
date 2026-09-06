@@ -39,6 +39,16 @@
       <details class="card" id="source-preview" open><summary>检查导入内容</summary>
         <div class="preview-grid"><div><h3>转写预览</h3><p id="transcript-preview"></p></div><div><h3>第一页文字</h3><p id="slide-preview"></p></div></div>
         <p id="source-warnings" class="warning"></p>
+        <section id="slide-review" aria-labelledby="slide-review-title">
+          <div class="section-heading"><h3 id="slide-review-title">建议检查的页面</h3><div class="review-arrows">
+            <button type="button" id="review-left" aria-label="向左浏览建议检查的页面">←</button>
+            <button type="button" id="review-right" aria-label="向右浏览建议检查的页面">→</button>
+          </div></div>
+          <p class="muted">标题页或图片页文字少可能正常。点击缩略图对照原始页面与提取文字；无需确认即可继续分析。</p>
+          <p id="review-status" class="muted" role="status"></p>
+          <button type="button" id="review-retry" hidden>重新加载预览</button>
+          <div id="review-strip" class="review-strip" tabindex="0" aria-label="建议检查的幻灯片，按页码排列"></div>
+        </section>
       </details>
       <section class="card" id="provider-panel">
         <h2>分析模型</h2>
@@ -84,5 +94,10 @@
       </section>
     </section>
   </main>
+  <dialog id="review-dialog" aria-labelledby="review-page-title">
+    <div class="section-heading"><h2 id="review-page-title"></h2><button type="button" id="review-close" autofocus>关闭</button></div>
+    <p id="review-page-warning" class="warning"></p>
+    <div class="review-detail"><img id="review-page-image" alt=""><div><h3>提取文字</h3><p id="review-page-text"></p></div></div>
+  </dialog>
 </body>
 </html>

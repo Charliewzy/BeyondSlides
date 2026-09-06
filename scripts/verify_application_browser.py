@@ -36,6 +36,23 @@ def main():
             assert page.locator("#api-key").input_value() == ""
             page.reload()
             page.locator("#open-report").wait_for(state="visible")
+            # Existing jobs need no migration or new analysis to review sources.
+            page.get_by_text("检查导入内容", exact=True).click()
+            review_card = page.get_by_role("button", name="检查第 3 页", exact=True)
+            review_card.wait_for(state="visible")
+            page.wait_for_function("document.querySelector('.review-card img')?.naturalWidth > 0")
+            assert "仅提取到 0 个字符" in review_card.inner_text()
+            assert page.request.get(f"{url}/api/jobs/{job}/slide-review/0").status == 404
+            assert page.request.get(f"{url}/api/jobs/{job}/slide-review/1").status == 404
+            review_card.click()
+            assert page.locator("#review-dialog").is_visible()
+            assert page.locator("#review-page-title").inner_text() == "第 3 页"
+            assert page.locator("#review-page-text").inner_text() == "（未提取到文字）"
+            page.wait_for_function("document.getElementById('review-page-image').naturalWidth > 0")
+            page.screenshot(path=str(args.workspace / "browser-slide-review.png"), full_page=True)
+            page.keyboard.press("Escape")
+            assert not page.locator("#review-dialog").is_visible()
+            page.get_by_text("检查导入内容", exact=True).click()
             page.locator("#debug-panel summary").click()
             page.wait_for_function("document.getElementById('debug-status').textContent.length > 0")
             assert "local-test-secret" not in page.locator("#debug-output").inner_text()
@@ -130,6 +147,31 @@ def main():
             assert "无转写时间戳" in page.locator("#lecture-meta").inner_text()
             assert "借用" in page.locator("#transcript-preview").inner_text()
             assert page.locator("#start-button").is_visible()
+            page.get_by_role("button", name="检查第 3 页", exact=True).wait_for(state="visible")
+            page.get_by_role("button", name="检查第 3 页", exact=True).click()
+            assert page.locator("#review-dialog").is_visible()
+            assert page.locator("#review-dialog").evaluate("element => element.scrollWidth <= element.clientWidth")
+            page.locator("#review-close").click()
+            # UI-only many-page case verifies horizontal navigation on mobile.
+            preview_png = page.request.get(f"{url}/api/jobs/{job}/slide-review/3").body()
+            page.route("**/slide-review/*", lambda route: route.fulfill(content_type="image/png", body=preview_png))
+            page.route("**/slide-review", lambda route: route.fulfill(json=[dict(page=i, text="检查文字", warnings=["仅提取到 4 个字符"]) for i in range(1, 13)]))
+            page.evaluate("reviewLoaded = false; loadSlideReview()")
+            page.wait_for_function("document.querySelectorAll('.review-card').length === 12")
+            page.locator("#review-right").click()
+            page.wait_for_function("document.getElementById('review-strip').scrollLeft > 0")
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            page.screenshot(path=str(args.workspace / "browser-slide-review-mobile.png"), full_page=True)
+            page.unroute("**/slide-review")
+            page.route("**/slide-review", lambda route: route.fulfill(status=503, json={"error": "Temporary preview failure"}))
+            page.evaluate("reviewLoaded = false; loadSlideReview()")
+            page.locator("#review-retry").wait_for(state="visible")
+            assert page.locator("#start-button").is_enabled()
+            page.unroute("**/slide-review")
+            page.route("**/slide-review", lambda route: route.fulfill(json=[]))
+            page.locator("#review-retry").click()
+            page.wait_for_function("document.getElementById('review-status').textContent.includes('未发现')")
+            assert page.locator(".review-card").count() == 0
             assert not errors, errors
             browser.close()
         print("Browser checks passed: reload, debug logs/download/escaping/follow, reader, export, mobile, source mode, untimed import, no JS errors")

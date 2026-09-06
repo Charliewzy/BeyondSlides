@@ -20,7 +20,10 @@ Importance and novelty are ranked relative to other passages in the same
 lecture through repeated best--worst comparisons. Their stored comparison
 counts and percentiles remain uncertain semantic judgments, not objective
 facts or cross-lecture measurements. Reports derive `1..5` display levels from
-those percentiles. Connection strength remains a per-passage `0..5` judgment.
+those percentiles. Connection strength is a per-passage `0..5` judgment in the
+legacy window-owned preparation mode. Boundary-first preparation does not
+assess it and stores `None`; the report displays “未评估”, distinct from a
+measured zero.
 Optional comparison notes support debugging and evaluation but are neither
 required nor shown to a learner by default.
 
@@ -154,7 +157,7 @@ struct RestoredLecturePassage {
     source_end: TranscriptSegmentId,
     slide_position: SlideId,
     novelty: Score5,
-    connection_strength: Score5,
+    connection_strength: Option<Score5>,
     importance: Score5,
     comparative_novelty: Option<ComparativeScore>,
     comparative_importance: Option<ComparativeScore>,
@@ -171,7 +174,7 @@ lecture-wide comparative scores. Comparative evidence stores comparison count,
 most and least selections, and percentile in basis points. The optional form
 keeps older preliminary artifacts readable; a newly completed analysis has
 both comparative scores for every passage. Connection strength remains a
-validated inclusive `0..5` value. Related slide IDs must exist and contain no
+validated inclusive `0..5` value when assessed, otherwise `None`. Related slide IDs must exist and contain no
 duplicates. Summary and comparison note remain optional.
 
 ## 5. Pipeline
@@ -291,6 +294,10 @@ backward moves are cheap, and large jumps remain possible with higher cost.
 
 ### 5.5 Passage-preparation conversation
 
+The following conversation and projection describe the default `windows`
+preparation mode. `BEYOND_SLIDES_PASSAGE_PREPARATION=boundaries` selects the
+alternative described below; both feed the same comparative ranking and report.
+
 The model receives left context, owned readable text, right context, inferred
 slide position, and a nearby slide neighborhood. It may call:
 
@@ -332,6 +339,45 @@ counts per accepted window.
 
 Each projected byte range is mapped to the first and last supporting restored
 span. Those spans supply the passage's coarse raw transcript provenance.
+
+#### Alternative preparation: boundary classification
+
+`passage_boundaries.rs` owns candidate generation, task validation, global
+partition selection, and source-backed assembly. It sees the complete restored
+text, not pre-existing window-owned passages. Sentence/semicolon/newline
+punctuation supplies candidate gaps; long units may also split at commas.
+Colons are deliberately excluded, avoiding cuts inside Rust paths or between
+list introductions and their content. These are candidate positions, not
+automatic paragraph boundaries.
+
+Each request contains two windows of 48 owned gaps, with eight context atoms
+on each side. Every owned gap must be classified exactly once using its input
+ID as `continue`, `possible_break`, `preferred_break`, or `required_break`.
+The model sees neither importance scores nor slide evidence in this stage.
+The shared model conversation supplies bounded retries/repairs and full traces,
+under the `passage_boundaries` workflow. The CLI runs a canary first and shares
+adaptive admission with restoration and comparisons.
+
+The global DP prefers 80–280-character passages with a 450-character maximum.
+`continue` gaps cannot be cut, and `required_break` gaps cannot be crossed.
+An infeasible classification fails explicitly with its checkpoints preserved;
+it is not silently reinterpreted as permission to split anywhere. Complete
+source bytes and coarse supporting ranges are validated before ranking.
+
+This path does not run the old tool-calling preparation first. It infers slide
+positions on the resulting passages; novelty obtains its own retrieval and
+slide-neighborhood evidence. Optional summaries/notes and related-slide
+judgments are empty, connection strength is unassessed (`None`),
+and importance/novelty are assigned only by subsequent comparative ranking.
+
+`boundary_run.rs` persists validated model classifications in
+`boundaries/<identity-hash>/batch-NNNN.json`. The identity includes exact task
+inputs, prompt, provider/model, extra request fields, and output-token budget;
+operational scheduling and downstream comparison settings do not invalidate
+these records. Source, retrieval, classification identity, and exact assembled
+passages bind the separate comparative checkpoints. `boundary-preparation.json`
+records timings, passage lengths, and batch diagnostics. The saved analysis's
+legacy copied-text window diagnostics are empty because no projection was done.
 
 ### 5.7 Comparative importance and novelty
 

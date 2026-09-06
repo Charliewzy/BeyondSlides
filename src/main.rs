@@ -1,4 +1,5 @@
 mod analysis_run;
+mod boundary_run;
 mod report_assets;
 mod restoration_review_run;
 mod restoration_run;

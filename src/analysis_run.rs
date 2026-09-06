@@ -27,6 +27,7 @@ use crate::run_support::{
     write_json_atomically, write_text_atomically,
 };
 use crate::{
+    boundary_run,
     report_assets::{prepare_audio_asset, render_pdf_slides},
     restoration_run,
 };
@@ -54,11 +55,41 @@ const QUALITY_FILE: &str = "annotation-quality.json";
 const RESTORATION_DIRECTORY: &str = "restoration";
 const COMPARISON_DIRECTORY: &str = "comparisons";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PassagePreparationMode {
+    Windows,
+    Boundaries,
+}
+
+impl PassagePreparationMode {
+    fn parse(value: &str) -> Result<Self, io::Error> {
+        match value {
+            "windows" => Ok(Self::Windows),
+            "boundaries" => Ok(Self::Boundaries),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "BEYOND_SLIDES_PASSAGE_PREPARATION must be windows or boundaries",
+            )),
+        }
+    }
+
+    fn from_environment() -> Result<Self, io::Error> {
+        match std::env::var("BEYOND_SLIDES_PASSAGE_PREPARATION") {
+            Ok(value) => Self::parse(&value),
+            Err(std::env::VarError::NotPresent) => Ok(Self::Windows),
+            Err(error) => Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
+        }
+    }
+}
+
 pub async fn run_canary(
     transcript_path: &OsStr,
     slides_path: &OsStr,
     output_path: &OsStr,
 ) -> Result<(), Box<dyn Error>> {
+    if PassagePreparationMode::from_environment()? == PassagePreparationMode::Boundaries {
+        return Err("analyze-canary is the legacy window-preparation canary; use analyze for boundary preparation, which runs its first boundary batch alone".into());
+    }
     let transcript_path = PathBuf::from(transcript_path);
     let slides_path = PathBuf::from(slides_path);
     let output_path = PathBuf::from(output_path);
@@ -124,6 +155,7 @@ pub async fn run_complete(
     audio_path: Option<&OsStr>,
     timed_tokens_path: Option<&OsStr>,
 ) -> Result<(), Box<dyn Error>> {
+    let preparation_mode = PassagePreparationMode::from_environment()?;
     let transcript_path = PathBuf::from(transcript_path);
     let slides_path = PathBuf::from(slides_path);
     let run_directory = PathBuf::from(run_directory);
@@ -154,7 +186,12 @@ pub async fn run_complete(
         &run_directory,
         &manifest,
         "passage preparation",
-        AnalysisRunManifest::preparation_compatible,
+        |actual, expected| match preparation_mode {
+            PassagePreparationMode::Windows => actual.preparation_compatible(expected),
+            // Boundary classifications have their own complete, hashed identity.
+            // The legacy root manifest guards source reuse, not this new stage.
+            PassagePreparationMode::Boundaries => actual.sources_compatible(expected),
+        },
     )?;
     provider.record_execution_settings(&run_directory)?;
     let sources = ValidatedSources::new(transcript, slide_deck)?;
@@ -168,73 +205,55 @@ pub async fn run_complete(
     let hybrid = HybridSlideScorer::new(&lexical, &dense);
     let client = analysis_client(&provider, open_run_model_trace(&run_directory)?)?;
 
-    eprintln!("Preparing the lecture and scoring every transcript window...");
-    let mut session = LectureAnalysisSession::prepare(
-        &client,
-        sources,
-        restored_transcript,
-        &hybrid,
-        lecture_config(&provider)?,
-    )?;
-    restore_checkpoints(&mut session, &run_directory)?;
-
-    let passage_progress =
-        window_progress_bar(session.window_count(), session.completed_window_count())?;
-    if session.window_count() > 0 {
-        if session.completed_window_count() == 0 {
-            passage_progress.set_message("running passage-partition canary");
-        }
-        let canary = session.analyze_canary().await;
-        provider.record_scheduling(&run_directory)?;
-        let canary = canary?.expect("a nonempty transcript has a canary");
-        write_json_atomically(
-            &checkpoint_path(&run_directory, 1),
-            canary,
-            "window checkpoint",
-        )?;
-        passage_progress.set_position(session.completed_window_count() as u64);
-    }
-
-    passage_progress.set_message("preparing lecture passages");
-    let result = session
-        .complete_analysis_with_progress(|event| {
-            let window_number = event.window_index + 1;
-            write_json_atomically(
-                &checkpoint_path(&run_directory, window_number),
-                event.result,
-                "window checkpoint",
-            )
-            .map_err(|error| Box::new(error) as LectureAnalysisProgressError)?;
-            passage_progress.set_position(event.completed_windows as u64);
-            provider
-                .record_scheduling(&run_directory)
-                .map_err(|error| Box::new(error) as LectureAnalysisProgressError)?;
-            passage_progress.set_message(
-                provider.progress_message(&format!("completed window {window_number}")),
-            );
-            Ok(())
-        })
-        .await;
-    provider.record_scheduling(&run_directory)?;
-    let result = match result {
-        Ok(result) => result,
-        Err(error) => {
-            passage_progress
-                .abandon_with_message("passage preparation interrupted; checkpoints preserved");
-            return Err(error.into());
-        }
-    };
-    passage_progress.finish_with_message("passage preparation complete");
+    let (analysis, window_diagnostics, window_projections, boundary_identity) =
+        match preparation_mode {
+            PassagePreparationMode::Windows => {
+                let result = prepare_window_passages(
+                    &client,
+                    &provider,
+                    sources,
+                    restored_transcript,
+                    &hybrid,
+                    &run_directory,
+                )
+                .await?;
+                let diagnostics = result.window_diagnostics().to_vec();
+                let projections = result.window_projections().to_vec();
+                (result.into_analysis(), diagnostics, projections, None)
+            }
+            PassagePreparationMode::Boundaries => {
+                let result = boundary_run::prepare(
+                    &client,
+                    &provider,
+                    sources,
+                    restored_transcript,
+                    &hybrid,
+                    &run_directory,
+                    MAX_OUTPUT_TOKENS,
+                )
+                .await?;
+                (
+                    result.analysis,
+                    Vec::new(),
+                    Vec::new(),
+                    Some(result.identity),
+                )
+            }
+        };
 
     eprintln!("Preparing lecture-wide importance and novelty comparisons...");
     let mut ranking_session = ComparativeRankingSession::prepare(
         &client,
-        result.analysis(),
+        &analysis,
         &hybrid,
         comparative_ranking_config(&provider)?,
     )?;
-    let comparison_directories =
-        initialize_comparison_directories(&run_directory, &manifest, result.analysis())?;
+    let comparison_directories = initialize_comparison_directories(
+        &run_directory,
+        &manifest,
+        &analysis,
+        boundary_identity.as_ref(),
+    )?;
     restore_comparison_checkpoints(&mut ranking_session, &comparison_directories)?;
     let ranking_progress = ranking_progress_bar(
         ranking_session.batch_count(),
@@ -274,11 +293,7 @@ pub async fn run_complete(
     };
     ranking_progress.finish_with_message("comparative ranking complete");
 
-    let window_diagnostics = result.window_diagnostics().to_vec();
-    let window_projections = result.window_projections().to_vec();
-    let analysis = result
-        .into_analysis()
-        .with_comparative_rankings(ranking_result.into_rankings())?;
+    let analysis = analysis.with_comparative_rankings(ranking_result.into_rankings())?;
 
     let output = RestoredAnalysisArtifact {
         restored_transcript: analysis.restored_transcript().clone(),
@@ -296,17 +311,93 @@ pub async fn run_complete(
         audio_path.as_deref(),
         timed_tokens_path.as_deref(),
     )?;
-    let trace = read_model_trace(&model_trace_path(&run_directory))?;
-    let quality = summarize_annotation_quality(&output, &trace);
-    let quality_path = run_directory.join(QUALITY_FILE);
-    write_json_atomically(&quality_path, &quality, "annotation quality summary")?;
     println!(
         "Wrote complete lecture analysis to {} and report to {}",
         output_path.display(),
         report_path.display()
     );
-    print!("{}", render_annotation_quality(&quality));
+    if preparation_mode == PassagePreparationMode::Windows {
+        let trace = read_model_trace(&model_trace_path(&run_directory))?;
+        let quality = summarize_annotation_quality(&output, &trace);
+        let quality_path = run_directory.join(QUALITY_FILE);
+        write_json_atomically(&quality_path, &quality, "annotation quality summary")?;
+        print!("{}", render_annotation_quality(&quality));
+    } else {
+        println!(
+            "Boundary-first preparation: {} exact source-backed passages; see boundary-preparation.json for diagnostics (no copied-text projection stage).",
+            analysis.passages().len()
+        );
+    }
     Ok(())
+}
+
+async fn prepare_window_passages(
+    client: &ChatCompletionsClient,
+    provider: &ProviderSettings,
+    sources: ValidatedSources,
+    restored_transcript: RestoredTranscript,
+    scorer: &dyn beyond_slides::SlideScorer,
+    run_directory: &Path,
+) -> Result<beyond_slides::LectureAnalysisResult, Box<dyn Error>> {
+    eprintln!("Preparing the lecture and scoring every transcript window...");
+    let mut session = LectureAnalysisSession::prepare(
+        client,
+        sources,
+        restored_transcript,
+        scorer,
+        lecture_config(provider)?,
+    )?;
+    restore_checkpoints(&mut session, run_directory)?;
+
+    let passage_progress =
+        window_progress_bar(session.window_count(), session.completed_window_count())?;
+    if session.window_count() > 0 {
+        if session.completed_window_count() == 0 {
+            passage_progress.set_message("running passage-partition canary");
+        }
+        let canary = session.analyze_canary().await;
+        provider.record_scheduling(run_directory)?;
+        let canary = canary?.expect("a nonempty transcript has a canary");
+        write_json_atomically(
+            &checkpoint_path(run_directory, 1),
+            canary,
+            "window checkpoint",
+        )?;
+        passage_progress.set_position(session.completed_window_count() as u64);
+    }
+
+    passage_progress.set_message("preparing lecture passages");
+    let result = session
+        .complete_analysis_with_progress(|event| {
+            let window_number = event.window_index + 1;
+            write_json_atomically(
+                &checkpoint_path(run_directory, window_number),
+                event.result,
+                "window checkpoint",
+            )
+            .map_err(|error| Box::new(error) as LectureAnalysisProgressError)?;
+            passage_progress.set_position(event.completed_windows as u64);
+            provider
+                .record_scheduling(run_directory)
+                .map_err(|error| Box::new(error) as LectureAnalysisProgressError)?;
+            passage_progress.set_message(
+                provider.progress_message(&format!("completed window {window_number}")),
+            );
+            Ok(())
+        })
+        .await;
+    provider.record_scheduling(run_directory)?;
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            passage_progress
+                .abandon_with_message("passage preparation interrupted; checkpoints preserved");
+            return Err(error.into());
+        }
+    };
+    passage_progress.finish_with_message("passage preparation complete");
+
+    Ok(result)
 }
 
 pub fn render_saved_analysis(
@@ -532,6 +623,13 @@ impl AnalysisRunManifest {
     fn preparation_compatible(&self, expected: &Self) -> bool {
         self.preparation_identity() == expected.preparation_identity()
     }
+
+    fn sources_compatible(&self, expected: &Self) -> bool {
+        self.format_version == expected.format_version
+            && self.transcript_sha256 == expected.transcript_sha256
+            && self.slides_sha256 == expected.slides_sha256
+            && self.restored_transcript_sha256 == expected.restored_transcript_sha256
+    }
 }
 
 /// The legacy flat manifest remains readable; only these fields determine
@@ -562,7 +660,7 @@ struct PreparationIdentity {
 #[serde(deny_unknown_fields)]
 struct ComparisonRunManifest {
     format_version: u32,
-    preparation: PreparationIdentity,
+    preparation: PreparationCheckpointIdentity,
     passages_sha256: String,
     metric: ComparativeMetric,
     prompt_sha256: String,
@@ -570,6 +668,23 @@ struct ComparisonRunManifest {
     comparisons_per_batch: usize,
     seed: u64,
     evidence_limits: Option<(usize, usize)>,
+}
+
+// Untagged preserves the exact legacy serialized window identity and hence
+// existing comparison-directory hashes. Boundary identities have a distinct
+// shape and include the original sources and slide-retrieval dependencies.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(untagged)]
+enum PreparationCheckpointIdentity {
+    Windows(PreparationIdentity),
+    Boundaries {
+        boundary_classification: boundary_run::BoundaryRunIdentity,
+        transcript_sha256: String,
+        slides_sha256: String,
+        restored_transcript_sha256: String,
+        retrieval_mode: String,
+        dense_model: String,
+    },
 }
 
 impl ComparisonRunManifest {
@@ -590,7 +705,7 @@ impl ComparisonRunManifest {
         };
         Self {
             format_version: 1,
-            preparation: manifest.preparation_identity(),
+            preparation: PreparationCheckpointIdentity::Windows(manifest.preparation_identity()),
             passages_sha256,
             metric,
             prompt_sha256: prompt.clone(),
@@ -616,12 +731,23 @@ fn initialize_comparison_directories(
     run_directory: &Path,
     manifest: &AnalysisRunManifest,
     analysis: &ValidatedRestoredAnalysis,
+    boundary_identity: Option<&boundary_run::BoundaryRunIdentity>,
 ) -> Result<BTreeMap<ComparativeMetric, PathBuf>, Box<dyn Error>> {
     let passages_sha256 = sha256(&serde_json::to_vec(analysis.passages())?);
     [ComparativeMetric::Importance, ComparativeMetric::Novelty]
         .into_iter()
         .map(|metric| {
-            let stage = ComparisonRunManifest::new(manifest, passages_sha256.clone(), metric);
+            let mut stage = ComparisonRunManifest::new(manifest, passages_sha256.clone(), metric);
+            if let Some(identity) = boundary_identity {
+                stage.preparation = PreparationCheckpointIdentity::Boundaries {
+                    boundary_classification: identity.clone(),
+                    transcript_sha256: manifest.transcript_sha256.clone(),
+                    slides_sha256: manifest.slides_sha256.clone(),
+                    restored_transcript_sha256: manifest.restored_transcript_sha256.clone(),
+                    retrieval_mode: manifest.retrieval_mode.clone(),
+                    dense_model: manifest.dense_model.clone(),
+                };
+            }
             let directory = stage.directory(run_directory)?;
             initialize_run_directory(&directory, &stage, metric.name())?;
             Ok((metric, directory))
@@ -884,4 +1010,40 @@ mod tests {
             )
         );
     }
+}
+#[test]
+fn boundary_mode_keeps_source_guards_and_does_not_adopt_legacy_preparation() {
+    assert_eq!(
+        PassagePreparationMode::parse("boundaries").unwrap(),
+        PassagePreparationMode::Boundaries
+    );
+    assert_eq!(
+        PassagePreparationMode::parse("windows").unwrap(),
+        PassagePreparationMode::Windows
+    );
+    assert!(PassagePreparationMode::parse("typo").is_err());
+    let provider = ProviderSettings::new("https://example.test/v1", "secret", "model");
+    let baseline =
+        AnalysisRunManifest::new(&provider, "raw".into(), "slides".into(), "restored".into());
+    let mut changed = baseline.clone();
+    changed.annotation_prompt_sha256 = "new window prompt".into();
+    changed.model = "different model".into();
+    assert!(baseline.sources_compatible(&changed));
+    assert!(!baseline.preparation_compatible(&changed));
+    for field in [
+        "transcript_sha256",
+        "slides_sha256",
+        "restored_transcript_sha256",
+    ] {
+        let mut changed = serde_json::to_value(&baseline).unwrap();
+        changed[field] = Value::String("changed".into());
+        let changed = serde_json::from_value(changed).unwrap();
+        assert!(!baseline.sources_compatible(&changed), "{field}");
+    }
+    // The new enum must not change hashes of old comparison identities.
+    let legacy = baseline.preparation_identity();
+    assert_eq!(
+        serde_json::to_vec(&PreparationCheckpointIdentity::Windows(legacy.clone())).unwrap(),
+        serde_json::to_vec(&legacy).unwrap()
+    );
 }

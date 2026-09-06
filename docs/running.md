@@ -104,6 +104,55 @@ segment timing as a fallback.
 
 ## Resuming safely
 
+### Boundary-first passage preparation (opt-in)
+
+To avoid forced passage cuts at processing-window edges:
+
+```bash
+export BEYOND_SLIDES_PASSAGE_PREPARATION=boundaries
+cargo run --release -- analyze \
+  run/real_course/transcript.json \
+  run/real_course/slides.json \
+  run/real_course/passage-quality-20260906/production \
+  --slides-pdf data/real_course/slides.pdf \
+  --audio run/real_course/audio.flac \
+  --timed-tokens run/real_course/timed-tokens.json
+```
+
+Use the provider/thinking settings that match the restored checkpoints. The
+new mode restores raw transcript windows as before, then classifies candidate
+boundaries across the whole restored text. It does **not** run the legacy
+tool-calling passage preparation. New passages get inferred slide positions,
+then both comparative metrics run with pre-fetched novelty evidence. Related
+slides, summaries, notes, and connection strength are not judged in this mode;
+their fields are empty or `null`, not transferred from old passages. A `null`
+connection strength displays as “未评估”, not as a measured zero.
+
+`windows` remains the default. Select it explicitly to return to the original
+mode. `analyze-canary` is for that legacy mode; boundary-mode `analyze` already
+runs its first boundary batch alone before admitting later batches.
+
+Boundary checkpoints are stored under `boundaries/<identity-hash>/`. Changing
+the boundary prompt or task inputs selects a different directory; scheduling
+and comparison changes reuse completed classifications. Every loaded checkpoint
+is revalidated. Changing segmentation reruns the relevant comparisons but not
+restoration. The source hashes still guard against adopting another lecture.
+Switching preparation modes in an existing run preserves its checkpoints but
+replaces the final `analysis.json` and report; use a separate run directory to
+keep both reports, as this experiment does.
+
+If classifications cannot produce a legal partition within 450 characters,
+the run stops rather than cutting a model-declared inseparable span. The
+classifications remain inspectable; rerunning unchanged settings will not cure
+that deterministic conflict. Do not delete validated restoration to address it.
+
+`boundary-preparation.json` contains the new mode's diagnostics. The legacy
+`window_diagnostics` and `window_projections` arrays are empty in its analysis
+artifact because there was no copied-text projection stage. A pre-existing
+`annotation-quality.json` describes the old window mode, not the new run.
+
+### Checkpoint compatibility
+
 Run the same command against the same directory. Completed restoration windows,
 passage-preparation windows, and comparison batches are validated and reused.
 

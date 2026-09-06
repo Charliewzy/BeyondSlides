@@ -1,4 +1,4 @@
-/* PROTOTYPE: remove this file after selecting a lecture-minimap direction. */
+/* Binary lecture minimap; existing class names preserve report compatibility. */
 
 [data-minimap-prototype][hidden],
 [data-minimap-tooltip][hidden] { display: none; }

@@ -103,6 +103,11 @@ def main():
             reader.wait_for_load_state()
             assert reader.locator("[data-passage]").count() > 0
             assert reader.locator(".slide-item img").first.evaluate("img => img.complete && img.naturalWidth > 0")
+            assert "prototype=" not in reader.url
+            reader.locator("[data-minimap-prototype]").wait_for(state="visible")
+            assert reader.locator(".minimap-prototype-passage").count() == reader.locator("[data-passage]").count()
+            reader.set_viewport_size({"width": 390, "height": 844})
+            assert reader.locator("[data-minimap-prototype]").is_hidden()
             reader.close()
             with page.expect_download() as download:
                 page.locator("#export-report").click()

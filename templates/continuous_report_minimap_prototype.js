@@ -1,8 +1,5 @@
-// PROTOTYPE: one binary lecture minimap enabled by ?prototype=minimap.
+// Binary lecture minimap, enabled by default when the report has slides.
 (() => {
-  const parameters = new URLSearchParams(window.location.search);
-  if (parameters.get("prototype") !== "minimap") return;
-
   const passages = [...document.querySelectorAll("[data-passage]")];
   const transcript = document.querySelector(".continuous-transcript");
   const minimap = document.querySelector("[data-minimap-prototype]");

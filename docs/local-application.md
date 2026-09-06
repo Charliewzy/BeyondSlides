@@ -183,8 +183,11 @@ aligned lecture evidence.
 
 The first verified run is retained in `run/application-verification-20260906/`.
 Browser checks also covered import, reload/reconnection, report opening, token
-display, and a 390px layout without horizontal overflow. Existing
-prototype-gated minimap behavior is unchanged.
+display, and a 390px layout without horizontal overflow. Reports with slides
+show the middle binary minimap by default on wide screens; no prototype query
+parameter is needed. It remains hidden at widths of 70rem or less. Previously
+generated reports must be re-rendered to pick up template changes (no model
+inference is required).
 
 `--recording <recording.wav>` on the verifier exercises real local ASR before
 mock-model analysis. The 60-second real-lecture sample in

@@ -78,6 +78,43 @@ backoff retains a conversation slot while releasing the separate HTTP slot.
 The corrected results still support separate rate control. Original simulation
 outputs are retained as exploratory artifacts rather than overwritten.
 
+## Production integration check
+
+Ran the real Rust `analyze` command in the separate directory
+`run/real_course/adaptive-pipeline-NTRkf5/`, copying only upstream manifests,
+traces, and validated restoration/preparation checkpoints from the completed
+lecture. The original report and its checkpoints were left untouched. All 296
+copied upstream window files still match the original SHA-256 inventory.
+
+The adaptive run recomputed all 110 comparison batches (292 passages), then
+rendered the report with 80 slides and token-level audio timing for all passages.
+It took **82.57 seconds** including local preparation and rendering; the ranking
+timer displayed **1 minute 16 seconds**. The previous fixed-two resumed run took
+159.90 seconds overall and displayed 2 minutes 33 seconds for ranking. This is
+approximately 1.94× faster overall in these two runs, not a controlled guarantee
+across provider load or model response lengths.
+
+The scheduler reached its ceiling of eight with zero 429s and zero provider
+failures. There were 111 HTTP responses: 38 importance requests (one structured
+answer repair) and 73 novelty requests. Every batch ultimately passed the normal
+domain validation. The live telemetry snapshot is preserved as
+`request-scheduling-live.json`; its 174,245 ms admission wait is summed across
+concurrent requests, not 174 seconds of extra wall time.
+
+Chromium checks passed for all slide images, passage-to-slide and reverse
+navigation, hover highlighting, threshold controls, both playback modes,
+audio-current passage projection, and the draggable minimap prototype. The
+browser reported no page-level JavaScript errors. Artifacts are saved beside
+the new `report.html`.
+
+A subsequent offline resume changed mode to fixed, ceiling to three, and the
+spacing floor to 25 ms, using an unusable API key and unreachable HTTPS proxy.
+All upstream windows and all 110 comparison batches were reused. No model trace
+records were added; the current-invocation telemetry reports zero requests.
+This checks that operational adaptation remains separate from semantic
+checkpoint identity. Full Rust tests, Clippy, formatting checks, and the Python
+experiment tests passed before the integration commit.
+
 An initial combined candidate recovered pacing before considering concurrency;
 that left an unnecessarily low concurrency cap in place. The selected policy
 recovers whichever gate constrained demand. It never raises both controls in

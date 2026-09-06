@@ -67,6 +67,7 @@ pub async fn run_canary(
     restoration_run::run_complete(
         transcript_path.as_os_str(),
         restoration_directory.as_os_str(),
+        Some(provider.scheduler()),
     )
     .await?;
     let transcript: Transcript = read_json(&transcript_path, "transcript")?;
@@ -134,6 +135,7 @@ pub async fn run_complete(
     restoration_run::run_complete(
         transcript_path.as_os_str(),
         restoration_directory.as_os_str(),
+        Some(provider.scheduler()),
     )
     .await?;
     let (transcript, transcript_hash) = read_json_with_hash(&transcript_path, "transcript")?;
@@ -182,10 +184,9 @@ pub async fn run_complete(
         if session.completed_window_count() == 0 {
             passage_progress.set_message("running passage-partition canary");
         }
-        let canary = session
-            .analyze_canary()
-            .await?
-            .expect("a nonempty transcript has a canary");
+        let canary = session.analyze_canary().await;
+        provider.record_scheduling(&run_directory)?;
+        let canary = canary?.expect("a nonempty transcript has a canary");
         write_json_atomically(
             &checkpoint_path(&run_directory, 1),
             canary,
@@ -205,10 +206,16 @@ pub async fn run_complete(
             )
             .map_err(|error| Box::new(error) as LectureAnalysisProgressError)?;
             passage_progress.set_position(event.completed_windows as u64);
-            passage_progress.set_message(format!("completed window {window_number}"));
+            provider
+                .record_scheduling(&run_directory)
+                .map_err(|error| Box::new(error) as LectureAnalysisProgressError)?;
+            passage_progress.set_message(
+                provider.progress_message(&format!("completed window {window_number}")),
+            );
             Ok(())
         })
         .await;
+    provider.record_scheduling(&run_directory)?;
     let result = match result {
         Ok(result) => result,
         Err(error) => {
@@ -244,14 +251,18 @@ pub async fn run_complete(
             write_json_atomically(&path, event.result, "comparison checkpoint")
                 .map_err(|error| Box::new(error) as ComparativeRankingProgressError)?;
             ranking_progress.set_position(event.completed_batches as u64);
-            ranking_progress.set_message(format!(
+            provider
+                .record_scheduling(&run_directory)
+                .map_err(|error| Box::new(error) as ComparativeRankingProgressError)?;
+            ranking_progress.set_message(provider.progress_message(&format!(
                 "completed {} batch {}",
                 event.batch.metric.name(),
                 event.batch.batch_index + 1
-            ));
+            )));
             Ok(())
         })
         .await;
+    provider.record_scheduling(&run_directory)?;
     let ranking_result = match ranking_result {
         Ok(result) => result,
         Err(error) => {

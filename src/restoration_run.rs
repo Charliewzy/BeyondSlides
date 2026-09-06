@@ -88,11 +88,15 @@ pub async fn run_canary(
 pub async fn run_complete(
     transcript_path: &OsStr,
     run_directory: &OsStr,
+    shared_scheduler: Option<beyond_slides::RequestScheduler>,
 ) -> Result<(), Box<dyn Error>> {
     let started = Instant::now();
     let transcript_path = PathBuf::from(transcript_path);
     let run_directory = PathBuf::from(run_directory);
-    let provider = ProviderSettings::from_restoration_environment()?;
+    let mut provider = ProviderSettings::from_restoration_environment()?;
+    if let Some(scheduler) = shared_scheduler {
+        provider = provider.with_scheduler(scheduler);
+    }
     let (transcript, transcript_hash) = read_json_with_hash(&transcript_path, "transcript")?;
     let manifest = RestorationRunManifest::new(&provider, transcript_hash);
     initialize_run_directory_with(
@@ -112,10 +116,9 @@ pub async fn run_complete(
         if session.completed_window_count() == 0 {
             progress.set_message("running canary");
         }
-        let canary = session
-            .restore_canary()
-            .await?
-            .expect("a nonempty transcript has a restoration canary");
+        let canary = session.restore_canary().await;
+        provider.record_scheduling(&run_directory)?;
+        let canary = canary?.expect("a nonempty transcript has a restoration canary");
         write_json_atomically(
             &checkpoint_path(&run_directory, 1),
             canary,
@@ -135,10 +138,16 @@ pub async fn run_complete(
             )
             .map_err(|error| Box::new(error) as RestorationProgressError)?;
             progress.set_position(event.completed_windows as u64);
-            progress.set_message(format!("completed window {window_number}"));
+            provider
+                .record_scheduling(&run_directory)
+                .map_err(|error| Box::new(error) as RestorationProgressError)?;
+            progress.set_message(
+                provider.progress_message(&format!("completed window {window_number}")),
+            );
             Ok(())
         })
         .await;
+    provider.record_scheduling(&run_directory)?;
     let result = match result {
         Ok(result) => result,
         Err(error) => {

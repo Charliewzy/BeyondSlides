@@ -6,7 +6,9 @@ use std::{
     time::Duration,
 };
 
-use beyond_slides::{ChatCompletionsConfig, ChatCompletionsConfigError, ModelExchangeTrace};
+use beyond_slides::{
+    ChatCompletionsConfig, ChatCompletionsConfigError, ModelExchangeTrace, RequestScheduler,
+};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -28,17 +30,40 @@ pub(crate) struct ProviderSettings {
     model: String,
     extra_body: Option<Value>,
     execution: ExecutionSettings,
+    scheduler: RequestScheduler,
 }
 
 /// Operational settings do not change the identity of a validated checkpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(crate) struct ExecutionSettings {
+    mode: SchedulingMode,
     max_concurrency: NonZeroUsize,
     request_interval_ms: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SchedulingMode {
+    Fixed,
+    Adaptive,
+}
+
 impl ExecutionSettings {
-    fn parse(concurrency: Option<&str>, interval_ms: Option<&str>) -> Result<Self, io::Error> {
+    fn parse(
+        mode: Option<&str>,
+        concurrency: Option<&str>,
+        interval_ms: Option<&str>,
+    ) -> Result<Self, io::Error> {
+        let mode = match mode.unwrap_or("adaptive") {
+            "adaptive" => SchedulingMode::Adaptive,
+            "fixed" => SchedulingMode::Fixed,
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "invalid BEYOND_SLIDES_SCHEDULING: expected adaptive or fixed",
+                ));
+            }
+        };
         let invalid = |name| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -53,8 +78,13 @@ impl ExecutionSettings {
             )
         };
         Ok(Self {
+            mode,
             max_concurrency: concurrency
-                .unwrap_or("2")
+                .unwrap_or(if mode == SchedulingMode::Adaptive {
+                    "8"
+                } else {
+                    "2"
+                })
                 .parse()
                 .map_err(|_| invalid("BEYOND_SLIDES_MAX_CONCURRENCY"))?,
             request_interval_ms: interval_ms
@@ -62,6 +92,14 @@ impl ExecutionSettings {
                 .parse()
                 .map_err(|_| invalid("BEYOND_SLIDES_REQUEST_INTERVAL_MS"))?,
         })
+    }
+
+    fn scheduler(self) -> RequestScheduler {
+        let interval = Duration::from_millis(self.request_interval_ms);
+        match self.mode {
+            SchedulingMode::Fixed => RequestScheduler::fixed(self.max_concurrency, interval),
+            SchedulingMode::Adaptive => RequestScheduler::adaptive(self.max_concurrency, interval),
+        }
     }
 }
 
@@ -79,26 +117,31 @@ impl ProviderSettings {
             Some(extra_body) => Some(extra_body),
             None => optional_json_object(CHAT_EXTRA_BODY_ENV)?,
         };
+        let execution = ExecutionSettings::parse(
+            optional_environment_variable("BEYOND_SLIDES_SCHEDULING")?.as_deref(),
+            optional_environment_variable("BEYOND_SLIDES_MAX_CONCURRENCY")?.as_deref(),
+            optional_environment_variable("BEYOND_SLIDES_REQUEST_INTERVAL_MS")?.as_deref(),
+        )?;
         Ok(Self {
             base_url: required_environment_variable(API_BASE_URL_ENV)?,
             api_key: required_environment_variable(API_KEY_ENV)?,
             model: required_environment_variable(MODEL_ENV)?,
             extra_body,
-            execution: ExecutionSettings::parse(
-                optional_environment_variable("BEYOND_SLIDES_MAX_CONCURRENCY")?.as_deref(),
-                optional_environment_variable("BEYOND_SLIDES_REQUEST_INTERVAL_MS")?.as_deref(),
-            )?,
+            execution,
+            scheduler: execution.scheduler(),
         })
     }
 
     #[cfg(test)]
     pub(crate) fn new(base_url: &str, api_key: &str, model: &str) -> Self {
+        let execution = ExecutionSettings::parse(None, None, None).expect("valid defaults");
         Self {
             base_url: base_url.into(),
             api_key: api_key.into(),
             model: model.into(),
             extra_body: None,
-            execution: ExecutionSettings::parse(None, None).expect("valid defaults"),
+            execution,
+            scheduler: execution.scheduler(),
         }
     }
 
@@ -122,9 +165,35 @@ impl ProviderSettings {
         Duration::from_millis(self.execution.request_interval_ms)
     }
 
+    pub(crate) fn scheduler(&self) -> RequestScheduler {
+        self.scheduler.clone()
+    }
+
+    pub(crate) fn with_scheduler(mut self, scheduler: RequestScheduler) -> Self {
+        self.scheduler = scheduler;
+        self
+    }
+
+    pub(crate) fn record_scheduling(&self, directory: &Path) -> Result<(), io::Error> {
+        write_json_atomically(
+            &directory.join("request-scheduling.json"),
+            &self.scheduler.snapshot(),
+            "request scheduling telemetry",
+        )
+    }
+
+    pub(crate) fn progress_message(&self, task: &str) -> String {
+        let snapshot = self.scheduler.snapshot();
+        format!(
+            "{task} · HTTP {}/{} · {} ms spacing",
+            snapshot.effective_concurrency, snapshot.max_concurrency, snapshot.request_interval_ms
+        )
+    }
+
     pub(crate) fn record_execution_settings(&self, directory: &Path) -> Result<(), io::Error> {
         eprintln!(
-            "Model scheduling: concurrency {}, request spacing {} ms",
+            "Model scheduling: {:?}, concurrency ceiling {}, request spacing floor {} ms",
+            self.execution.mode,
             self.max_concurrency(),
             self.execution.request_interval_ms
         );
@@ -132,7 +201,8 @@ impl ProviderSettings {
             &directory.join("execution-settings.json"),
             &self.execution,
             "execution settings",
-        )
+        )?;
+        self.record_scheduling(directory)
     }
 
     pub(crate) fn chat_config(&self) -> Result<ChatCompletionsConfig, ChatCompletionsConfigError> {
@@ -141,7 +211,7 @@ impl ProviderSettings {
             self.api_key.clone(),
             self.model.clone(),
         )?
-        .with_minimum_request_interval(self.request_interval());
+        .with_request_scheduler(self.scheduler.clone());
         match &self.extra_body {
             Some(extra_body) => config.with_extra_body(extra_body.clone()),
             None => Ok(config),
@@ -406,18 +476,24 @@ mod tests {
 
     #[test]
     fn execution_defaults_and_overrides_are_validated() {
-        let defaults = ExecutionSettings::parse(None, None).unwrap();
-        assert_eq!(defaults.max_concurrency.get(), 2);
+        let defaults = ExecutionSettings::parse(None, None, None).unwrap();
+        assert_eq!(defaults.mode, SchedulingMode::Adaptive);
+        assert_eq!(defaults.max_concurrency.get(), 8);
+        assert_eq!(defaults.scheduler().snapshot().effective_concurrency, 2);
         assert_eq!(defaults.request_interval_ms, 0);
-        let custom = ExecutionSettings::parse(Some("7"), Some("250")).unwrap();
+        let custom = ExecutionSettings::parse(None, Some("7"), Some("250")).unwrap();
         assert_eq!(custom.max_concurrency.get(), 7);
         assert_eq!(custom.request_interval_ms, 250);
         for value in ["0", "-1", "", "2.5", "many"] {
-            assert!(ExecutionSettings::parse(Some(value), None).is_err());
+            assert!(ExecutionSettings::parse(None, Some(value), None).is_err());
         }
         for value in ["-1", "", "0.5", "NaN"] {
-            assert!(ExecutionSettings::parse(None, Some(value)).is_err());
+            assert!(ExecutionSettings::parse(None, None, Some(value)).is_err());
         }
+        let fixed = ExecutionSettings::parse(Some("fixed"), None, None).unwrap();
+        assert_eq!(fixed.max_concurrency.get(), 2);
+        assert!(!fixed.scheduler().snapshot().adaptive);
+        assert!(ExecutionSettings::parse(Some("maybe"), None, None).is_err());
     }
 
     #[test]

@@ -42,7 +42,7 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
             restoration_run::run_canary(transcript_path, run_directory).await
         }
         [command, transcript_path, run_directory] if command == OsStr::new("restore") => {
-            restoration_run::run_complete(transcript_path, run_directory).await
+            restoration_run::run_complete(transcript_path, run_directory, None).await
         }
         [command, transcript_path, run_directory, output_path]
             if command == OsStr::new("review-restoration") =>

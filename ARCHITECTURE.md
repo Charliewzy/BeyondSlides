@@ -452,14 +452,28 @@ validation remain local.
 The first window of each windowed stage runs alone as a canary. Comparative
 ranking instead accepts one batch for importance and one for novelty before
 launching either metric's remaining batches with bounded concurrency. Request
-starts can be paced across concurrent conversations. The CLI defaults to two
-concurrent work items and no fixed delay; `BEYOND_SLIDES_MAX_CONCURRENCY` and
-`BEYOND_SLIDES_REQUEST_INTERVAL_MS` configure these independently. Pacing is a
-minimum interval between request starts, not a sleep after every response.
-Timeouts, HTTP 408/429,
-transport failures, and 5xx responses have a bounded retry policy; numeric
-`Retry-After` is respected, while 429 without that header uses longer
-exponential backoff.
+attempts pass through a shared `RequestScheduler`. The CLI defaults to adaptive
+mode: start at two requests and grow gradually to a hard ceiling of eight when
+healthy demand is queued. `BEYOND_SLIDES_SCHEDULING` selects adaptive or fixed;
+`BEYOND_SLIDES_MAX_CONCURRENCY` sets the ceiling, and
+`BEYOND_SLIDES_REQUEST_INTERVAL_MS` sets a request-start spacing floor.
+
+HTTP 429 reduces the adaptive cap and learned sending rate and extends a shared
+cooldown. Generation-tagged feedback prevents one already-dispatched throttled
+wave from repeatedly halving the cap; stale successes cannot regrow it. Healthy
+epochs recover the constraining gate gradually. Latency helps compare the two
+gates, but is not itself treated as evidence of congestion. Fixed mode keeps
+its configured cap/spacing while still honoring shared cooldowns.
+
+All retries, repairs, and tool follow-ups acquire the same cancellation-safe
+attempt guard. Waiting and retry sleeps hold no HTTP slot, and pacing slots are
+committed only at admission. The CLI shares the scheduler across sequential
+stages in its configured provider scope; separate processes do not coordinate.
+Timeouts, HTTP 408/429, transport failures, and 5xx responses retain bounded
+retries with jitter. Retry-After supports seconds and dates without shortening
+valid long delays. A 5xx suppresses growth without automatically learning a
+quota. This is a bounded policy, not universal rate-limit discovery; see the
+research and experiment under `docs/`.
 
 `BEYOND_SLIDES_CHAT_EXTRA_BODY` supplies optional provider-specific JSON.
 `BEYOND_SLIDES_RESTORATION_CHAT_EXTRA_BODY` and
@@ -483,6 +497,7 @@ line is rejected.
 run/lecture-analysis/
 |-- manifest.json
 |-- execution-settings.json
+|-- request-scheduling.json
 |-- model-trace.jsonl
 |-- window-0001.json
 |-- window-0002.json
@@ -508,6 +523,7 @@ run/lecture-analysis/
 `-- restoration/
     |-- manifest.json
     |-- execution-settings.json
+    |-- request-scheduling.json
     |-- model-trace.jsonl
     |-- window-0001.json
     |-- ...
@@ -529,7 +545,9 @@ Compatibility is stage-specific: source hashes, relevant prompt/model/provider
 settings, windowing, retrieval, and output/tool limits still bind checkpoints.
 Concurrency, request pacing, and bounded retry/repair budgets do not invalidate
 an already accepted result. `execution-settings.json` records the latest
-concurrency and pacing separately. Every reused result still undergoes its
+mode, concurrency ceiling, and pacing floor separately. `request-scheduling.json`
+records current-invocation operational telemetry at checkpoints and stage ends;
+it is not checkpoint identity or a historical trace. Every reused result still undergoes its
 normal domain validation; an unmanifested checkpoint directory is not adopted.
 Secrets are excluded. See `docs/running.md` for commands and resume behavior.
 

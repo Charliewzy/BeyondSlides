@@ -36,7 +36,55 @@ def main():
             assert page.locator("#api-key").input_value() == ""
             page.reload()
             page.locator("#open-report").wait_for(state="visible")
+            page.locator("#debug-panel summary").click()
+            page.wait_for_function("document.getElementById('debug-status').textContent.length > 0")
+            assert "local-test-secret" not in page.locator("#debug-output").inner_text()
+            if page.locator("#debug-download").is_visible():
+                with page.expect_download() as log_download:
+                    page.locator("#debug-download").click()
+                assert log_download.value.failure() is None
+            else:
+                assert "尚无" in page.locator("#debug-status").inner_text()
+            # Deterministic UI-only cases: escaping, bounded-tail notice,
+            # scrolling pauses display, and follow reconnects to latest output.
+            log_text = ["<script>window.logExecuted = true</script>\n" + "debug line\n" * 200]
+            page.route("**/api/jobs/*/logs/worker", lambda route: route.fulfill(json={"text": log_text[0], "truncated": True, "available": True}))
+            page.wait_for_function("document.getElementById('debug-output').textContent.includes('<script>')")
+            assert page.evaluate("window.logExecuted === undefined")
+            page.locator("#debug-output").evaluate("element => { element.scrollTop = 0; }")
+            page.wait_for_function("!document.getElementById('debug-follow').checked")
+            frozen = page.locator("#debug-output").inner_text()
+            log_text[0] += "new output after pause\n"
+            page.wait_for_timeout(1200)
+            assert page.locator("#debug-output").inner_text() == frozen
+            page.locator("#debug-follow").check()
+            page.wait_for_function("document.getElementById('debug-output').textContent.includes('new output after pause')")
+            page.unroute("**/api/jobs/*/logs/worker")
+            page.locator("#debug-kind").select_option("transcription")
+            page.wait_for_timeout(1200)
+            assert page.locator("#debug-status").inner_text()
+            page.locator("#debug-kind").select_option("worker")
             page.screenshot(path=str(args.workspace / "browser-desktop.png"), full_page=True)
+            # UI-only progress cases: a weighted recognition percentage must
+            # not be confused with an overall job percentage or model loading.
+            status = page.request.get(f"{url}/api/jobs/{job}").json()
+            observed = dict(observer_version=1, phase="recognizing", attempt_started_ms=0,
+                            completed_regions=1, total_regions=3, completed_speech_ms=1000,
+                            total_speech_ms=4000, timings_seconds={}, reused=False)
+            status.update(state="running", transcription=observed)
+            status["job"]["transcribe_recording"] = True
+            status["progress"]["stages"]["transcription"] = dict(completed=0, total=None)
+            page.route(f"**/api/jobs/{job}", lambda route: route.fulfill(json=status))
+            page.wait_for_function("document.getElementById('stage-progress').textContent.includes('识别语音 · 25%')")
+            bar = page.get_by_role("progressbar", name="本地 CPU 转写")
+            assert bar.get_attribute("value") == "1000"
+            assert bar.get_attribute("max") == "4000"
+            observed["phase"] = "loading_models"
+            page.wait_for_function("document.querySelector('progress[aria-label=\"本地 CPU 转写\"]').getAttribute('value') === null")
+            status["state"] = "paused"
+            page.wait_for_function("document.querySelector('progress[aria-label=\"本地 CPU 转写\"]').value === 0")
+            page.unroute(f"**/api/jobs/{job}")
+            page.wait_for_function("document.getElementById('run-state').textContent === '处理完成'")
             with page.expect_popup() as opened:
                 page.locator("#open-report").click()
             reader = opened.value
@@ -67,7 +115,7 @@ def main():
             assert page.locator("#start-button").is_visible()
             assert not errors, errors
             browser.close()
-        print("Browser checks passed: reload, reader, export, mobile, source mode, untimed import, no JS errors")
+        print("Browser checks passed: reload, debug logs/download/escaping/follow, reader, export, mobile, source mode, untimed import, no JS errors")
     finally:
         server.terminate()
         server.wait(timeout=10)

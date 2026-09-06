@@ -33,7 +33,6 @@ impl Sink {
 struct Redactor {
     secrets: Vec<Vec<u8>>,
     pending: Vec<u8>,
-    lookbehind: usize,
 }
 
 impl Redactor {
@@ -50,24 +49,17 @@ impl Redactor {
             .collect();
         secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
         secrets.dedup();
-        let lookbehind = secrets.iter().map(Vec::len).max().unwrap_or(1) - 1;
         Self {
             secrets,
             pending: Vec::new(),
-            lookbehind,
         }
     }
 
     fn feed(&mut self, bytes: &[u8], eof: bool) -> Vec<u8> {
         self.pending.extend_from_slice(bytes);
-        let safe_end = if eof {
-            self.pending.len()
-        } else {
-            self.pending.len().saturating_sub(self.lookbehind)
-        };
         let mut result = Vec::new();
         let mut position = 0;
-        while position < safe_end {
+        while position < self.pending.len() {
             if let Some(secret) = self
                 .secrets
                 .iter()
@@ -75,6 +67,15 @@ impl Redactor {
             {
                 result.extend_from_slice(b"<REDACTED>");
                 position += secret.len();
+            } else if !eof
+                && self
+                    .secrets
+                    .iter()
+                    .any(|secret| secret.starts_with(&self.pending[position..]))
+            {
+                // Hold only a possible credential prefix, not an arbitrary
+                // suffix of every line. Ordinary output remains immediate.
+                break;
             } else {
                 result.push(self.pending[position]);
                 position += 1;
@@ -243,6 +244,13 @@ mod tests {
             output.extend(redactor.feed(&[], true));
             assert_eq!(output, b"prefix <REDACTED> suffix <REDACTED>");
         }
+    }
+    #[test]
+    fn ordinary_output_is_not_delayed_until_the_next_message() {
+        let mut redactor = Redactor::new("secret:123");
+        assert_eq!(redactor.feed(b"loaded model\n", false), b"loaded model\n");
+        assert_eq!(redactor.feed(b"next sec", false), b"next ");
+        assert_eq!(redactor.feed(b"ret:123\n", false), b"<REDACTED>\n");
     }
     #[test]
     fn encoded_credentials_and_final_partial_lines_are_redacted() {

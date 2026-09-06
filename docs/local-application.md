@@ -89,7 +89,9 @@ paths, so inspect them before sharing.
 Configured API keys (including JSON-escaped and URL-encoded forms) are redacted
 across pipe-read boundaries before browser-visible logs are saved. A lightweight
 worker supervisor owns the log pipes independently of the controller, preserving
-processing and log capture across server restarts. Python runs unbuffered. Old
+processing and log capture across server restarts. Python runs unbuffered.
+Workers started by this version also use a separate Unix process group, so a
+terminal Ctrl+C sent to the controller does not interrupt their processing. Old
 raw `worker.log`/`asr.log` files are never served; new captures use
 `worker-debug.log` and `transcription/asr-debug.log`. This is credential filtering,
 not a guarantee that arbitrary secrets printed by third-party code are removed.
@@ -197,6 +199,16 @@ imports one additional small test lecture into the specified workspace, and
 saves desktop/mobile screenshots there. It checks report/slide loading, ZIP
 download, reload/reconnection, source-mode controls, and untimed upload without
 contacting a model provider.
+
+Transcription visibility and log checks are retained in
+`run/transcription-observer-uzHolS/`. The instrumented 60-second recording
+produced exactly the same normalized transcript and timed tokens as the prior
+uninstrumented checkpoint. The application test additionally verifies measured
+ASR substages/timings, stopping during model loading, reuse after resume,
+sanitized log endpoints/downloads, and log availability after a controller
+restart. Browser tests cover weighted recognition percentages, indeterminate
+model loading, paused progress, log-source selection, escaping, and scrolling
+to pause/follow the bounded log display.
 
 HTTP implementation references: [Axum multipart uploads](https://docs.rs/axum/latest/axum/extract/struct.Multipart.html)
 and [Tower HTTP file serving](https://docs.rs/tower-http/latest/tower_http/services/struct.ServeDir.html).

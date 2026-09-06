@@ -10,6 +10,8 @@ No paid model endpoint is used. Artifacts are retained for browser inspection.
 import argparse
 import io
 import json
+import os
+import signal
 import subprocess
 import threading
 import time
@@ -66,7 +68,7 @@ def main():
     job_id = None
 
     def start_server():
-        process = subprocess.Popen([str(args.binary.resolve()), "serve", str(args.output.resolve()), "0"], stdout=subprocess.PIPE, text=True)
+        process = subprocess.Popen([str(args.binary.resolve()), "serve", str(args.output.resolve()), "0"], stdout=subprocess.PIPE, text=True, start_new_session=(os.name == "posix"))
         line = process.stdout.readline().strip()
         assert line.startswith("BeyondSlides application: "), line
         return process, httpx.Client(base_url=line.split(": ", 1)[1], timeout=60, headers={"X-BeyondSlides": "local-ui"}, trust_env=False)
@@ -122,12 +124,18 @@ def main():
         if args.recording:
             # Stop inside the indivisible ASR call: finish and checkpoint it,
             # but do not admit the first model conversation.
-            phase = args.output / job_id / "run-0001/control/asr-progress.json"
-            wait(lambda s: phase.is_file())
+            wait(lambda s: (s.get("transcription") or {}).get("observer_version") == 1)
             client.post(f"/api/jobs/{job_id}/stop").raise_for_status()
             wait(lambda s: s["state"] == "paused")
             assert Model.calls == 0
             assert (args.output / job_id / "transcription/checkpoint.json").is_file()
+            asr_progress = status()["transcription"]
+            assert asr_progress["phase"] == "complete"
+            assert asr_progress["completed_regions"] == asr_progress["total_regions"] > 0
+            for stage in ["loading_models", "detecting_speech", "recognizing", "punctuating", "saving", "finalizing"]:
+                assert asr_progress["timings_seconds"][stage] >= 0
+            asr_log = client.get(f"/api/jobs/{job_id}/logs/transcription").json()
+            assert asr_log["available"] and "Transcription: recognizing" in asr_log["text"]
             client.post(f"/api/jobs/{job_id}/start", json=payload).raise_for_status()
         wait(lambda s: s["usage"]["active_requests"] > 0)
         client.post(f"/api/jobs/{job_id}/stop").raise_for_status()
@@ -143,7 +151,12 @@ def main():
         client.post(f"/api/jobs/{job_id}/start", json=payload).raise_for_status()
         # Restart the controller while its separately-owned worker continues.
         client.close()
-        server.terminate()
+        if os.name == "posix":
+            # This test process created the controller's session/group above.
+            # Simulate terminal Ctrl+C without touching unrelated processes.
+            os.killpg(server.pid, signal.SIGINT)
+        else:
+            server.terminate()
         server.wait(timeout=10)
         server, client = start_server()
         done = wait(lambda s: s["state"] == "complete")
@@ -153,6 +166,14 @@ def main():
         assert done["usage"]["known_input_tokens"] == Model.calls * 100
         assert done["usage"]["known_output_tokens"] == Model.calls * 50
         assert done["usage"]["active_requests"] == 0
+        debug = client.get(f"/api/jobs/{job_id}/logs/worker")
+        debug.raise_for_status()
+        assert debug.json()["available"] and debug.json()["text"]
+        assert "local-test-secret" not in debug.text
+        download = client.get(f"/api/jobs/{job_id}/logs/worker/download")
+        assert download.status_code == 200 and "local-test-secret" not in download.text
+        assert download.headers["content-type"].startswith("text/plain")
+        assert client.get(f"/api/jobs/{job_id}/logs/manifest.json").status_code == 400
         for filename, content in before.items():
             assert (args.output / job_id / "run-0001/analysis/restoration" / filename).read_bytes() == content
         report = client.get(done["report_url"])
@@ -189,6 +210,7 @@ def main():
         assert old_report.read_bytes() == old_report_bytes
         if args.recording:
             assert asr_checkpoint.read_bytes() == asr_before
+            assert revised["transcription"]["reused"]
         summary = {"job_id": job_id, "model_calls": Model.calls, "status": done, "verified": ["import", "preview", "duplicate-start rejection", "graceful stop", "checkpoint resume", "controller restart while worker runs", "token totals", "report and ranged media", "shareable ZIP excludes private run files", "cross-origin rejection", "settings-change confirmation", "key absent from metadata"]}
         summary["revision_status"] = revised
         summary["verified"].append("confirmed reprocessing reuses restoration and preserves old report")

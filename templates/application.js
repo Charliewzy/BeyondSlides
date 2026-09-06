@@ -92,10 +92,10 @@ function render(status) {
     const row = document.createElement("div"); row.className = "stage";
     const heading = document.createElement("div"); heading.className = "stage-label";
     const name = document.createElement("span"); name.textContent = label;
-    const count = document.createElement("span"); count.textContent = !data ? "等待" : data.total === null ? "准备中" : `${data.completed} / ${data.total}`;
+    const count = document.createElement("span"); count.textContent = !data ? "等待" : data.total === null ? "准备中" : data.total === 0 ? "无需处理" : `${data.completed} / ${data.total}`;
     heading.append(name, count); row.append(heading);
     const progress = document.createElement("progress"); progress.setAttribute("aria-label", label);
-    if (data?.total !== null) { progress.max = data?.total || 1; progress.value = data?.completed || 0; }
+    if (data?.total !== null) { progress.max = data?.total || 1; progress.value = data?.total === 0 ? 1 : data?.completed || 0; }
     row.append(progress); $("stage-progress").append(row);
     if (stage === "transcription" && status.transcription) transcriptionProgress(row, progress, count, status.transcription, active);
   }
@@ -104,7 +104,7 @@ function render(status) {
   $("active-requests").textContent = usage.active_requests; $("retries").textContent = usage.retries;
   $("run-error").textContent = [status.error, status.usage_error].filter(Boolean).join("\n");
   const timings = status.transcription?.timings_seconds || {};
-  $("asr-timings").textContent = Object.entries(timings).map(([phase, seconds]) => `${asrPhases[phase] || phase}：${seconds.toFixed(2)} 秒`).join(" · ");
+  $("asr-timings").textContent = Object.keys(asrPhases).filter(phase => phase in timings).map(phase => `${asrPhases[phase]}：${timings[phase].toFixed(2)} 秒`).join(" · ");
   if (status.transcription?.reused) $("asr-timings").textContent += "（模型阶段耗时来自复用的转写结果）";
 }
 async function pollDebug() {

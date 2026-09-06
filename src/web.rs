@@ -568,6 +568,10 @@ async fn start(
             },
         )
         .env("BEYOND_SLIDES_WORKER_CONTROL", path.join("control"));
+    // A terminal Ctrl+C should stop the controller, not the independently owned
+    // worker and its log supervisor. They retain graceful stop-file control.
+    #[cfg(unix)]
+    command.process_group(0);
     let mut child = command.spawn()?;
     launching.insert(id.clone());
     let app_clone = app.clone();

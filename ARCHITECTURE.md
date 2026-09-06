@@ -531,8 +531,9 @@ Every provider attempt appends typed JSONL events for request, response,
 provider error, validation, or processing failure. Records correlate an
 exchange with workflow, zero-based work-item index, conversation turn, and
 request kind. The trace's legacy `window_index` field is a transcript-window
-index for restoration and passage preparation, and a batch-plan index for
-comparative workflows. API keys and authorization headers are never recorded.
+index for restoration and window-owned passage preparation, a batch index for
+boundary classification, and a batch-plan index for comparative workflows.
+API keys and authorization headers are never recorded.
 Complete records are flushed individually. On resume, a malformed
 non-newline-terminated crash tail is truncated; corruption in any completed
 line is rejected.
@@ -548,6 +549,12 @@ run/lecture-analysis/
 |-- window-0001.json
 |-- window-0002.json
 |-- ...
+|-- boundaries/ (opt-in boundary mode)
+|   `-- <classification-identity-hash>/
+|       |-- manifest.json
+|       |-- batch-0001.json
+|       `-- ...
+|-- boundary-preparation.json (boundary-mode diagnostics)
 |-- comparisons/
 |   |-- importance-<configuration-hash>/
 |   |   |-- manifest.json
@@ -578,9 +585,10 @@ run/lecture-analysis/
     `-- diagnostics.json
 ```
 
-Restoration has its own manifest, trace, and checkpoints. Passage preparation
-has a root manifest and window checkpoints; its trace also records comparative
-requests. Each comparison metric has a manifest and checkpoint namespace bound
+Restoration has its own manifest, trace, and checkpoints. Legacy passage
+preparation has a root manifest and window checkpoints; boundary preparation
+has a hashed classification namespace instead. Their shared trace also records
+comparative requests. Each comparison metric has a manifest and checkpoint namespace bound
 to the prepared passage content, upstream semantic configuration, its own
 prompt, and its grouping/evidence configuration. Changing a comparison prompt
 creates a new namespace for that metric without rerunning upstream stages or

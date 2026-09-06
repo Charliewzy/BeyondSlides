@@ -190,6 +190,7 @@ struct PlannedComparison {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct ComparisonPassageInput {
+    #[serde(skip)]
     passage_id: usize,
     text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -207,10 +208,36 @@ struct ComparisonSlideInput {
 #[derive(Serialize)]
 struct ComparisonTaskInput<'a> {
     lecture_context: &'a str,
-    comparisons: &'a [PlannedComparison],
-    passages: &'a [ComparisonPassageInput],
+    comparisons: Vec<ComparisonInput<'a>>,
     #[serde(skip_serializing_if = "slice_is_empty")]
     slides: &'a [ComparisonSlideInput],
+}
+
+#[derive(Serialize)]
+struct ComparisonInput<'a> {
+    comparison_id: usize,
+    candidates: BTreeMap<CandidateLabel, &'a ComparisonPassageInput>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+enum CandidateLabel {
+    A,
+    B,
+    C,
+    D,
+}
+
+impl CandidateLabel {
+    const ALL: [Self; COMPARISON_SIZE] = [Self::A, Self::B, Self::C, Self::D];
+
+    const fn index(self) -> usize {
+        match self {
+            Self::A => 0,
+            Self::B => 1,
+            Self::C => 2,
+            Self::D => 3,
+        }
+    }
 }
 
 fn slice_is_empty<T>(values: &&[T]) -> bool {
@@ -243,12 +270,26 @@ impl ComparativeRankingTask {
     }
 
     pub(crate) fn message(&self) -> Result<ComparativeRankingMessage, serde_json::Error> {
+        let passages: BTreeMap<_, _> = self
+            .passages
+            .iter()
+            .map(|passage| (passage.passage_id, passage))
+            .collect();
         Ok(ComparativeRankingMessage {
             instructions: self.metric.instructions(),
             input: serde_json::to_string(&ComparisonTaskInput {
                 lecture_context: &self.lecture_context,
-                comparisons: &self.comparisons,
-                passages: &self.passages,
+                comparisons: self
+                    .comparisons
+                    .iter()
+                    .map(|comparison| ComparisonInput {
+                        comparison_id: comparison.comparison_id,
+                        candidates: CandidateLabel::ALL
+                            .into_iter()
+                            .zip(comparison.passage_ids.iter().map(|id| passages[id]))
+                            .collect(),
+                    })
+                    .collect(),
                 slides: &self.slides,
             })?,
         })
@@ -258,13 +299,50 @@ impl ComparativeRankingTask {
         &self,
         proposed: ProposedComparativeRanking,
     ) -> Result<Vec<ComparativeDecision>, ComparativeRankingValidationError> {
+        let comparisons: BTreeMap<_, _> = self
+            .comparisons
+            .iter()
+            .map(|comparison| (comparison.comparison_id, comparison))
+            .collect();
+        let decisions = proposed
+            .comparisons
+            .into_iter()
+            .map(|decision| {
+                let comparison = comparisons.get(&decision.comparison_id).ok_or(
+                    ComparativeRankingValidationError::UnknownComparison {
+                        comparison_id: decision.comparison_id,
+                    },
+                )?;
+                let resolve = |label: CandidateLabel| {
+                    comparison.passage_ids.get(label.index()).copied().ok_or(
+                        ComparativeRankingValidationError::LabelOutsideComparison {
+                            comparison_id: decision.comparison_id,
+                            label: format!("{label:?}"),
+                            candidate_count: comparison.passage_ids.len(),
+                        },
+                    )
+                };
+                Ok(ComparativeDecision {
+                    comparison_id: decision.comparison_id,
+                    most: resolve(decision.most)?,
+                    least: resolve(decision.least)?,
+                })
+            })
+            .collect::<Result<Vec<_>, ComparativeRankingValidationError>>()?;
+        self.validate_decisions(decisions)
+    }
+
+    fn validate_decisions(
+        &self,
+        decisions: Vec<ComparativeDecision>,
+    ) -> Result<Vec<ComparativeDecision>, ComparativeRankingValidationError> {
         let expected: BTreeMap<_, _> = self
             .comparisons
             .iter()
             .map(|comparison| (comparison.comparison_id, comparison))
             .collect();
         let mut actual = BTreeMap::new();
-        for decision in proposed.comparisons {
+        for decision in decisions {
             let Some(comparison) = expected.get(&decision.comparison_id) else {
                 return Err(ComparativeRankingValidationError::UnknownComparison {
                     comparison_id: decision.comparison_id,
@@ -332,9 +410,7 @@ impl ComparativeRankingTask {
                 actual_batch_index: result.batch_index,
             });
         }
-        result.comparisons = self.validate(ProposedComparativeRanking {
-            comparisons: result.comparisons,
-        })?;
+        result.comparisons = self.validate_decisions(result.comparisons)?;
         Ok(result)
     }
 }
@@ -355,7 +431,15 @@ pub struct ComparativeDecision {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProposedComparativeRanking {
-    pub comparisons: Vec<ComparativeDecision>,
+    comparisons: Vec<ProposedComparativeDecision>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProposedComparativeDecision {
+    comparison_id: usize,
+    most: CandidateLabel,
+    least: CandidateLabel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -884,6 +968,11 @@ pub enum ComparativeRankingValidationError {
         comparison_id: usize,
         passage_id: usize,
     },
+    LabelOutsideComparison {
+        comparison_id: usize,
+        label: String,
+        candidate_count: usize,
+    },
     SameMostAndLeast {
         comparison_id: usize,
         passage_id: usize,
@@ -922,6 +1011,14 @@ impl fmt::Display for ComparativeRankingValidationError {
             } => write!(
                 formatter,
                 "comparison {comparison_id} selected passage {passage_id}, which is not a member"
+            ),
+            Self::LabelOutsideComparison {
+                comparison_id,
+                label,
+                candidate_count,
+            } => write!(
+                formatter,
+                "comparison {comparison_id} has only {candidate_count} candidates, so label {label} is not available"
             ),
             Self::SameMostAndLeast {
                 comparison_id,
@@ -1093,9 +1190,7 @@ mod tests {
             vec![planned(7, [0, 1, 2, 3]), planned(8, [4, 5, 6, 7])],
         );
         let decisions = task
-            .validate(ProposedComparativeRanking {
-                comparisons: vec![decision(8, 4, 7), decision(7, 2, 0)],
-            })
+            .validate_decisions(vec![decision(8, 4, 7), decision(7, 2, 0)])
             .expect("valid comparisons");
         assert_eq!(decisions, vec![decision(7, 2, 0), decision(8, 4, 7)]);
 
@@ -1113,9 +1208,7 @@ mod tests {
         );
 
         let error = task
-            .validate(ProposedComparativeRanking {
-                comparisons: vec![decision(7, 9, 0), decision(8, 4, 7)],
-            })
+            .validate_decisions(vec![decision(7, 9, 0), decision(8, 4, 7)])
             .expect_err("passage 9 is outside comparison 7");
         assert_eq!(
             error,
@@ -1124,6 +1217,46 @@ mod tests {
                 passage_id: 9,
             }
         );
+    }
+
+    #[test]
+    fn labels_are_local_to_each_group_and_checkpoints_keep_global_ids() {
+        let task = ranking_task(
+            ComparativeMetric::Importance,
+            vec![
+                planned(7, [228, 99, 275, 219]),
+                planned(8, [35, 256, 0, 190]),
+            ],
+        );
+        let proposed = serde_json::from_value(serde_json::json!({"comparisons":[
+            {"comparison_id":8,"most":"A","least":"C"},
+            {"comparison_id":7,"most":"A","least":"D"}
+        ]}))
+        .unwrap();
+        let result = task.validate(proposed).unwrap();
+        assert_eq!(result, vec![decision(7, 228, 219), decision(8, 35, 0)]);
+        assert_eq!(serde_json::to_value(&result).unwrap()[0]["most"], 228);
+
+        for invalid in [serde_json::json!(99), serde_json::json!("E")] {
+            assert!(
+                serde_json::from_value::<ProposedComparativeRanking>(serde_json::json!({
+                    "comparisons":[{"comparison_id":7,"most":invalid,"least":"D"}]
+                }))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn labels_must_exist_in_short_groups_and_most_must_differ_from_least() {
+        let task = ranking_task(ComparativeMetric::Importance, vec![planned(42, [20, 10])]);
+        for (most, least) in [("C", "A"), ("B", "B")] {
+            let proposed = serde_json::from_value(serde_json::json!({"comparisons":[
+                {"comparison_id":42,"most":most,"least":least}
+            ]}))
+            .unwrap();
+            assert!(task.validate(proposed).is_err());
+        }
     }
 
     #[test]

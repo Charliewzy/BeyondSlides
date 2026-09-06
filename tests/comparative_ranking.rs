@@ -23,20 +23,20 @@ async fn session_repairs_metric_canaries_and_keeps_their_inputs_separate()
     let api = mock_api(vec![
         final_response(json!({
             "comparisons": [
-                {"comparison_id": 0, "most": 99, "least": 3},
-                {"comparison_id": 1, "most": 0, "least": 2}
+                {"comparison_id": 0, "most": "E", "least": "D"},
+                {"comparison_id": 1, "most": "A", "least": "C"}
             ]
         })),
         final_response(json!({
             "comparisons": [
-                {"comparison_id": 0, "most": 0, "least": 3},
-                {"comparison_id": 1, "most": 1, "least": 2}
+                {"comparison_id": 0, "most": "A", "least": "D"},
+                {"comparison_id": 1, "most": "B", "least": "C"}
             ]
         })),
         final_response(json!({
             "comparisons": [
-                {"comparison_id": 0, "most": 2, "least": 1},
-                {"comparison_id": 1, "most": 3, "least": 0}
+                {"comparison_id": 0, "most": "C", "least": "B"},
+                {"comparison_id": 1, "most": "D", "least": "A"}
             ]
         })),
     ])
@@ -88,9 +88,13 @@ async fn session_repairs_metric_canaries_and_keeps_their_inputs_separate()
     assert_eq!(requests.len(), 3);
     let importance = user_input(&requests[0])?;
     assert!(importance.get("slides").is_none());
-    assert!(importance["passages"][0].get("slide_position").is_none());
-    assert!(importance["passages"][0].get("novelty").is_none());
-    assert!(importance["passages"][0].get("importance").is_none());
+    assert!(importance.get("passages").is_none());
+    let candidate = &importance["comparisons"][0]["candidates"]["A"];
+    assert!(candidate["text"].is_string());
+    assert!(candidate.get("passage_id").is_none());
+    assert!(candidate.get("slide_position").is_none());
+    assert!(candidate.get("novelty").is_none());
+    assert!(candidate.get("importance").is_none());
 
     let novelty = user_input(&requests[2])?;
     assert!(
@@ -99,7 +103,17 @@ async fn session_repairs_metric_canaries_and_keeps_their_inputs_separate()
             .expect("slides array")
             .is_empty()
     );
-    assert!(novelty["passages"][0].get("slide_position").is_some());
+    let candidate = &novelty["comparisons"][0]["candidates"]["A"];
+    assert!(candidate.get("slide_position").is_some());
+    for id in candidate["candidate_slide_ids"].as_array().unwrap() {
+        assert!(
+            novelty["slides"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|slide| slide["slide_id"] == *id)
+        );
+    }
     for request in requests {
         let body: Value = request.body_json()?;
         assert!(body.get("tools").is_none());

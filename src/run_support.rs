@@ -1,6 +1,7 @@
 use std::{
     env, fs,
     io::{self, Write},
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -26,6 +27,42 @@ pub(crate) struct ProviderSettings {
     api_key: String,
     model: String,
     extra_body: Option<Value>,
+    execution: ExecutionSettings,
+}
+
+/// Operational settings do not change the identity of a validated checkpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) struct ExecutionSettings {
+    max_concurrency: NonZeroUsize,
+    request_interval_ms: u64,
+}
+
+impl ExecutionSettings {
+    fn parse(concurrency: Option<&str>, interval_ms: Option<&str>) -> Result<Self, io::Error> {
+        let invalid = |name| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "invalid {name}: expected an unsigned integer{}",
+                    if name == "BEYOND_SLIDES_MAX_CONCURRENCY" {
+                        " greater than zero"
+                    } else {
+                        ""
+                    }
+                ),
+            )
+        };
+        Ok(Self {
+            max_concurrency: concurrency
+                .unwrap_or("2")
+                .parse()
+                .map_err(|_| invalid("BEYOND_SLIDES_MAX_CONCURRENCY"))?,
+            request_interval_ms: interval_ms
+                .unwrap_or("0")
+                .parse()
+                .map_err(|_| invalid("BEYOND_SLIDES_REQUEST_INTERVAL_MS"))?,
+        })
+    }
 }
 
 impl ProviderSettings {
@@ -47,6 +84,10 @@ impl ProviderSettings {
             api_key: required_environment_variable(API_KEY_ENV)?,
             model: required_environment_variable(MODEL_ENV)?,
             extra_body,
+            execution: ExecutionSettings::parse(
+                optional_environment_variable("BEYOND_SLIDES_MAX_CONCURRENCY")?.as_deref(),
+                optional_environment_variable("BEYOND_SLIDES_REQUEST_INTERVAL_MS")?.as_deref(),
+            )?,
         })
     }
 
@@ -57,6 +98,7 @@ impl ProviderSettings {
             api_key: api_key.into(),
             model: model.into(),
             extra_body: None,
+            execution: ExecutionSettings::parse(None, None).expect("valid defaults"),
         }
     }
 
@@ -72,16 +114,49 @@ impl ProviderSettings {
         self.extra_body.as_ref()
     }
 
+    pub(crate) fn max_concurrency(&self) -> usize {
+        self.execution.max_concurrency.get()
+    }
+
+    pub(crate) fn request_interval(&self) -> Duration {
+        Duration::from_millis(self.execution.request_interval_ms)
+    }
+
+    pub(crate) fn record_execution_settings(&self, directory: &Path) -> Result<(), io::Error> {
+        eprintln!(
+            "Model scheduling: concurrency {}, request spacing {} ms",
+            self.max_concurrency(),
+            self.execution.request_interval_ms
+        );
+        write_json_atomically(
+            &directory.join("execution-settings.json"),
+            &self.execution,
+            "execution settings",
+        )
+    }
+
     pub(crate) fn chat_config(&self) -> Result<ChatCompletionsConfig, ChatCompletionsConfigError> {
         let config = ChatCompletionsConfig::new(
             self.base_url.clone(),
             self.api_key.clone(),
             self.model.clone(),
-        )?;
+        )?
+        .with_minimum_request_interval(self.request_interval());
         match &self.extra_body {
             Some(extra_body) => config.with_extra_body(extra_body.clone()),
             None => Ok(config),
         }
+    }
+}
+
+fn optional_environment_variable(name: &str) -> Result<Option<String>, io::Error> {
+    match env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("environment variable {name} is not valid Unicode"),
+        )),
     }
 }
 
@@ -92,6 +167,18 @@ pub(crate) fn initialize_run_directory<T>(
 ) -> Result<(), io::Error>
 where
     T: DeserializeOwned + PartialEq + Serialize,
+{
+    initialize_run_directory_with(run_directory, expected_manifest, run_kind, PartialEq::eq)
+}
+
+pub(crate) fn initialize_run_directory_with<T>(
+    run_directory: &Path,
+    expected_manifest: &T,
+    run_kind: &str,
+    compatible: impl FnOnce(&T, &T) -> bool,
+) -> Result<(), io::Error>
+where
+    T: DeserializeOwned + Serialize,
 {
     fs::create_dir_all(run_directory).map_err(|error| {
         io::Error::new(
@@ -105,7 +192,7 @@ where
     let manifest_path = run_directory.join(MANIFEST_FILE);
     if manifest_path.exists() {
         let actual_manifest: T = read_json(&manifest_path, "run manifest")?;
-        if actual_manifest != *expected_manifest {
+        if !compatible(&actual_manifest, expected_manifest) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
@@ -115,6 +202,19 @@ where
             ));
         }
     } else {
+        if fs::read_dir(run_directory)?.any(|entry| {
+            entry
+                .and_then(|entry| entry.file_type())
+                .map_or(true, |kind| !kind.is_dir())
+        }) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "{run_kind} directory {} contains files but no manifest; cannot establish checkpoint provenance",
+                    run_directory.display()
+                ),
+            ));
+        }
         write_json_atomically(&manifest_path, expected_manifest, "run manifest")?;
     }
     Ok(())
@@ -303,6 +403,33 @@ fn optional_json_object(name: &str) -> Result<Option<Value>, io::Error> {
 mod tests {
     use super::*;
     use std::error::Error;
+
+    #[test]
+    fn execution_defaults_and_overrides_are_validated() {
+        let defaults = ExecutionSettings::parse(None, None).unwrap();
+        assert_eq!(defaults.max_concurrency.get(), 2);
+        assert_eq!(defaults.request_interval_ms, 0);
+        let custom = ExecutionSettings::parse(Some("7"), Some("250")).unwrap();
+        assert_eq!(custom.max_concurrency.get(), 7);
+        assert_eq!(custom.request_interval_ms, 250);
+        for value in ["0", "-1", "", "2.5", "many"] {
+            assert!(ExecutionSettings::parse(Some(value), None).is_err());
+        }
+        for value in ["-1", "", "0.5", "NaN"] {
+            assert!(ExecutionSettings::parse(None, Some(value)).is_err());
+        }
+    }
+
+    #[test]
+    fn unmanifested_files_cannot_be_adopted_as_checkpoints() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("window-0001.json"), "{}").unwrap();
+        let error =
+            initialize_run_directory(directory.path(), &serde_json::json!({"version":1}), "test")
+                .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(!directory.path().join("manifest.json").exists());
+    }
 
     #[test]
     fn atomic_json_writer_replaces_an_existing_checkpoint() -> Result<(), Box<dyn Error>> {

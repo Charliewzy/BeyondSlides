@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::run_support::{
-    ProviderSettings, checkpoint_path, display_token_count, initialize_run_directory,
+    ProviderSettings, checkpoint_path, display_token_count, initialize_run_directory_with,
     open_run_model_trace, read_json, read_json_with_hash, sha256, window_progress_bar,
     write_json_atomically, write_text_atomically,
 };
@@ -23,7 +23,6 @@ const RESTORATION_RUN_FORMAT_VERSION: u32 = 1;
 const MAX_OWNED_CHARACTERS: usize = 400;
 const MAX_OWNED_DURATION_SECONDS: u64 = 60;
 const CONTEXT_CHARACTERS: usize = 150;
-const MAX_CONCURRENT_WINDOWS: usize = 4;
 const MAX_FINAL_ANSWER_REPAIRS: usize = 2;
 const MAX_PROVIDER_RETRIES: usize = 2;
 const MAX_OUTPUT_TOKENS: u32 = 8_192;
@@ -42,10 +41,16 @@ pub async fn run_canary(
     let provider = ProviderSettings::from_restoration_environment()?;
     let (transcript, transcript_hash) = read_json_with_hash(&transcript_path, "transcript")?;
     let manifest = RestorationRunManifest::new(&provider, transcript_hash);
-    initialize_run_directory(&run_directory, &manifest, "restoration")?;
+    initialize_run_directory_with(
+        &run_directory,
+        &manifest,
+        "restoration",
+        RestorationRunManifest::compatible,
+    )?;
+    provider.record_execution_settings(&run_directory)?;
     let client = restoration_client(&provider, open_run_model_trace(&run_directory)?)?;
     let mut session =
-        TranscriptRestorationSession::prepare(&client, transcript, restoration_config()?)?;
+        TranscriptRestorationSession::prepare(&client, transcript, restoration_config(&provider)?)?;
     restore_checkpoints(&mut session, &run_directory)?;
 
     eprintln!("Sending transcript window 1 as the restoration canary...");
@@ -90,10 +95,16 @@ pub async fn run_complete(
     let provider = ProviderSettings::from_restoration_environment()?;
     let (transcript, transcript_hash) = read_json_with_hash(&transcript_path, "transcript")?;
     let manifest = RestorationRunManifest::new(&provider, transcript_hash);
-    initialize_run_directory(&run_directory, &manifest, "restoration")?;
+    initialize_run_directory_with(
+        &run_directory,
+        &manifest,
+        "restoration",
+        RestorationRunManifest::compatible,
+    )?;
+    provider.record_execution_settings(&run_directory)?;
     let client = restoration_client(&provider, open_run_model_trace(&run_directory)?)?;
     let mut session =
-        TranscriptRestorationSession::prepare(&client, transcript, restoration_config()?)?;
+        TranscriptRestorationSession::prepare(&client, transcript, restoration_config(&provider)?)?;
     restore_checkpoints(&mut session, &run_directory)?;
 
     let progress = window_progress_bar(session.window_count(), session.completed_window_count())?;
@@ -174,7 +185,9 @@ fn restoration_client(
     Ok(ChatCompletionsClient::new(config))
 }
 
-fn restoration_config() -> Result<TranscriptRestorationConfig, Box<dyn Error>> {
+fn restoration_config(
+    provider: &ProviderSettings,
+) -> Result<TranscriptRestorationConfig, Box<dyn Error>> {
     let windowing = WindowingConfig::new(
         MAX_OWNED_CHARACTERS,
         Duration::from_secs(MAX_OWNED_DURATION_SECONDS),
@@ -182,7 +195,7 @@ fn restoration_config() -> Result<TranscriptRestorationConfig, Box<dyn Error>> {
     )?;
     Ok(TranscriptRestorationConfig::new(
         windowing,
-        MAX_CONCURRENT_WINDOWS,
+        provider.max_concurrency(),
     )?)
 }
 
@@ -251,10 +264,54 @@ impl RestorationRunManifest {
             max_owned_characters: MAX_OWNED_CHARACTERS,
             max_owned_duration_seconds: MAX_OWNED_DURATION_SECONDS,
             context_characters: CONTEXT_CHARACTERS,
-            max_concurrent_windows: MAX_CONCURRENT_WINDOWS,
+            max_concurrent_windows: provider.max_concurrency(),
             max_final_answer_repairs: MAX_FINAL_ANSWER_REPAIRS,
             max_provider_retries: MAX_PROVIDER_RETRIES,
             max_output_tokens: MAX_OUTPUT_TOKENS,
+        }
+    }
+
+    fn compatible(&self, expected: &Self) -> bool {
+        let mut actual = self.clone();
+        actual.max_concurrent_windows = expected.max_concurrent_windows;
+        actual.max_provider_retries = expected.max_provider_retries;
+        actual.max_final_answer_repairs = expected.max_final_answer_repairs;
+        actual == *expected
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restoration_resume_allows_scheduling_but_rejects_semantic_changes() {
+        let provider = ProviderSettings::new("https://example.test/v1", "secret", "model");
+        let original = RestorationRunManifest::new(&provider, "source".into());
+        let mut changed = original.clone();
+        changed.max_concurrent_windows = 20;
+        changed.max_provider_retries = 6;
+        changed.max_final_answer_repairs = 3;
+        assert!(original.compatible(&changed));
+        for field in [
+            "transcript_sha256",
+            "restoration_prompt_sha256",
+            "model",
+            "max_owned_characters",
+            "context_characters",
+            "max_output_tokens",
+            "format_version",
+        ] {
+            let mut value = serde_json::to_value(&changed).unwrap();
+            value[field] = if value[field].is_number() {
+                serde_json::json!(999)
+            } else {
+                serde_json::json!("different")
+            };
+            assert!(
+                !original.compatible(&serde_json::from_value(value).unwrap()),
+                "{field}"
+            );
         }
     }
 }

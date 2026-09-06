@@ -1,7 +1,8 @@
 use std::{
+    collections::BTreeMap,
     error::Error,
     ffi::OsStr,
-    fs, io,
+    io,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -21,9 +22,9 @@ use serde_json::Value;
 
 use crate::run_support::{
     ProviderSettings, checkpoint_path, display_token_count, initialize_run_directory,
-    model_trace_path, open_output_model_trace, open_run_model_trace, ranking_progress_bar,
-    read_json, read_json_with_hash, sha256, window_progress_bar, write_json_atomically,
-    write_text_atomically,
+    initialize_run_directory_with, model_trace_path, open_output_model_trace, open_run_model_trace,
+    ranking_progress_bar, read_json, read_json_with_hash, sha256, window_progress_bar,
+    write_json_atomically, write_text_atomically,
 };
 use crate::{
     report_assets::{prepare_audio_asset, render_pdf_slides},
@@ -34,17 +35,14 @@ const ANALYSIS_RUN_FORMAT_VERSION: u32 = 6;
 const MAX_OWNED_CHARACTERS: usize = 400;
 const MAX_OWNED_DURATION_SECONDS: u64 = 60;
 const CONTEXT_CHARACTERS: usize = 150;
-const MAX_CONCURRENT_WINDOWS: usize = 4;
 const MAX_TOOL_ROUNDS: usize = 4;
 const MAX_FINAL_ANSWER_REPAIRS: usize = 2;
 const MAX_PROVIDER_RETRIES: usize = 5;
-const MINIMUM_REQUEST_INTERVAL_SECONDS: u64 = 5;
 const MAX_SEARCH_RESULTS: usize = 5;
 const MAX_OUTPUT_TOKENS: u32 = 16_384;
 const COMPARATIVE_ROUNDS: usize = 8;
 const IMPORTANCE_COMPARISONS_PER_BATCH: usize = 16;
 const NOVELTY_COMPARISONS_PER_BATCH: usize = 8;
-const MAX_CONCURRENT_COMPARISON_BATCHES: usize = 4;
 const COMPARATIVE_RETRIEVAL_CANDIDATES: usize = 5;
 const COMPARATIVE_SLIDE_NEIGHBORHOOD_RADIUS: usize = 3;
 const COMPARATIVE_SEED: u64 = 20_260_905;
@@ -94,7 +92,7 @@ pub async fn run_canary(
         sources,
         restored_transcript,
         &hybrid,
-        lecture_config()?,
+        lecture_config(&provider)?,
     )?;
     eprintln!("Sending transcript window 1 as the passage-preparation canary...");
     let canary = session.analyze_canary().await?.ok_or_else(|| {
@@ -150,7 +148,13 @@ pub async fn run_complete(
         slides_hash,
         restored_transcript_hash,
     );
-    initialize_run_directory(&run_directory, &manifest, "analysis")?;
+    initialize_run_directory_with(
+        &run_directory,
+        &manifest,
+        "passage preparation",
+        AnalysisRunManifest::preparation_compatible,
+    )?;
+    provider.record_execution_settings(&run_directory)?;
     let sources = ValidatedSources::new(transcript, slide_deck)?;
 
     eprintln!(
@@ -168,7 +172,7 @@ pub async fn run_complete(
         sources,
         restored_transcript,
         &hybrid,
-        lecture_config()?,
+        lecture_config(&provider)?,
     )?;
     restore_checkpoints(&mut session, &run_directory)?;
 
@@ -220,11 +224,11 @@ pub async fn run_complete(
         &client,
         result.analysis(),
         &hybrid,
-        comparative_ranking_config()?,
+        comparative_ranking_config(&provider)?,
     )?;
-    let comparison_directory = run_directory.join(COMPARISON_DIRECTORY);
-    fs::create_dir_all(&comparison_directory)?;
-    restore_comparison_checkpoints(&mut ranking_session, &comparison_directory)?;
+    let comparison_directories =
+        initialize_comparison_directories(&run_directory, &manifest, result.analysis())?;
+    restore_comparison_checkpoints(&mut ranking_session, &comparison_directories)?;
     let ranking_progress = ranking_progress_bar(
         ranking_session.batch_count(),
         ranking_session.completed_batch_count(),
@@ -233,7 +237,7 @@ pub async fn run_complete(
     let ranking_result = ranking_session
         .complete_with_progress(|event| {
             let path = comparison_checkpoint_path(
-                &comparison_directory,
+                &comparison_directories[&event.batch.metric],
                 event.batch.metric,
                 event.batch.batch_index,
             );
@@ -404,7 +408,6 @@ fn analysis_client(
         .with_max_tool_rounds(MAX_TOOL_ROUNDS)?
         .with_max_final_answer_repairs(MAX_FINAL_ANSWER_REPAIRS)?
         .with_max_provider_retries(MAX_PROVIDER_RETRIES)
-        .with_minimum_request_interval(Duration::from_secs(MINIMUM_REQUEST_INTERVAL_SECONDS))
         .with_max_search_results(MAX_SEARCH_RESULTS)?
         .with_max_output_tokens(MAX_OUTPUT_TOKENS)?;
     Ok(ChatCompletionsClient::new(config))
@@ -477,25 +480,145 @@ impl AnalysisRunManifest {
             max_owned_characters: MAX_OWNED_CHARACTERS,
             max_owned_duration_seconds: MAX_OWNED_DURATION_SECONDS,
             context_characters: CONTEXT_CHARACTERS,
-            max_concurrent_windows: MAX_CONCURRENT_WINDOWS,
+            max_concurrent_windows: provider.max_concurrency(),
             max_tool_rounds: MAX_TOOL_ROUNDS,
             max_final_answer_repairs: MAX_FINAL_ANSWER_REPAIRS,
             max_provider_retries: MAX_PROVIDER_RETRIES,
-            minimum_request_interval_seconds: MINIMUM_REQUEST_INTERVAL_SECONDS,
+            minimum_request_interval_seconds: provider.request_interval().as_secs(),
             max_search_results: MAX_SEARCH_RESULTS,
             max_output_tokens: MAX_OUTPUT_TOKENS,
             comparative_rounds: COMPARATIVE_ROUNDS,
             importance_comparisons_per_batch: IMPORTANCE_COMPARISONS_PER_BATCH,
             novelty_comparisons_per_batch: NOVELTY_COMPARISONS_PER_BATCH,
-            max_concurrent_comparison_batches: MAX_CONCURRENT_COMPARISON_BATCHES,
+            max_concurrent_comparison_batches: provider.max_concurrency(),
             comparative_retrieval_candidates: COMPARATIVE_RETRIEVAL_CANDIDATES,
             comparative_slide_neighborhood_radius: COMPARATIVE_SLIDE_NEIGHBORHOOD_RADIUS,
             comparative_seed: COMPARATIVE_SEED,
         }
     }
+
+    fn preparation_identity(&self) -> PreparationIdentity {
+        PreparationIdentity {
+            format_version: self.format_version,
+            transcript_sha256: self.transcript_sha256.clone(),
+            slides_sha256: self.slides_sha256.clone(),
+            restored_transcript_sha256: self.restored_transcript_sha256.clone(),
+            annotation_prompt_sha256: self.annotation_prompt_sha256.clone(),
+            api_base_url: self.api_base_url.clone(),
+            model: self.model.clone(),
+            chat_extra_body: self.chat_extra_body.clone(),
+            retrieval_mode: self.retrieval_mode.clone(),
+            dense_model: self.dense_model.clone(),
+            max_owned_characters: self.max_owned_characters,
+            max_owned_duration_seconds: self.max_owned_duration_seconds,
+            context_characters: self.context_characters,
+            max_tool_rounds: self.max_tool_rounds,
+            max_search_results: self.max_search_results,
+            max_output_tokens: self.max_output_tokens,
+        }
+    }
+
+    fn preparation_compatible(&self, expected: &Self) -> bool {
+        self.preparation_identity() == expected.preparation_identity()
+    }
 }
 
-fn lecture_config() -> Result<LectureAnalysisConfig, Box<dyn Error>> {
+/// The legacy flat manifest remains readable; only these fields determine
+/// whether its passage checkpoints can be reused. Runtime policy and the
+/// downstream comparison prompts do not belong to this stage's identity.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PreparationIdentity {
+    format_version: u32,
+    transcript_sha256: String,
+    slides_sha256: String,
+    restored_transcript_sha256: String,
+    annotation_prompt_sha256: String,
+    api_base_url: String,
+    model: String,
+    chat_extra_body: Option<Value>,
+    retrieval_mode: String,
+    dense_model: String,
+    max_owned_characters: usize,
+    max_owned_duration_seconds: u64,
+    context_characters: usize,
+    max_tool_rounds: usize,
+    max_search_results: usize,
+    max_output_tokens: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ComparisonRunManifest {
+    format_version: u32,
+    preparation: PreparationIdentity,
+    passages_sha256: String,
+    metric: ComparativeMetric,
+    prompt_sha256: String,
+    rounds: usize,
+    comparisons_per_batch: usize,
+    seed: u64,
+    evidence_limits: Option<(usize, usize)>,
+}
+
+impl ComparisonRunManifest {
+    fn new(
+        manifest: &AnalysisRunManifest,
+        passages_sha256: String,
+        metric: ComparativeMetric,
+    ) -> Self {
+        let (prompt, batch_size) = match metric {
+            ComparativeMetric::Importance => (
+                &manifest.importance_comparison_prompt_sha256,
+                manifest.importance_comparisons_per_batch,
+            ),
+            ComparativeMetric::Novelty => (
+                &manifest.novelty_comparison_prompt_sha256,
+                manifest.novelty_comparisons_per_batch,
+            ),
+        };
+        Self {
+            format_version: 1,
+            preparation: manifest.preparation_identity(),
+            passages_sha256,
+            metric,
+            prompt_sha256: prompt.clone(),
+            rounds: manifest.comparative_rounds,
+            comparisons_per_batch: batch_size,
+            seed: manifest.comparative_seed,
+            evidence_limits: (metric == ComparativeMetric::Novelty).then_some((
+                manifest.comparative_retrieval_candidates,
+                manifest.comparative_slide_neighborhood_radius,
+            )),
+        }
+    }
+
+    fn directory(&self, run_directory: &Path) -> Result<PathBuf, serde_json::Error> {
+        let fingerprint = sha256(&serde_json::to_vec(self)?);
+        Ok(run_directory
+            .join(COMPARISON_DIRECTORY)
+            .join(format!("{}-{fingerprint}", self.metric.name())))
+    }
+}
+
+fn initialize_comparison_directories(
+    run_directory: &Path,
+    manifest: &AnalysisRunManifest,
+    analysis: &ValidatedRestoredAnalysis,
+) -> Result<BTreeMap<ComparativeMetric, PathBuf>, Box<dyn Error>> {
+    let passages_sha256 = sha256(&serde_json::to_vec(analysis.passages())?);
+    [ComparativeMetric::Importance, ComparativeMetric::Novelty]
+        .into_iter()
+        .map(|metric| {
+            let stage = ComparisonRunManifest::new(manifest, passages_sha256.clone(), metric);
+            let directory = stage.directory(run_directory)?;
+            initialize_run_directory(&directory, &stage, metric.name())?;
+            Ok((metric, directory))
+        })
+        .collect()
+}
+
+fn lecture_config(provider: &ProviderSettings) -> Result<LectureAnalysisConfig, Box<dyn Error>> {
     let windowing = WindowingConfig::new(
         MAX_OWNED_CHARACTERS,
         Duration::from_secs(MAX_OWNED_DURATION_SECONDS),
@@ -503,24 +626,24 @@ fn lecture_config() -> Result<LectureAnalysisConfig, Box<dyn Error>> {
     )?;
     Ok(LectureAnalysisConfig::new(
         windowing,
-        MAX_CONCURRENT_WINDOWS,
+        provider.max_concurrency(),
     )?)
 }
 
-fn comparative_ranking_config() -> Result<ComparativeRankingConfig, Box<dyn Error>> {
-    Ok(
-        ComparativeRankingConfig::new(MAX_CONCURRENT_COMPARISON_BATCHES)?
-            .with_rounds(COMPARATIVE_ROUNDS)?
-            .with_comparisons_per_batch(
-                IMPORTANCE_COMPARISONS_PER_BATCH,
-                NOVELTY_COMPARISONS_PER_BATCH,
-            )?
-            .with_evidence_limits(
-                COMPARATIVE_RETRIEVAL_CANDIDATES,
-                COMPARATIVE_SLIDE_NEIGHBORHOOD_RADIUS,
-            )
-            .with_seed(COMPARATIVE_SEED),
-    )
+fn comparative_ranking_config(
+    provider: &ProviderSettings,
+) -> Result<ComparativeRankingConfig, Box<dyn Error>> {
+    Ok(ComparativeRankingConfig::new(provider.max_concurrency())?
+        .with_rounds(COMPARATIVE_ROUNDS)?
+        .with_comparisons_per_batch(
+            IMPORTANCE_COMPARISONS_PER_BATCH,
+            NOVELTY_COMPARISONS_PER_BATCH,
+        )?
+        .with_evidence_limits(
+            COMPARATIVE_RETRIEVAL_CANDIDATES,
+            COMPARATIVE_SLIDE_NEIGHBORHOOD_RADIUS,
+        )
+        .with_seed(COMPARATIVE_SEED))
 }
 
 fn comparison_checkpoint_path(
@@ -537,13 +660,17 @@ fn comparison_checkpoint_path(
 
 fn restore_comparison_checkpoints(
     session: &mut ComparativeRankingSession<'_>,
-    directory: &Path,
+    directories: &BTreeMap<ComparativeMetric, PathBuf>,
 ) -> Result<(), Box<dyn Error>> {
     for batch_plan_index in 0..session.batch_count() {
         let batch = session
             .batch_info(batch_plan_index)
             .expect("a batch-plan index below batch_count exists");
-        let path = comparison_checkpoint_path(directory, batch.metric, batch.batch_index);
+        let path = comparison_checkpoint_path(
+            &directories[&batch.metric],
+            batch.metric,
+            batch.batch_index,
+        );
         if path.exists() {
             let result = read_json(&path, "comparison checkpoint")?;
             session.restore_batch_result(batch_plan_index, result)?;
@@ -587,7 +714,8 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn run_directory_only_resumes_an_identical_manifest() -> Result<(), Box<dyn Error>> {
+    fn preparation_resume_ignores_only_downstream_and_operational_changes()
+    -> Result<(), Box<dyn Error>> {
         let directory = tempfile::tempdir()?;
         let provider = ProviderSettings::new(
             "https://example.test/v1",
@@ -601,8 +729,28 @@ mod tests {
             "restored".into(),
         );
 
-        initialize_run_directory(directory.path(), &manifest, "analysis")?;
-        initialize_run_directory(directory.path(), &manifest, "analysis")?;
+        initialize_run_directory_with(
+            directory.path(),
+            &manifest,
+            "analysis",
+            AnalysisRunManifest::preparation_compatible,
+        )?;
+        let mut runtime_change = manifest.clone();
+        runtime_change.max_concurrent_windows = 12;
+        runtime_change.minimum_request_interval_seconds = 60;
+        runtime_change.max_provider_retries = 10;
+        runtime_change.max_final_answer_repairs = 0;
+        runtime_change.max_concurrent_comparison_batches = 8;
+        runtime_change.importance_comparison_prompt_sha256 = "new-label-prompt".into();
+        runtime_change.novelty_comparison_prompt_sha256 = "new-evidence-prompt".into();
+        runtime_change.comparative_rounds = 16;
+        runtime_change.comparative_seed = 123;
+        initialize_run_directory_with(
+            directory.path(),
+            &runtime_change,
+            "analysis",
+            AnalysisRunManifest::preparation_compatible,
+        )?;
 
         let persisted = fs::read_to_string(directory.path().join("manifest.json"))?;
         assert!(!persisted.contains("secret-not-persisted"));
@@ -617,9 +765,112 @@ mod tests {
             "slides".into(),
             "restored".into(),
         );
-        let error = initialize_run_directory(directory.path(), &different, "analysis")
-            .expect_err("a changed model must not reuse existing checkpoints");
+        let error = initialize_run_directory_with(
+            directory.path(),
+            &different,
+            "analysis",
+            AnalysisRunManifest::preparation_compatible,
+        )
+        .expect_err("a changed model must not reuse existing checkpoints");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+
+        for field in [
+            "format_version",
+            "transcript_sha256",
+            "slides_sha256",
+            "restored_transcript_sha256",
+            "annotation_prompt_sha256",
+            "api_base_url",
+            "chat_extra_body",
+            "max_owned_characters",
+            "max_tool_rounds",
+            "retrieval_mode",
+            "dense_model",
+        ] {
+            let mut changed = serde_json::to_value(&manifest)?;
+            changed[field] = match &changed[field] {
+                Value::Number(_) => serde_json::json!(999),
+                Value::Null => serde_json::json!({"thinking":{"type":"enabled"}}),
+                _ => serde_json::json!("changed"),
+            };
+            let changed = serde_json::from_value::<AnalysisRunManifest>(changed)?;
+            assert!(
+                !manifest.preparation_compatible(&changed),
+                "{field} must invalidate preparation"
+            );
+        }
         Ok(())
+    }
+
+    #[test]
+    fn comparison_checkpoint_namespaces_track_their_own_dependencies() {
+        let provider = ProviderSettings::new("https://example.test/v1", "secret", "model");
+        let manifest =
+            AnalysisRunManifest::new(&provider, "raw".into(), "slides".into(), "restored".into());
+        let importance = ComparisonRunManifest::new(
+            &manifest,
+            "prepared-passages".into(),
+            ComparativeMetric::Importance,
+        );
+        let novelty = ComparisonRunManifest::new(
+            &manifest,
+            "prepared-passages".into(),
+            ComparativeMetric::Novelty,
+        );
+        let mut changed = manifest.clone();
+        changed.max_concurrent_windows = 9;
+        changed.max_concurrent_comparison_batches = 7;
+        changed.minimum_request_interval_seconds = 1;
+        assert_eq!(
+            importance,
+            ComparisonRunManifest::new(
+                &changed,
+                "prepared-passages".into(),
+                ComparativeMetric::Importance
+            )
+        );
+        assert_eq!(
+            novelty,
+            ComparisonRunManifest::new(
+                &changed,
+                "prepared-passages".into(),
+                ComparativeMetric::Novelty
+            )
+        );
+        changed.importance_comparison_prompt_sha256 = "new prompt".into();
+        let new_importance = ComparisonRunManifest::new(
+            &changed,
+            "prepared-passages".into(),
+            ComparativeMetric::Importance,
+        );
+        assert_ne!(
+            importance.directory(Path::new("run")).unwrap(),
+            new_importance.directory(Path::new("run")).unwrap()
+        );
+        assert_eq!(
+            novelty,
+            ComparisonRunManifest::new(
+                &changed,
+                "prepared-passages".into(),
+                ComparativeMetric::Novelty
+            )
+        );
+        assert_ne!(
+            importance,
+            ComparisonRunManifest::new(
+                &manifest,
+                "different partition".into(),
+                ComparativeMetric::Importance
+            )
+        );
+        changed.comparative_retrieval_candidates += 1;
+        assert_ne!(
+            novelty,
+            ComparisonRunManifest::new(
+                &changed,
+                "prepared-passages".into(),
+                ComparativeMetric::Novelty
+            )
+        );
     }
 }

@@ -1556,7 +1556,7 @@ fn restoration_repair_instruction(
 
 fn comparative_ranking_repair_instruction(error: &ChatCompletionsError) -> String {
     format!(
-        "你上一条最终答案未通过验证：{error}\n请返回修正后的完整比较 JSON 对象，不要只返回局部修改。必须恰好包含输入中的每个 comparison_id 一次；most 和 least 必须是该组内不同的 passage_id。不要输出 Markdown 或解释。"
+        "你上一条最终答案未通过验证：{error}\n请返回修正后的完整比较 JSON 对象，不要只返回局部修改。必须恰好包含输入中的每个 comparison_id 一次；most 和 least 必须是该组 candidates 中实际存在的不同标签（A、B、C、D），不得返回段落编号或引用其他组。不要输出 Markdown 或解释。"
     )
 }
 

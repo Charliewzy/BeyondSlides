@@ -352,9 +352,13 @@ Novelty evidence combines the inferred slide-position neighborhood,
 related-slide evidence collected during passage preparation, and the highest
 hybrid retrieval candidates. Slide text is deduplicated within each request.
 Neither metric sees preliminary absolute scores or the other metric's result.
+Each group contains its candidate texts inline under local A/B/C/D labels.
+The model selects labels; Rust resolves them to canonical passage IDs before
+validation, checkpointing, and aggregation. Novelty candidates reference the
+same deduplicated slide-text pool as before.
 
 Every response must return each requested comparison exactly once, select two
-different members of that group, and add no unknown passage IDs. One batch for
+different labels present in that group, and add no unknown comparisons. One batch for
 each metric runs as a canary before remaining batches run with bounded
 concurrency. Validated batches are checkpointed independently and can be
 resumed.
@@ -448,7 +452,11 @@ validation remain local.
 The first window of each windowed stage runs alone as a canary. Comparative
 ranking instead accepts one batch for importance and one for novelty before
 launching either metric's remaining batches with bounded concurrency. Request
-starts are paced across concurrent conversations. Timeouts, HTTP 408/429,
+starts can be paced across concurrent conversations. The CLI defaults to two
+concurrent work items and no fixed delay; `BEYOND_SLIDES_MAX_CONCURRENCY` and
+`BEYOND_SLIDES_REQUEST_INTERVAL_MS` configure these independently. Pacing is a
+minimum interval between request starts, not a sleep after every response.
+Timeouts, HTTP 408/429,
 transport failures, and 5xx responses have a bounded retry policy; numeric
 `Retry-After` is respected, while 429 without that header uses longer
 exponential backoff.
@@ -474,15 +482,20 @@ line is rejected.
 ```text
 run/lecture-analysis/
 |-- manifest.json
+|-- execution-settings.json
 |-- model-trace.jsonl
 |-- window-0001.json
 |-- window-0002.json
 |-- ...
 |-- comparisons/
-|   |-- importance-batch-0001.json
-|   |-- ...
-|   |-- novelty-batch-0001.json
-|   `-- ...
+|   |-- importance-<configuration-hash>/
+|   |   |-- manifest.json
+|   |   |-- importance-batch-0001.json
+|   |   `-- ...
+|   `-- novelty-<configuration-hash>/
+|       |-- manifest.json
+|       |-- novelty-batch-0001.json
+|       `-- ...
 |-- analysis.json
 |-- annotation-quality.json
 |-- report.html
@@ -494,6 +507,7 @@ run/lecture-analysis/
 |       `-- ...
 `-- restoration/
     |-- manifest.json
+    |-- execution-settings.json
     |-- model-trace.jsonl
     |-- window-0001.json
     |-- ...
@@ -502,12 +516,22 @@ run/lecture-analysis/
     `-- diagnostics.json
 ```
 
-Each stage has its own manifest, trace, and checkpoints. Manifests record source
-hashes, embedded prompt hash, endpoint and model identity, optional extra body,
-windowing, comparative grouping and evidence limits, concurrency, retrieval,
-request pacing, retry limits, and output limits. Secrets are excluded. A
-directory resumes only when the requested configuration exactly matches its
-manifest.
+Restoration has its own manifest, trace, and checkpoints. Passage preparation
+has a root manifest and window checkpoints; its trace also records comparative
+requests. Each comparison metric has a manifest and checkpoint namespace bound
+to the prepared passage content, upstream semantic configuration, its own
+prompt, and its grouping/evidence configuration. Changing a comparison prompt
+creates a new namespace for that metric without rerunning upstream stages or
+deleting the old comparisons.
+
+The legacy root manifest remains readable and is not rewritten on resume.
+Compatibility is stage-specific: source hashes, relevant prompt/model/provider
+settings, windowing, retrieval, and output/tool limits still bind checkpoints.
+Concurrency, request pacing, and bounded retry/repair budgets do not invalidate
+an already accepted result. `execution-settings.json` records the latest
+concurrency and pacing separately. Every reused result still undergoes its
+normal domain validation; an unmanifested checkpoint directory is not adopted.
+Secrets are excluded. See `docs/running.md` for commands and resume behavior.
 
 When a recording is supplied for rendering, the report stages it under
 `report.assets/` (normally as a hard link). Passage selection uses projected

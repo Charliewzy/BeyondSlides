@@ -40,6 +40,11 @@ use jobs::{
 };
 use usage::{TraceCursor, Usage};
 
+const EXAMPLE_REPORT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/examples/demo/report.html"
+));
+
 #[derive(Clone)]
 struct App {
     root: PathBuf,
@@ -102,6 +107,10 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
             }),
         )
         .route("/api/jobs", get(list_jobs).post(upload))
+        .route(
+            "/example/report.html",
+            get(|| async { Html(EXAMPLE_REPORT) }),
+        )
         .route("/api/jobs/{id}", get(job_status))
         .route("/api/jobs/{id}/slide-review", get(review_pages))
         .route("/api/jobs/{id}/slide-review/{page}", get(review_image))

@@ -30,7 +30,37 @@ def main():
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(url)
+            jobs_before_example = page.request.get(f"{url}/api/jobs").json()
+            with page.expect_popup() as opened_example:
+                page.locator("#open-example").click()
+            example = opened_example.value
+            example.on("pageerror", lambda error: errors.append(str(error)))
+            example.wait_for_load_state()
+            assert example.url == f"{url}/example/report.html"
+            assert example.locator("[data-example-notice]").is_visible()
+            assert example.locator("[data-slide]").count() == 80
+            assert example.locator("[data-passage]").count() > 100
+            assert example.locator("audio").count() == 0
+            example.locator("[data-minimap-prototype]").wait_for(state="visible")
+            assert example.locator("[data-slide] img").first.evaluate("image => image.naturalWidth > 0 && image.src.startsWith('data:image/png;base64,')")
+            example.locator("#importance-threshold").evaluate("input => { input.value = 6; input.dispatchEvent(new Event('input', {bubbles: true})); }")
+            assert example.locator(".importance-emphasized").count() == 0
+            assert not example.evaluate("performance.getEntriesByType('resource').some(entry => entry.name.startsWith('http'))")
+            example.screenshot(path=str(args.workspace / "browser-example-report.png"))
+            example.close()
+            assert page.request.get(f"{url}/api/jobs").json() == jobs_before_example
+            offline_context = browser.new_context(offline=True, viewport={"width": 1440, "height": 1000})
+            offline = offline_context.new_page()
+            offline.on("pageerror", lambda error: errors.append(str(error)))
+            offline.goto(Path("examples/demo/report.html").resolve().as_uri())
+            offline.locator("[data-minimap-prototype]").wait_for(state="visible")
+            assert offline.locator("[data-slide] img").first.evaluate("image => image.naturalWidth > 0")
+            offline_context.close()
             page.goto(f"{url}/#{job}")
+            # Moving from / to /#job is hash-only navigation; reload to exercise
+            # opening a saved job URL as a fresh application entry.
+            page.reload()
             page.locator("#open-report").wait_for(state="visible")
             assert page.locator("#run-state").inner_text() == "处理完成"
             assert page.locator("#api-key").input_value() == ""

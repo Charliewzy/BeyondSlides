@@ -5,6 +5,7 @@ body { margin: 0; display: grid; grid-template-columns: 260px minmax(0,1fr); min
 .library { background: #fff; border-right: 1px solid var(--line); padding: 32px 22px; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; }
 .brand { font-size: 24px; letter-spacing: -.8px; font-weight: 750; text-decoration: none; color: inherit; }
 .brand span { color: var(--accent); }
+.example-link { margin-top: 10px; text-align: center; }
 .muted, small { color: #777385; font-size: 13px; line-height: 1.7; }
 .stage-timing { display: block; font-variant-numeric: tabular-nums; }
 .review-strip { display: flex; gap: 14px; overflow-x: auto; padding: 4px 3px 12px; scroll-snap-type: x proximity; }

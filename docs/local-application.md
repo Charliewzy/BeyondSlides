@@ -5,6 +5,13 @@ import, CPU transcription, resumable analysis, live progress/token usage, the
 interactive reader, and shareable ZIP export. Transcripts can be timed subtitles
 or untimed plain text; missing timestamps are never fabricated.
 
+The sidebar's **查看示例报告** button opens a bundled real-lecture report in a
+new tab, without importing a lecture, creating a job, or configuring a model.
+The same self-contained file is checked in at `examples/demo/report.html` and
+can be opened directly offline. It includes 80 slide images and reader
+interactions, but deliberately omits the large recording and audio controls.
+See `examples/demo/README.md` for provenance and regeneration instructions.
+
 ## Launch
 
 ```sh

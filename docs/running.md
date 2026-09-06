@@ -156,6 +156,13 @@ artifact because there was no copied-text projection stage. A pre-existing
 Run the same command against the same directory. Completed restoration windows,
 passage-preparation windows, and comparison batches are validated and reused.
 
+Mutating `analyze`, `restore`, and `restore-canary` runs hold an exclusive OS
+lock in `.run.lock` until exit. A second writer is rejected before checkpoint
+mutation. The lock file remains after exit; do not delete it to bypass an active
+run. The OS releases the lock if the process exits or crashes. Analysis also
+locks its nested restoration stage while that stage runs. Older binaries do
+not honor this new lock: never mix an older active writer with a new one.
+
 - Changing scheduling mode, concurrency, or pacing does not redo completed model work.
 - Changing an importance or novelty prompt does not invalidate restoration or
   passage preparation. Only that metric gets a new comparison namespace.

@@ -35,7 +35,7 @@ sudo apt-get update
 sudo apt-get install build-essential pkg-config libssl-dev poppler-utils ffmpeg
 ```
 
-Rust 可通过 [rustup](https://rustup.rs/) 安装；本次检查已通过 Rust 1.94.0 的全部 target 编译检查。首次构建会下载 Rust 依赖和 ONNX Runtime；首次分析还可能下载本地中文检索模型 `BAAI/bge-small-zh-v1.5`。
+Rust 可通过 [rustup](https://rustup.rs/) 安装；最低支持版本与 CI 使用的版本为 1.94.0。首次构建会下载 Rust 依赖和 ONNX Runtime；首次分析还可能下载本地中文检索模型 `BAAI/bge-small-zh-v1.5`。
 
 ```sh
 git clone https://github.com/Charliewzy/BeyondSlides.git
@@ -101,11 +101,11 @@ API base URL: https://lab.cs.tsinghua.edu.cn/ai-platform/api/v1
 - 原始 PDF、录音和视频保存在本地，不作为附件上传给分析模型；**转写和幻灯片文字会发送到你配置的模型端点**。
 - API key 不写入讲座配置或浏览器持久存储，但会传给本地后台进程。调试日志有凭据过滤，不等于自动清除所有敏感内容。
 - 本地检查点、模型请求 / 响应 traces 和日志可能包含完整课程文本。默认 `run/`、`data/` 被 Git 忽略；不要把自己的数据目录提交到仓库。
-- 已知限制：服务商如果在响应中回显 API key，私有模型 trace 目前可能原样保存它。不要分享原始 traces；详见 [发布就绪检查](docs/release-readiness.md)。
+- 新写入的模型 traces 和服务商错误会过滤配置的 API key（含 JSON / URL 编码形式）。修复前的 traces 不会自动清理；不要分享原始 traces。过滤不保证识别任意混淆方式或其他秘密。
 - 服务仅绑定 loopback，没有多用户鉴权。**不要直接通过反向代理或端口转发将它公开到互联网。**
 - PDF 目前依赖可提取文字，不自动 OCR 图片型幻灯片；检查警告不能保证提取内容完整。
 - ASR、文本恢复、分段、排名和幻灯片对齐都可能出错；音频定位可能退回较粗的转写区间。请对重要内容回看原始讲义 / 录音。
-- 分享前确认讲义、录音与转写的授权。仓库目前尚未声明软件许可证；内置课程示例保留原始署名，不能据此推定拥有再分发授权。
+- 软件使用 [MIT 许可证](LICENSE)。内置示例的课程文字和幻灯片不在 MIT 授权范围内；按项目所有者决定，为当前课程提交保留。公开发布前仍需确认授权或替换示例，见 [NOTICE](NOTICE)。
 
 ## 开发与验证
 
@@ -113,10 +113,10 @@ API base URL: https://lab.cs.tsinghua.edu.cn/ai-platform/api/v1
 cargo fmt --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-targets --all-features -- --test-threads=1
-uv run --python 3.11 python -m unittest discover -s scripts/tests
+uv run --isolated --python 3.11 --with-requirements scripts/tests/requirements.txt python -m unittest discover -s scripts/tests
 ```
 
-PDF / 视频相关测试需要 Poppler 和 FFmpeg，部分检索测试需要模型缓存或下载权限。浏览器与本地应用端到端检查使用真实服务器 / worker 和本地模拟模型，不产生付费 API 请求：
+GitHub Actions 在 `main` 推送和 pull request 上运行上述四项检查，也支持手动触发。CI 不运行付费模型、完整 ASR 或浏览器测试。PDF / 视频相关测试需要 Poppler 和 FFmpeg；下载中文检索模型的测试默认忽略，可单独运行 `cargo test --test retrieval -- --ignored`。浏览器与本地应用端到端检查使用真实服务器 / worker 和本地模拟模型，不产生付费 API 请求：
 
 ```sh
 cargo build --locked

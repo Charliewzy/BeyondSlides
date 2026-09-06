@@ -1,5 +1,44 @@
 # Release-readiness review — 2026-09-06
 
+## Course-submission follow-up
+
+The three code findings below have now been addressed in separate commits:
+
+- `6d04f42`: configured credential filtering at trace persistence, including
+  successful raw responses and provider errors; returned provider errors are
+  filtered before truncation too. Regression tests cover plain and URL-encoded
+  echoes with a local mock provider. Historical traces remain sensitive.
+- `dcd44fd`: same-destination audio inputs are preserved; replacements are
+  staged before publication/cleanup. Tests cover repeated and equivalent-path
+  rendering, missing replacements, extension changes and original preservation.
+- `b00b745`: exclusive lifetime-held CLI run locks, including nested restoration;
+  tests cover competing processes, initialization and lock release on drop.
+
+The project owner selected MIT for the software and explicitly retained the
+bundled example for the current course submission. `NOTICE` excludes third-party
+course content from MIT; permission or replacement remains necessary before a
+public release. Minimal CI now covers Rust formatting, Clippy, Rust tests and
+lightweight Python tests, using Rust 1.94.0 / Python 3.11. Native test dependencies
+and the Python tests' `httpx` dependency are explicitly installed.
+
+The remainder records the **original review snapshot**, not the current status
+of those fixed findings. The target is a Linux/WSL local course submission, not
+an unrestricted public or multi-user hosted production release. A clean-machine
+ASR installation and broader platform/resource fault testing remain future
+release work. CI itself cannot be observed on GitHub until the commits are pushed.
+
+Follow-up verification on Rust 1.94.0 passed formatting, strict Clippy and the
+complete all-target Rust test suite (including the new regressions). All 26
+Python tests passed in an isolated Python 3.11 environment with only their
+declared `httpx` dependency. A fresh mock-provider application run completed with
+17 requests, exercising stop/resume, controller restart and export. Separately,
+the 60-second local CPU ASR sample completed in 24.8 seconds with FunASR 1.4.5,
+producing 24 source segments and 267 timed tokens. These results use this machine's
+model caches and do not constitute a clean-machine installation test.
+The browser verifier also passed desktop/mobile, demo, reader, log, reload and
+export checks against that fresh application workspace.
+Artifacts are under `run/release-final-smnPZm/`; no paid inference was performed.
+
 ## Verdict and scope
 
 **Do not label this version production-ready yet.** The local course-project

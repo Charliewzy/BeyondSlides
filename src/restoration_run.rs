@@ -97,6 +97,7 @@ pub async fn run_complete(
     if let Some(scheduler) = shared_scheduler {
         provider = provider.with_scheduler(scheduler);
     }
+    provider.worker.check_stop()?;
     let (transcript, transcript_hash) = read_json_with_hash(&transcript_path, "transcript")?;
     let manifest = RestorationRunManifest::new(&provider, transcript_hash);
     initialize_run_directory_with(
@@ -108,8 +109,14 @@ pub async fn run_complete(
     provider.record_execution_settings(&run_directory)?;
     let client = restoration_client(&provider, open_run_model_trace(&run_directory)?)?;
     let mut session =
-        TranscriptRestorationSession::prepare(&client, transcript, restoration_config(&provider)?)?;
+        TranscriptRestorationSession::prepare(&client, transcript, restoration_config(&provider)?)?
+            .with_stop_signal(provider.worker.stop_signal());
     restore_checkpoints(&mut session, &run_directory)?;
+    provider.worker.progress(
+        crate::worker_control::Stage::Restoration,
+        session.completed_window_count(),
+        Some(session.window_count()),
+    )?;
 
     let progress = window_progress_bar(session.window_count(), session.completed_window_count())?;
     if session.window_count() > 0 {
@@ -125,6 +132,11 @@ pub async fn run_complete(
             "restoration window checkpoint",
         )?;
         progress.set_position(session.completed_window_count() as u64);
+        provider.worker.progress(
+            crate::worker_control::Stage::Restoration,
+            session.completed_window_count(),
+            Some(session.window_count()),
+        )?;
     }
 
     progress.set_message("restoring transcript windows");
@@ -138,6 +150,11 @@ pub async fn run_complete(
             )
             .map_err(|error| Box::new(error) as RestorationProgressError)?;
             progress.set_position(event.completed_windows as u64);
+            provider.worker.progress(
+                crate::worker_control::Stage::Restoration,
+                event.completed_windows,
+                Some(event.total_windows),
+            )?;
             provider
                 .record_scheduling(&run_directory)
                 .map_err(|error| Box::new(error) as RestorationProgressError)?;

@@ -6,7 +6,7 @@ use std::{
     num::NonZeroUsize,
 };
 
-use futures::{StreamExt, TryStreamExt, stream};
+use crate::processing::{BatchRunError, StopSignal, run_bounded};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -493,6 +493,7 @@ pub struct ComparativeRankingProgress<'a> {
 
 /// Resumable lecture-wide importance and novelty ranking.
 pub struct ComparativeRankingSession<'a> {
+    stop: StopSignal,
     client: &'a ChatCompletionsClient,
     passage_count: usize,
     config: ComparativeRankingConfig,
@@ -510,12 +511,18 @@ impl<'a> ComparativeRankingSession<'a> {
         let tasks = build_tasks(analysis, scorer, config)?;
         let results = vec![None; tasks.len()];
         Ok(Self {
+            stop: StopSignal::default(),
             client,
             passage_count: analysis.passages().len(),
             config,
             tasks,
             results,
         })
+    }
+
+    pub fn with_stop_signal(mut self, stop: StopSignal) -> Self {
+        self.stop = stop;
+        self
     }
 
     pub fn batch_count(&self) -> usize {
@@ -568,6 +575,7 @@ impl<'a> ComparativeRankingSession<'a> {
         ) -> Result<(), ComparativeRankingProgressError>,
     ) -> Result<CompleteComparativeRanking, ComparativeRankingError> {
         let Self {
+            stop,
             client,
             passage_count,
             config,
@@ -583,6 +591,9 @@ impl<'a> ComparativeRankingSession<'a> {
         for task_index in canaries {
             if results[task_index].is_some() {
                 continue;
+            }
+            if stop.is_requested() {
+                return Err(ComparativeRankingError::Stopped);
             }
             let result = client
                 .compare_passages(&tasks[task_index])
@@ -607,8 +618,11 @@ impl<'a> ComparativeRankingSession<'a> {
             .enumerate()
             .filter_map(|(task_index, result)| result.is_none().then_some(task_index))
             .collect::<Vec<_>>();
-        let remaining = stream::iter(pending)
-            .map(|task_index| {
+        run_bounded(
+            pending,
+            config.max_concurrent_batches,
+            &stop,
+            |task_index| {
                 let task = &tasks[task_index];
                 async move {
                     client
@@ -620,20 +634,25 @@ impl<'a> ComparativeRankingSession<'a> {
                             source,
                         })
                 }
-            })
-            .buffer_unordered(config.max_concurrent_batches.get());
-        futures::pin_mut!(remaining);
-        while let Some((task_index, result)) = remaining.try_next().await? {
-            completed_batches += 1;
-            report_progress(ComparativeRankingProgress {
-                batch: batch_info(&tasks[task_index]),
-                completed_batches,
-                total_batches: tasks.len(),
-                result: &result,
-            })
-            .map_err(ComparativeRankingError::Progress)?;
-            results[task_index] = Some(result);
-        }
+            },
+            |(task_index, result)| {
+                completed_batches += 1;
+                report_progress(ComparativeRankingProgress {
+                    batch: batch_info(&tasks[task_index]),
+                    completed_batches,
+                    total_batches: tasks.len(),
+                    result: &result,
+                })
+                .map_err(ComparativeRankingError::Progress)?;
+                results[task_index] = Some(result);
+                Ok(())
+            },
+        )
+        .await
+        .map_err(|error| match error {
+            BatchRunError::Stopped => ComparativeRankingError::Stopped,
+            BatchRunError::Work(error) => error,
+        })?;
 
         let results = results
             .into_iter()
@@ -1035,6 +1054,7 @@ impl Error for ComparativeRankingValidationError {}
 
 #[derive(Debug)]
 pub enum ComparativeRankingError {
+    Stopped,
     SlideScoring {
         passage_id: usize,
         source: SearchError,
@@ -1078,6 +1098,9 @@ pub enum ComparativeRankingError {
 impl fmt::Display for ComparativeRankingError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Stopped => {
+                formatter.write_str("comparative ranking stopped; completed checkpoints preserved")
+            }
             Self::SlideScoring { passage_id, source } => write!(
                 formatter,
                 "could not retrieve novelty evidence for passage {passage_id}: {source}"
@@ -1153,6 +1176,7 @@ impl Error for ComparativeRankingError {
             | Self::NonFiniteSlideScore { .. }
             | Self::UnknownBatchIndex { .. }
             | Self::BatchAlreadyCompleted { .. }
+            | Self::Stopped
             | Self::MissingResult { .. } => None,
         }
     }

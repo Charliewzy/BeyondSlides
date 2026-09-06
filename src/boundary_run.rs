@@ -6,12 +6,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use beyond_slides::processing::{BatchRunError, run_bounded};
 use beyond_slides::{
     BoundaryBatchResult, BoundarySegmentationPlan, ChatCompletionsClient,
     PASSAGE_BOUNDARY_INSTRUCTIONS, RestoredTranscript, SlideScorer, ValidatedRestoredAnalysis,
     ValidatedSources,
 };
-use futures::{StreamExt, TryStreamExt, stream};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -70,6 +70,10 @@ pub(crate) async fn prepare(
     run_directory: &Path,
     max_output_tokens: u32,
 ) -> Result<BoundaryPreparation, Box<dyn Error>> {
+    provider.worker.check_stop()?;
+    provider
+        .worker
+        .progress(crate::worker_control::Stage::Passages, 0, None)?;
     let started = Instant::now();
     let plan = BoundarySegmentationPlan::new(&restored);
     let identity = BoundaryRunIdentity::new(provider, &plan, max_output_tokens)?;
@@ -95,6 +99,11 @@ pub(crate) async fn prepare(
         }
     }
     let restored_count = results.iter().flatten().count();
+    provider.worker.progress(
+        crate::worker_control::Stage::Passages,
+        restored_count,
+        Some(tasks.len()),
+    )?;
     if restored_count > 0 {
         eprintln!(
             "Restored {restored_count}/{} validated boundary batches",
@@ -112,6 +121,7 @@ pub(crate) async fn prepare(
         if let Some(task) = tasks.first()
             && results[0].is_none()
         {
+            provider.worker.check_stop()?;
             progress.set_message("running boundary canary");
             let result = client.classify_passage_boundaries(task).await?;
             write_json_atomically(
@@ -121,29 +131,56 @@ pub(crate) async fn prepare(
             )?;
             results[0] = Some(result);
             progress.inc(1);
+            provider.worker.progress(
+                crate::worker_control::Stage::Passages,
+                progress.position() as usize,
+                Some(tasks.len()),
+            )?;
             provider.record_scheduling(run_directory)?;
         }
         let pending = tasks
             .iter()
             .filter(|t| results[t.batch_index()].is_none())
             .collect::<Vec<_>>();
-        let requests = stream::iter(pending)
-            .map(|task| async move { client.classify_passage_boundaries(task).await })
-            .buffer_unordered(provider.max_concurrency());
-        futures::pin_mut!(requests);
-        while let Some(result) = requests.try_next().await? {
-            let index = result.batch_index;
-            write_json_atomically(
-                &directory.join(format!("batch-{:04}.json", index + 1)),
-                &result,
-                "boundary checkpoint",
-            )?;
-            results[index] = Some(result);
-            progress.inc(1);
-            progress
-                .set_message(provider.progress_message(&format!("classified batch {}", index + 1)));
-            provider.record_scheduling(run_directory)?;
-        }
+        run_bounded(
+            pending,
+            std::num::NonZeroUsize::new(provider.max_concurrency()).expect("validated concurrency"),
+            &provider.worker.stop_signal(),
+            |task| async move {
+                client
+                    .classify_passage_boundaries(task)
+                    .await
+                    .map_err(|error| Box::new(error) as Box<dyn Error>)
+            },
+            |result| {
+                let index = result.batch_index;
+                write_json_atomically(
+                    &directory.join(format!("batch-{:04}.json", index + 1)),
+                    &result,
+                    "boundary checkpoint",
+                )?;
+                results[index] = Some(result);
+                progress.inc(1);
+                provider.worker.progress(
+                    crate::worker_control::Stage::Passages,
+                    progress.position() as usize,
+                    Some(tasks.len()),
+                )?;
+                progress.set_message(
+                    provider.progress_message(&format!("classified batch {}", index + 1)),
+                );
+                provider.record_scheduling(run_directory)?;
+                Ok(())
+            },
+        )
+        .await
+        .map_err(|error| match error {
+            BatchRunError::Stopped => Box::new(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "boundary classification stopped; completed checkpoints preserved",
+            )) as Box<dyn Error>,
+            BatchRunError::Work(error) => error,
+        })?;
         Ok::<(), Box<dyn Error>>(())
     }
     .await;

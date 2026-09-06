@@ -94,6 +94,7 @@ pub async fn run_canary(
     let slides_path = PathBuf::from(slides_path);
     let output_path = PathBuf::from(output_path);
     let provider = ProviderSettings::from_annotation_environment()?;
+    provider.worker.check_stop()?;
     let restoration_directory = output_path.with_extension("restoration");
     restoration_run::run_complete(
         transcript_path.as_os_str(),
@@ -109,6 +110,10 @@ pub async fn run_canary(
     )?;
     let sources = ValidatedSources::new(transcript, slide_deck)?;
 
+    provider.worker.check_stop()?;
+    provider
+        .worker
+        .progress(crate::worker_control::Stage::Retrieval, 0, None)?;
     eprintln!(
         "Indexing {} slides for hybrid retrieval...",
         sources.slide_deck().slides.len()
@@ -116,6 +121,9 @@ pub async fn run_canary(
     let lexical = LexicalSlideScorer::new(&sources);
     let dense = DenseSlideScorer::try_new(&sources)?;
     let hybrid = HybridSlideScorer::new(&lexical, &dense);
+    provider
+        .worker
+        .progress(crate::worker_control::Stage::Retrieval, 1, Some(1))?;
     let client = analysis_client(&provider, open_output_model_trace(&output_path)?)?;
 
     eprintln!("Preparing the lecture and scoring every transcript window...");
@@ -163,6 +171,7 @@ pub async fn run_complete(
     let audio_path = audio_path.map(PathBuf::from);
     let timed_tokens_path = timed_tokens_path.map(PathBuf::from);
     let provider = ProviderSettings::from_annotation_environment()?;
+    provider.worker.check_stop()?;
     let restoration_directory = run_directory.join(RESTORATION_DIRECTORY);
     restoration_run::run_complete(
         transcript_path.as_os_str(),
@@ -196,6 +205,10 @@ pub async fn run_complete(
     provider.record_execution_settings(&run_directory)?;
     let sources = ValidatedSources::new(transcript, slide_deck)?;
 
+    provider.worker.check_stop()?;
+    provider
+        .worker
+        .progress(crate::worker_control::Stage::Retrieval, 0, None)?;
     eprintln!(
         "Indexing {} slides for hybrid retrieval...",
         sources.slide_deck().slides.len()
@@ -204,6 +217,9 @@ pub async fn run_complete(
     let dense = DenseSlideScorer::try_new(&sources)?;
     let hybrid = HybridSlideScorer::new(&lexical, &dense);
     let client = analysis_client(&provider, open_run_model_trace(&run_directory)?)?;
+    provider
+        .worker
+        .progress(crate::worker_control::Stage::Retrieval, 1, Some(1))?;
 
     let (analysis, window_diagnostics, window_projections, boundary_identity) =
         match preparation_mode {
@@ -242,12 +258,17 @@ pub async fn run_complete(
         };
 
     eprintln!("Preparing lecture-wide importance and novelty comparisons...");
+    provider.worker.check_stop()?;
+    provider
+        .worker
+        .progress(crate::worker_control::Stage::Comparisons, 0, None)?;
     let mut ranking_session = ComparativeRankingSession::prepare(
         &client,
         &analysis,
         &hybrid,
         comparative_ranking_config(&provider)?,
-    )?;
+    )?
+    .with_stop_signal(provider.worker.stop_signal());
     let comparison_directories = initialize_comparison_directories(
         &run_directory,
         &manifest,
@@ -255,6 +276,11 @@ pub async fn run_complete(
         boundary_identity.as_ref(),
     )?;
     restore_comparison_checkpoints(&mut ranking_session, &comparison_directories)?;
+    provider.worker.progress(
+        crate::worker_control::Stage::Comparisons,
+        ranking_session.completed_batch_count(),
+        Some(ranking_session.batch_count()),
+    )?;
     let ranking_progress = ranking_progress_bar(
         ranking_session.batch_count(),
         ranking_session.completed_batch_count(),
@@ -270,6 +296,11 @@ pub async fn run_complete(
             write_json_atomically(&path, event.result, "comparison checkpoint")
                 .map_err(|error| Box::new(error) as ComparativeRankingProgressError)?;
             ranking_progress.set_position(event.completed_batches as u64);
+            provider.worker.progress(
+                crate::worker_control::Stage::Comparisons,
+                event.completed_batches,
+                Some(event.total_batches),
+            )?;
             provider
                 .record_scheduling(&run_directory)
                 .map_err(|error| Box::new(error) as ComparativeRankingProgressError)?;
@@ -304,6 +335,10 @@ pub async fn run_complete(
     let output_path = run_directory.join(ANALYSIS_FILE);
     write_json_atomically(&output_path, &output, "complete analysis")?;
     let report_path = run_directory.join(REPORT_FILE);
+    provider.worker.check_stop()?;
+    provider
+        .worker
+        .progress(crate::worker_control::Stage::Rendering, 0, Some(1))?;
     write_analysis_report(
         &analysis,
         &report_path,
@@ -316,6 +351,9 @@ pub async fn run_complete(
         output_path.display(),
         report_path.display()
     );
+    provider
+        .worker
+        .progress(crate::worker_control::Stage::Rendering, 1, Some(1))?;
     if preparation_mode == PassagePreparationMode::Windows {
         let trace = read_model_trace(&model_trace_path(&run_directory))?;
         let quality = summarize_annotation_quality(&output, &trace);
@@ -339,6 +377,10 @@ async fn prepare_window_passages(
     scorer: &dyn beyond_slides::SlideScorer,
     run_directory: &Path,
 ) -> Result<beyond_slides::LectureAnalysisResult, Box<dyn Error>> {
+    provider.worker.check_stop()?;
+    provider
+        .worker
+        .progress(crate::worker_control::Stage::Passages, 0, None)?;
     eprintln!("Preparing the lecture and scoring every transcript window...");
     let mut session = LectureAnalysisSession::prepare(
         client,
@@ -346,8 +388,14 @@ async fn prepare_window_passages(
         restored_transcript,
         scorer,
         lecture_config(provider)?,
-    )?;
+    )?
+    .with_stop_signal(provider.worker.stop_signal());
     restore_checkpoints(&mut session, run_directory)?;
+    provider.worker.progress(
+        crate::worker_control::Stage::Passages,
+        session.completed_window_count(),
+        Some(session.window_count()),
+    )?;
 
     let passage_progress =
         window_progress_bar(session.window_count(), session.completed_window_count())?;
@@ -364,6 +412,11 @@ async fn prepare_window_passages(
             "window checkpoint",
         )?;
         passage_progress.set_position(session.completed_window_count() as u64);
+        provider.worker.progress(
+            crate::worker_control::Stage::Passages,
+            session.completed_window_count(),
+            Some(session.window_count()),
+        )?;
     }
 
     passage_progress.set_message("preparing lecture passages");
@@ -377,6 +430,11 @@ async fn prepare_window_passages(
             )
             .map_err(|error| Box::new(error) as LectureAnalysisProgressError)?;
             passage_progress.set_position(event.completed_windows as u64);
+            provider.worker.progress(
+                crate::worker_control::Stage::Passages,
+                event.completed_windows,
+                Some(event.total_windows),
+            )?;
             provider
                 .record_scheduling(run_directory)
                 .map_err(|error| Box::new(error) as LectureAnalysisProgressError)?;

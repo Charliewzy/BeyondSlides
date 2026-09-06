@@ -12,6 +12,7 @@ mod orchestration;
 mod passage_boundaries;
 mod passage_projection;
 mod playback_timing;
+pub mod processing;
 mod ranking;
 mod report;
 mod request_scheduling;

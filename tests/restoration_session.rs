@@ -9,6 +9,57 @@ use serde_json::{Value, json};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate, matchers::any};
 
 #[tokio::test(flavor = "multi_thread")]
+async fn stopped_restoration_resumes_only_missing_windows() -> Result<(), Box<dyn Error>> {
+    use beyond_slides::processing::StopSignal;
+    let api = mock_api().await;
+    let client = client(&api)?;
+    let stop = StopSignal::default();
+    let mut session = TranscriptRestorationSession::prepare(&client, transcript(), config(1)?)?
+        .with_stop_signal(stop.clone());
+    let canary = session.restore_canary().await?.unwrap().clone();
+    let mut saved = vec![(0, canary)];
+    let result = session
+        .complete_restoration_with_progress(|event| {
+            saved.push((event.window_index, event.result.clone()));
+            stop.request_stop();
+            Ok(())
+        })
+        .await;
+    assert!(matches!(result, Err(RestorationSessionError::Stopped)));
+    assert_eq!(
+        saved.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+        [0, 1]
+    );
+    assert_eq!(api.received_requests().await.unwrap().len(), 2);
+
+    let mut resumed = TranscriptRestorationSession::prepare(&client, transcript(), config(1)?)?;
+    for (index, result) in saved {
+        resumed.restore_window_checkpoint(index, result)?;
+    }
+    let result = resumed.complete_restoration().await?;
+    assert_eq!(result.transcript().text(), "甲。乙。丙。");
+    assert_eq!(api.received_requests().await.unwrap().len(), 3);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stop_before_the_canary_makes_no_provider_request() -> Result<(), Box<dyn Error>> {
+    use beyond_slides::processing::StopSignal;
+    let api = mock_api().await;
+    let client = client(&api)?;
+    let stop = StopSignal::default();
+    stop.request_stop();
+    let mut session = TranscriptRestorationSession::prepare(&client, transcript(), config(2)?)?
+        .with_stop_signal(stop);
+    assert!(matches!(
+        session.restore_canary().await,
+        Err(RestorationSessionError::Stopped)
+    ));
+    assert!(api.received_requests().await.unwrap().is_empty());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn restoration_runs_a_canary_then_assembles_remaining_windows() -> Result<(), Box<dyn Error>>
 {
     let api = mock_api().await;

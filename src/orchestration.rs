@@ -1,6 +1,6 @@
 use std::{error::Error, fmt, num::NonZeroUsize};
 
-use futures::{StreamExt, TryStreamExt, stream};
+use crate::processing::{BatchRunError, StopSignal, run_bounded};
 
 use crate::{
     AnnotationDiagnostics, ChatCompletionsClient, ChatCompletionsError,
@@ -105,6 +105,7 @@ impl LectureAnalysisResult {
 /// Call `analyze_canary` to validate the first transcript window in isolation,
 /// then call `complete_analysis` to process the remaining windows.
 pub struct LectureAnalysisSession<'a> {
+    stop: StopSignal,
     client: &'a ChatCompletionsClient,
     scorer: &'a dyn SlideScorer,
     sources: ValidatedSources,
@@ -144,6 +145,7 @@ impl<'a> LectureAnalysisSession<'a> {
         let window_results = vec![None; tasks.len()];
 
         Ok(Self {
+            stop: StopSignal::default(),
             client,
             scorer,
             sources,
@@ -152,6 +154,11 @@ impl<'a> LectureAnalysisSession<'a> {
             slide_positions,
             window_results,
         })
+    }
+
+    pub fn with_stop_signal(mut self, stop: StopSignal) -> Self {
+        self.stop = stop;
+        self
     }
 
     pub fn window_count(&self) -> usize {
@@ -210,6 +217,9 @@ impl<'a> LectureAnalysisSession<'a> {
             return Ok(None);
         };
         if canary_result.is_none() {
+            if self.stop.is_requested() {
+                return Err(LectureAnalysisError::Stopped);
+            }
             let result = {
                 let windows = build_restored_windows(
                     &self.sources,
@@ -253,6 +263,7 @@ impl<'a> LectureAnalysisSession<'a> {
         ) -> Result<(), LectureAnalysisProgressError>,
     ) -> Result<LectureAnalysisResult, LectureAnalysisError> {
         let Self {
+            stop,
             client,
             scorer,
             sources,
@@ -281,8 +292,11 @@ impl<'a> LectureAnalysisSession<'a> {
 
         if !pending_tasks.is_empty() {
             let sources_ref = &sources;
-            let remaining_results = stream::iter(pending_tasks)
-                .map(move |task| async move {
+            run_bounded(
+                pending_tasks,
+                config.max_concurrent_windows,
+                &stop,
+                move |task| async move {
                     client
                         .annotate_restored_window(sources_ref, scorer, &task)
                         .await
@@ -291,20 +305,25 @@ impl<'a> LectureAnalysisSession<'a> {
                             window_index: task.window_index(),
                             source,
                         })
-                })
-                .buffer_unordered(config.max_concurrent_windows.get());
-            futures::pin_mut!(remaining_results);
-            while let Some((window_index, result)) = remaining_results.try_next().await? {
-                completed_windows += 1;
-                report_progress(LectureAnalysisProgress {
-                    window_index,
-                    completed_windows,
-                    total_windows: tasks.len(),
-                    result: &result,
-                })
-                .map_err(LectureAnalysisError::Progress)?;
-                window_results.push((window_index, result));
-            }
+                },
+                |(window_index, result)| {
+                    completed_windows += 1;
+                    report_progress(LectureAnalysisProgress {
+                        window_index,
+                        completed_windows,
+                        total_windows: tasks.len(),
+                        result: &result,
+                    })
+                    .map_err(LectureAnalysisError::Progress)?;
+                    window_results.push((window_index, result));
+                    Ok(())
+                },
+            )
+            .await
+            .map_err(|error| match error {
+                BatchRunError::Stopped => LectureAnalysisError::Stopped,
+                BatchRunError::Work(error) => error,
+            })?;
         }
 
         window_results.sort_unstable_by_key(|(window_index, _)| *window_index);
@@ -339,6 +358,7 @@ impl<'a> LectureAnalysisSession<'a> {
 
 #[derive(Debug)]
 pub enum LectureAnalysisError {
+    Stopped,
     Windowing(RestoredWindowingError),
     Scoring {
         window_index: usize,
@@ -369,6 +389,9 @@ pub enum LectureAnalysisError {
 impl fmt::Display for LectureAnalysisError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Stopped => {
+                formatter.write_str("passage preparation stopped; completed checkpoints preserved")
+            }
             Self::Windowing(error) => write!(formatter, "could not window restored text: {error}"),
             Self::Scoring {
                 window_index,
@@ -439,7 +462,7 @@ impl Error for LectureAnalysisError {
             Self::WindowAnnotation { source, .. } => Some(source),
             Self::UnknownWindowIndex { .. } | Self::WindowAlreadyCompleted { .. } => None,
             Self::InvalidRestoredWindow { source, .. } => Some(source),
-            Self::CanaryNotAnalyzed => None,
+            Self::CanaryNotAnalyzed | Self::Stopped => None,
             Self::Progress(error) => Some(error.as_ref()),
             Self::Assembly(error) => Some(error),
         }

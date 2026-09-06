@@ -5,6 +5,7 @@ mod restoration_review_run;
 mod restoration_run;
 mod run_support;
 mod trace_summary_run;
+mod worker_control;
 
 use std::{
     env,

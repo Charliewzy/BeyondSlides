@@ -1,6 +1,6 @@
 use std::{error::Error, fmt, num::NonZeroUsize};
 
-use futures::{StreamExt, TryStreamExt, stream};
+use crate::processing::{BatchRunError, StopSignal, run_bounded};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -187,6 +187,7 @@ pub struct RestorationProgress<'a> {
 
 /// A prepared restoration that pauses after its first model request.
 pub struct TranscriptRestorationSession<'a> {
+    stop: StopSignal,
     client: &'a ChatCompletionsClient,
     sources: ValidatedSources,
     config: TranscriptRestorationConfig,
@@ -204,11 +205,17 @@ impl<'a> TranscriptRestorationSession<'a> {
             .map_err(RestorationSessionError::InvalidTranscript)?;
         let window_results = vec![None; build_windows(&sources, config.windowing).len()];
         Ok(Self {
+            stop: StopSignal::default(),
             client,
             sources,
             config,
             window_results,
         })
+    }
+
+    pub fn with_stop_signal(mut self, stop: StopSignal) -> Self {
+        self.stop = stop;
+        self
     }
 
     pub fn window_count(&self) -> usize {
@@ -257,6 +264,9 @@ impl<'a> TranscriptRestorationSession<'a> {
             return Ok(None);
         };
         if canary_result.is_none() {
+            if self.stop.is_requested() {
+                return Err(RestorationSessionError::Stopped);
+            }
             let result = {
                 let windows = build_windows(&self.sources, self.config.windowing);
                 let tasks = build_restoration_tasks(&windows);
@@ -288,6 +298,7 @@ impl<'a> TranscriptRestorationSession<'a> {
         mut report_progress: impl FnMut(RestorationProgress<'_>) -> Result<(), RestorationProgressError>,
     ) -> Result<CompleteTranscriptRestoration, RestorationSessionError> {
         let Self {
+            stop,
             client,
             sources,
             config,
@@ -310,8 +321,11 @@ impl<'a> TranscriptRestorationSession<'a> {
         }
 
         if !pending_tasks.is_empty() {
-            let remaining_results = stream::iter(pending_tasks)
-                .map(move |task| async move {
+            run_bounded(
+                pending_tasks,
+                config.max_concurrent_windows,
+                &stop,
+                move |task| async move {
                     client
                         .restore_window(&task)
                         .await
@@ -320,20 +334,25 @@ impl<'a> TranscriptRestorationSession<'a> {
                             index: task.window_index,
                             source,
                         })
-                })
-                .buffer_unordered(config.max_concurrent_windows.get());
-            futures::pin_mut!(remaining_results);
-            while let Some((window_index, result)) = remaining_results.try_next().await? {
-                completed_windows += 1;
-                report_progress(RestorationProgress {
-                    window_index,
-                    completed_windows,
-                    total_windows: tasks.len(),
-                    result: &result,
-                })
-                .map_err(RestorationSessionError::Progress)?;
-                window_results.push((window_index, result));
-            }
+                },
+                |(window_index, result)| {
+                    completed_windows += 1;
+                    report_progress(RestorationProgress {
+                        window_index,
+                        completed_windows,
+                        total_windows: tasks.len(),
+                        result: &result,
+                    })
+                    .map_err(RestorationSessionError::Progress)?;
+                    window_results.push((window_index, result));
+                    Ok(())
+                },
+            )
+            .await
+            .map_err(|error| match error {
+                BatchRunError::Stopped => RestorationSessionError::Stopped,
+                BatchRunError::Work(error) => error,
+            })?;
         }
 
         window_results.sort_unstable_by_key(|(window_index, _)| *window_index);
@@ -352,6 +371,7 @@ impl<'a> TranscriptRestorationSession<'a> {
 
 #[derive(Debug)]
 pub enum RestorationSessionError {
+    Stopped,
     InvalidTranscript(ValidationError),
     UnknownWindowIndex {
         index: usize,
@@ -376,6 +396,9 @@ pub enum RestorationSessionError {
 impl fmt::Display for RestorationSessionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Stopped => {
+                formatter.write_str("restoration stopped; completed checkpoints preserved")
+            }
             Self::InvalidTranscript(error) => write!(formatter, "invalid transcript: {error}"),
             Self::UnknownWindowIndex { index, count } => write!(
                 formatter,
@@ -413,6 +436,7 @@ impl Error for RestorationSessionError {
             Self::Progress(error) => Some(error.as_ref()),
             Self::UnknownWindowIndex { .. }
             | Self::WindowAlreadyCompleted { .. }
+            | Self::Stopped
             | Self::CanaryNotRestored => None,
         }
     }

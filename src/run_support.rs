@@ -25,6 +25,7 @@ const MANIFEST_FILE: &str = "manifest.json";
 const MODEL_TRACE_FILE: &str = "model-trace.jsonl";
 
 pub(crate) struct ProviderSettings {
+    pub(crate) worker: crate::worker_control::WorkerControl,
     base_url: String,
     api_key: String,
     model: String,
@@ -123,6 +124,7 @@ impl ProviderSettings {
             optional_environment_variable("BEYOND_SLIDES_REQUEST_INTERVAL_MS")?.as_deref(),
         )?;
         Ok(Self {
+            worker: crate::worker_control::WorkerControl::from_environment()?,
             base_url: required_environment_variable(API_BASE_URL_ENV)?,
             api_key: required_environment_variable(API_KEY_ENV)?,
             model: required_environment_variable(MODEL_ENV)?,
@@ -136,6 +138,8 @@ impl ProviderSettings {
     pub(crate) fn new(base_url: &str, api_key: &str, model: &str) -> Self {
         let execution = ExecutionSettings::parse(None, None, None).expect("valid defaults");
         Self {
+            worker: crate::worker_control::WorkerControl::new(None)
+                .expect("disabled worker control"),
             base_url: base_url.into(),
             api_key: api_key.into(),
             model: model.into(),

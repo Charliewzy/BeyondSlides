@@ -227,7 +227,7 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
             .to_ascii_lowercase();
         let (filename, limit) = match name.as_str() {
             "slides" if ext == "pdf" => ("slides.pdf".into(), 100 * 1024 * 1024),
-            "transcript" if matches!(ext.as_str(), "json" | "tsv") => {
+            "transcript" if matches!(ext.as_str(), "json" | "tsv" | "srt" | "vtt" | "txt") => {
                 extension = ext;
                 ("transcript-upload".into(), 16 * 1024 * 1024)
             }
@@ -240,7 +240,7 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
             }
             _ => {
                 return Err(AppError::bad(
-                    "Expected slides.pdf, transcript.json/.tsv, and an optional audio/video recording",
+                    "Expected slides.pdf, transcript.json/.tsv/.srt/.vtt/.txt, and an optional audio/video recording",
                 ));
             }
         };

@@ -369,8 +369,8 @@ fn restored_span(source: u32, text: &str) -> RestoredTranscriptSpan {
 fn segment(id: u32, start_ms: u64, end_ms: u64, text: &str) -> TranscriptSegment {
     TranscriptSegment {
         id: TranscriptSegmentId(id),
-        start_ms,
-        end_ms,
+        start_ms: Some(start_ms),
+        end_ms: Some(end_ms),
         text: text.into(),
     }
 }

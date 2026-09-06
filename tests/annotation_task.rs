@@ -136,8 +136,8 @@ fn sources() -> Result<ValidatedSources, Box<dyn Error>> {
 fn segment(id: u32, text: &str) -> TranscriptSegment {
     TranscriptSegment {
         id: TranscriptSegmentId(id),
-        start_ms: u64::from(id) * 1_000,
-        end_ms: u64::from(id + 1) * 1_000,
+        start_ms: Some(u64::from(id) * 1_000),
+        end_ms: Some(u64::from(id + 1) * 1_000),
         text: text.into(),
     }
 }

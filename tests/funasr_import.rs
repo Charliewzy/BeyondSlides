@@ -14,14 +14,14 @@ fn funasr_rows_become_individually_referenced_transcript_segments() -> Result<()
         vec![
             TranscriptSegment {
                 id: TranscriptSegmentId(0),
-                start_ms: 8_800,
-                end_ms: 8_860,
+                start_ms: Some(8_800),
+                end_ms: Some(8_860),
                 text: "好".to_owned(),
             },
             TranscriptSegment {
                 id: TranscriptSegmentId(1),
-                start_ms: 31_640,
-                end_ms: 31_700,
+                start_ms: Some(31_640),
+                end_ms: Some(31_700),
                 text: "我们继续上课".to_owned(),
             },
         ]

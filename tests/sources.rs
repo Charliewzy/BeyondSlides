@@ -8,8 +8,8 @@ fn normalized_sources_can_be_validated_before_analysis() {
     let transcript = Transcript {
         segments: vec![TranscriptSegment {
             id: TranscriptSegmentId(0),
-            start_ms: 0,
-            end_ms: 1_000,
+            start_ms: Some(0),
+            end_ms: Some(1_000),
             text: "A valid transcript segment.".to_owned(),
         }],
     };
@@ -38,8 +38,8 @@ fn validated_sources_can_be_completed_with_lecture_passages() {
         Transcript {
             segments: vec![TranscriptSegment {
                 id: TranscriptSegmentId(0),
-                start_ms: 0,
-                end_ms: 1_000,
+                start_ms: Some(0),
+                end_ms: Some(1_000),
                 text: "A valid transcript segment.".to_owned(),
             }],
         },
@@ -85,8 +85,8 @@ fn legacy_transcript_json_with_sentences_still_deserializes() {
         transcript.segments,
         vec![TranscriptSegment {
             id: TranscriptSegmentId(0),
-            start_ms: 0,
-            end_ms: 1_000,
+            start_ms: Some(0),
+            end_ms: Some(1_000),
             text: "甲".into(),
         }]
     );

@@ -37,6 +37,12 @@ pub fn render_continuous_report_with_media(
     analysis: &ValidatedRestoredAnalysis,
     media: &ContinuousReportMedia,
 ) -> Result<String, ContinuousReportError> {
+    if media.audio.is_some()
+        && !analysis.transcript().has_timestamps()
+        && media.playback_intervals.is_empty()
+    {
+        return Err(ContinuousReportError::MissingPlaybackTiming);
+    }
     if !media.slide_images.is_empty()
         && media.slide_images.len() != analysis.slide_deck().slides.len()
     {
@@ -76,10 +82,13 @@ pub fn render_continuous_report_with_media(
         .collect();
     Ok(ContinuousReportTemplate {
         passage_count: passages.len(),
-        duration: analysis.transcript().segments.last().map_or_else(
-            || "00:00".into(),
-            |segment| format_timestamp(segment.end_ms),
-        ),
+        duration: analysis
+            .transcript()
+            .segments
+            .last()
+            .and_then(|segment| segment.end_ms)
+            .map(format_timestamp)
+            .unwrap_or_else(|| "未提供时间戳".into()),
         has_slides: !slides.is_empty(),
         has_audio: media.audio.is_some(),
         audio_source: media.audio.as_ref().map_or("", |audio| &audio.source),
@@ -113,8 +122,8 @@ struct PassageView {
     source_start: u32,
     source_end: u32,
     timestamp: String,
-    audio_start_ms: u64,
-    audio_end_ms: u64,
+    audio_start_ms: String,
+    audio_end_ms: String,
     audio_basis: &'static str,
     slide_position: u32,
     slide_number: usize,
@@ -134,25 +143,34 @@ impl PassageView {
     ) -> Self {
         let first = &analysis.transcript().segments[passage.source_start.index()];
         let last = &analysis.transcript().segments[passage.source_end.index()];
-        let coarse_playback = PassagePlaybackInterval {
-            start_ms: first.start_ms,
-            end_ms: last.end_ms,
-            basis: crate::PlaybackTimingBasis::TranscriptSegments,
-        };
-        let playback = playback.unwrap_or(&coarse_playback);
+        let coarse_playback =
+            first
+                .start_ms
+                .zip(last.end_ms)
+                .map(|(start_ms, end_ms)| PassagePlaybackInterval {
+                    start_ms,
+                    end_ms,
+                    basis: crate::PlaybackTimingBasis::TranscriptSegments,
+                });
+        let playback = playback.or(coarse_playback.as_ref());
         Self {
             source_start: passage.source_start.0,
             source_end: passage.source_end.0,
-            timestamp: format!(
-                "{}–{}",
-                format_timestamp(playback.start_ms),
-                format_timestamp(playback.end_ms)
-            ),
-            audio_start_ms: playback.start_ms,
-            audio_end_ms: playback.end_ms,
-            audio_basis: match playback.basis {
-                crate::PlaybackTimingBasis::TimedTokens => "timed_tokens",
-                crate::PlaybackTimingBasis::TranscriptSegments => "transcript_segments",
+            timestamp: playback
+                .map(|playback| {
+                    format!(
+                        "{}–{}",
+                        format_timestamp(playback.start_ms),
+                        format_timestamp(playback.end_ms)
+                    )
+                })
+                .unwrap_or_else(|| "未提供时间戳".into()),
+            audio_start_ms: playback.map(|p| p.start_ms.to_string()).unwrap_or_default(),
+            audio_end_ms: playback.map(|p| p.end_ms.to_string()).unwrap_or_default(),
+            audio_basis: match playback.map(|p| p.basis) {
+                Some(crate::PlaybackTimingBasis::TimedTokens) => "timed_tokens",
+                Some(crate::PlaybackTimingBasis::TranscriptSegments) => "transcript_segments",
+                None => "unavailable",
             },
             slide_position: passage.slide_position.0,
             slide_number: passage.slide_position.index() + 1,
@@ -177,6 +195,7 @@ impl PassageView {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContinuousReportError {
+    MissingPlaybackTiming,
     SlideImageCountMismatch { expected: usize, actual: usize },
     PlaybackIntervalCountMismatch { expected: usize, actual: usize },
 }
@@ -184,6 +203,7 @@ pub enum ContinuousReportError {
 impl fmt::Display for ContinuousReportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MissingPlaybackTiming => formatter.write_str("untimed transcripts need independently aligned playback intervals before enabling passage audio"),
             Self::SlideImageCountMismatch { expected, actual } => write!(
                 formatter,
                 "continuous report expected {expected} slide images but received {actual}"

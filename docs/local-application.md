@@ -2,8 +2,8 @@
 
 The local-first application supports PDF + existing transcript or recording
 import, CPU transcription, resumable analysis, live progress/token usage, the
-interactive reader, and shareable ZIP export. Broader transcript formats and
-untimed-text handling are still being integrated.
+interactive reader, and shareable ZIP export. Transcripts can be timed subtitles
+or untimed plain text; missing timestamps are never fabricated.
 
 ## Launch
 
@@ -17,8 +17,9 @@ Open `http://127.0.0.1:7842`. The server binds only to loopback; this is not a
 multi-user hosted deployment. Poppler's `pdftotext` and `pdftoppm` must be on PATH,
 and the existing dense-retrieval model may download on first use.
 
-1. Import a slides PDF (up to 100 MiB) and normalized transcript JSON or FunASR
-   timestamped TSV (up to 16 MiB). Optionally attach a browser-playable recording.
+1. Import a slides PDF (up to 100 MiB) and normalized transcript JSON, FunASR
+   timestamped TSV, SRT, WebVTT, or UTF-8 plain text (up to 16 MiB).
+   Optionally attach a browser-playable recording.
    Alternatively choose local CPU transcription and upload a recording instead
    of a transcript. Recordings are inspected with `ffprobe`; transcription
    requires an audio track. The whole upload is limited to 4 GiB.
@@ -35,6 +36,16 @@ and the existing dense-retrieval model may download on first use.
    download the ZIP. Extract the entire ZIP before opening `report.html`; keep
    `report.assets` beside it. The ZIP contains lecture text, slides, and attached
    recording, not private model traces or provider settings. Share with permission.
+
+Plain text is split into bounded ingestion units before restoration; these are
+not the final semantic passages. Untimed inputs use character-based windowing.
+JSON timing may also be absent: every segment must either supply both
+`start_ms`/`end_ms`, or every segment must omit both (or set both to null).
+Existing numeric JSON timestamps are unchanged. Untimed inputs can produce the
+full text/slides reader, but passage-linked playback is unavailable even if a
+recording is attached. The export does not include that unused recording.
+SRT and WebVTT use the [subtp parsers](https://docs.rs/subtp/latest/subtp/);
+subtitle sequence labels are normalized into contiguous source IDs.
 
 ## Local CPU transcription setup
 
@@ -123,6 +134,9 @@ mock-model analysis. The 60-second real-lecture sample in
 timed tokens. CPU ASR including model loading took 28.5 seconds, and resuming
 reused the exact transcription checkpoint. This is a short functional test, not
 a whole-lecture speed estimate.
+
+`--untimed` tests plain-text import through the complete analysis/report/export
+workflow and verifies that no zero-valued timestamps or audio links are invented.
 
 HTTP implementation references: [Axum multipart uploads](https://docs.rs/axum/latest/axum/extract/struct.Multipart.html)
 and [Tower HTTP file serving](https://docs.rs/tower-http/latest/tower_http/services/struct.ServeDir.html).

@@ -202,8 +202,8 @@ fn assembly_preserves_coarse_provenance_and_does_not_invent_evidence() -> Result
                     .map(|id| TranscriptSegment {
                         id: TranscriptSegmentId(id),
                         text: "原文".into(),
-                        start_ms: id as u64 * 1000,
-                        end_ms: (id + 1) as u64 * 1000,
+                        start_ms: Some(id as u64 * 1000),
+                        end_ms: Some((id + 1) as u64 * 1000),
                     })
                     .collect(),
             },

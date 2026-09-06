@@ -19,7 +19,11 @@ pub(crate) async fn run(directory: &OsStr) -> Result<(), Box<dyn Error>> {
     let started = Instant::now();
     let result = async {
         super::transcription::prepare(directory, &run_directory, &mut job).await?;
-        let recording = job.recording.as_ref().map(|file| directory.join(file));
+        let recording = job
+            .recording
+            .as_ref()
+            .filter(|_| job.preview.duration_ms.is_some())
+            .map(|file| directory.join(file));
         let timing = directory.join("timed-tokens.json");
         crate::analysis_run::run_complete(
             directory.join("transcript.json").as_os_str(),

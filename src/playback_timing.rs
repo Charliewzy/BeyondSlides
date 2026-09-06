@@ -147,9 +147,13 @@ fn coarse_interval(
             end: passage.source_end,
         });
     }
+    let (start_ms, end_ms) = first
+        .start_ms
+        .zip(last.end_ms)
+        .ok_or(PlaybackTimingError::MissingTranscriptTiming { passage_index })?;
     Ok(PassagePlaybackInterval {
-        start_ms: first.start_ms,
-        end_ms: last.end_ms,
+        start_ms,
+        end_ms,
         basis: PlaybackTimingBasis::TranscriptSegments,
     })
 }
@@ -304,6 +308,9 @@ const fn midpoint(left: u64, right: u64) -> u64 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaybackTimingError {
+    MissingTranscriptTiming {
+        passage_index: usize,
+    },
     NoTimedTokens,
     EmptyTimedToken {
         token_index: usize,
@@ -332,6 +339,10 @@ pub enum PlaybackTimingError {
 impl fmt::Display for PlaybackTimingError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MissingTranscriptTiming { passage_index } => write!(
+                formatter,
+                "passage {passage_index} has no source timestamps for audio projection"
+            ),
             Self::NoTimedTokens => formatter.write_str("timed transcript contains no tokens"),
             Self::EmptyTimedToken { token_index } => {
                 write!(

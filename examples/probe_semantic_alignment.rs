@@ -59,6 +59,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let transcript: Transcript = read_json(Path::new(transcript_path))?;
     let slide_deck: SlideDeck = read_json(Path::new(slides_path))?;
     let sources = ValidatedSources::new(transcript, slide_deck)?;
+    if !sources.transcript().has_timestamps() {
+        return Err("The time-based alignment probe requires a timestamped transcript".into());
+    }
     let windows = build_windows(
         &sources,
         WindowingConfig::new(
@@ -170,8 +173,8 @@ fn segment_range(segments: &[TranscriptSegment]) -> Option<SentenceRange> {
     Some(SentenceRange {
         first_segment: first.id,
         last_segment: last.id,
-        start_ms: first.start_ms,
-        end_ms: last.end_ms,
+        start_ms: first.start_ms?,
+        end_ms: last.end_ms?,
         segment_count: segments.len(),
     })
 }

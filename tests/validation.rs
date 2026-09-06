@@ -39,7 +39,7 @@ fn empty_transcript_segment_text_is_rejected() {
 #[test]
 fn transcript_segment_ending_before_it_starts_is_rejected() {
     let (mut transcript, slide_deck, _passages) = valid_analysis_parts();
-    transcript.segments[1].start_ms = 2_001;
+    transcript.segments[1].start_ms = Some(2_001);
 
     let error = ValidatedSources::new(transcript, slide_deck)
         .expect_err("a reversed timestamp range must be rejected");
@@ -57,8 +57,8 @@ fn transcript_segment_ending_before_it_starts_is_rejected() {
 #[test]
 fn transcript_segment_times_must_follow_presentation_order() {
     let (mut transcript, slide_deck, _passages) = valid_analysis_parts();
-    transcript.segments[0].start_ms = 600;
-    transcript.segments[1].start_ms = 500;
+    transcript.segments[0].start_ms = Some(600);
+    transcript.segments[1].start_ms = Some(500);
 
     let error = ValidatedSources::new(transcript, slide_deck)
         .expect_err("timestamps that move backward must be rejected");
@@ -320,8 +320,8 @@ fn valid_analysis_parts() -> (Transcript, SlideDeck, LecturePassages) {
 fn segment(id: u32, start_ms: u64, end_ms: u64, text: &str) -> TranscriptSegment {
     TranscriptSegment {
         id: TranscriptSegmentId(id),
-        start_ms,
-        end_ms,
+        start_ms: Some(start_ms),
+        end_ms: Some(end_ms),
         text: text.to_owned(),
     }
 }

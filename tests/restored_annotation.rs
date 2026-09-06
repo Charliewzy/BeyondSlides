@@ -290,8 +290,8 @@ fn restored_transcript() -> RestoredTranscript {
 fn segment(id: u32) -> TranscriptSegment {
     TranscriptSegment {
         id: TranscriptSegmentId(id),
-        start_ms: u64::from(id) * 1_000,
-        end_ms: u64::from(id + 1) * 1_000,
+        start_ms: Some(u64::from(id) * 1_000),
+        end_ms: Some(u64::from(id + 1) * 1_000),
         text: format!("原始转录{id}"),
     }
 }

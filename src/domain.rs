@@ -183,8 +183,9 @@ impl Error for ComparativeScoreError {}
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TranscriptSegment {
     pub id: TranscriptSegmentId,
-    pub start_ms: u64,
-    pub end_ms: u64,
+    /// Both timestamps are absent for an untimed source; zero is a real time.
+    pub start_ms: Option<u64>,
+    pub end_ms: Option<u64>,
     pub text: String,
 }
 
@@ -192,6 +193,15 @@ pub struct TranscriptSegment {
 pub struct Transcript {
     #[serde(alias = "sentences")]
     pub segments: Vec<TranscriptSegment>,
+}
+
+impl Transcript {
+    /// Validated transcripts have timing for every segment or for none of them.
+    pub fn has_timestamps(&self) -> bool {
+        self.segments
+            .first()
+            .is_some_and(|segment| segment.start_ms.is_some())
+    }
 }
 
 /// Fine-grained ASR timing retained separately from transcript segmentation.

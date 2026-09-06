@@ -20,11 +20,18 @@ impl ValidatedSources {
             if segment.text.trim().is_empty() {
                 return Err(ValidationError::EmptyTranscriptSegment { id: segment.id });
             }
-            if segment.start_ms > segment.end_ms {
+            if segment.start_ms.is_some() != segment.end_ms.is_some()
+                || segment.start_ms.is_some() != transcript.has_timestamps()
+            {
+                return Err(ValidationError::InconsistentTranscriptTiming { id: segment.id });
+            }
+            if let (Some(start_ms), Some(end_ms)) = (segment.start_ms, segment.end_ms)
+                && start_ms > end_ms
+            {
                 return Err(ValidationError::InvalidTranscriptSegmentTimeRange {
                     id: segment.id,
-                    start_ms: segment.start_ms,
-                    end_ms: segment.end_ms,
+                    start_ms,
+                    end_ms,
                 });
             }
         }
@@ -145,6 +152,9 @@ impl ValidatedAnalysis {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
+    InconsistentTranscriptTiming {
+        id: TranscriptSegmentId,
+    },
     NonCanonicalTranscriptSegmentId {
         position: usize,
         actual: TranscriptSegmentId,
@@ -199,6 +209,11 @@ pub enum ValidationError {
 impl fmt::Display for ValidationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InconsistentTranscriptTiming { id } => write!(
+                formatter,
+                "transcript segment {} has incomplete or mixed timing; provide both timestamps for every segment, or omit both for all segments",
+                id.0
+            ),
             Self::NonCanonicalTranscriptSegmentId { position, actual } => write!(
                 formatter,
                 "transcript segment at position {position} must have ID {position}, found {}",

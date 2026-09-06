@@ -126,8 +126,8 @@ fn transcript() -> Transcript {
             .enumerate()
             .map(|(index, text)| TranscriptSegment {
                 id: TranscriptSegmentId(index as u32),
-                start_ms: index as u64 * 1_000,
-                end_ms: (index as u64 + 1) * 1_000,
+                start_ms: Some(index as u64 * 1_000),
+                end_ms: Some((index as u64 + 1) * 1_000),
                 text: text.into(),
             })
             .collect(),

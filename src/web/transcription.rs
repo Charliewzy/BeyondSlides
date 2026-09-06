@@ -115,7 +115,7 @@ pub(super) async fn prepare(
     }
     let segments = &checkpoint.result.transcript.segments;
     job.preview.segment_count = segments.len();
-    job.preview.duration_ms = segments.last().map_or(0, |s| s.end_ms);
+    job.preview.duration_ms = segments.last().and_then(|s| s.end_ms);
     job.preview.transcript_sample = segments
         .iter()
         .flat_map(|s| s.text.chars())
@@ -138,6 +138,9 @@ pub(super) async fn prepare(
 fn validate(directory: &Path, result: &Transcription) -> Result<(), Box<dyn Error>> {
     if result.transcript.segments.is_empty() {
         return Err("ASR returned no transcript segments".into());
+    }
+    if !result.transcript.has_timestamps() {
+        return Err("ASR did not provide source timing".into());
     }
     let slides: SlideDeck = read_json(&directory.join("slides.json"), "slides")?;
     ValidatedSources::new(result.transcript.clone(), slides)?;

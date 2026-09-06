@@ -47,7 +47,7 @@ function tokenUsage(known, missing, responses) {
 function render(status) {
   const { job, usage, state } = status;
   $("lecture-title").textContent = job.name;
-  $("lecture-meta").textContent = `${job.preview.slide_count} 张幻灯片 · ${job.preview.segment_count ? `${job.preview.segment_count} 个转写片段` : "等待本地转写"} · ${job.preview.duration_ms ? `转写时长 ${duration(job.preview.duration_ms)}` : `录音时长 ${duration(job.preview.recording_duration_ms || 0)}`}${job.recording ? " · 已附录音/视频" : " · 无录音回放"}`;
+  $("lecture-meta").textContent = `${job.preview.slide_count} 张幻灯片 · ${job.preview.segment_count ? `${job.preview.segment_count} 个转写片段` : "等待本地转写"} · ${job.preview.duration_ms !== null ? `转写时长 ${duration(job.preview.duration_ms)}` : job.preview.segment_count ? "无转写时间戳" : `录音时长 ${duration(job.preview.recording_duration_ms || 0)}`}${job.recording ? " · 已附录音/视频" : " · 无录音回放"}`;
   $("transcript-preview").textContent = job.preview.transcript_sample || "开始处理后，先用本机 CPU 转写录音，再进行分析。";
   $("slide-preview").textContent = job.preview.slide_sample;
   $("source-warnings").textContent = job.preview.warnings.join("\n");
@@ -60,7 +60,7 @@ function render(status) {
   if (status.report_url) $("open-report").href = status.report_url;
   $("export-report").hidden = !status.report_url;
   $("export-report").href = `/api/jobs/${job.id}/export`;
-  $("export-report").textContent = job.recording ? "下载分享包（含录音）" : "下载分享包";
+  $("export-report").textContent = job.recording && job.preview.duration_ms !== null ? "下载分享包（含录音）" : "下载分享包";
   const stateLabels = { running: "正在处理", stopping: "正在完成当前任务…", paused: "已暂停，可继续", failed: "处理失败，检查后可恢复", interrupted: "运行中断，可恢复", complete: "处理完成" };
   $("run-state").textContent = stateLabels[state] || "准备就绪";
   $("elapsed").textContent = `已处理 ${duration(status.elapsed_ms)}`;

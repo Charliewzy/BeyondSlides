@@ -168,8 +168,8 @@ fn timed_sources(times: &[(u64, u64)]) -> ValidatedSources {
         .enumerate()
         .map(|(index, &(start_ms, end_ms))| TranscriptSegment {
             id: TranscriptSegmentId(u32::try_from(index).expect("small fixture")),
-            start_ms,
-            end_ms,
+            start_ms: Some(start_ms),
+            end_ms: Some(end_ms),
             text: format!("原文{index}"),
         })
         .collect();

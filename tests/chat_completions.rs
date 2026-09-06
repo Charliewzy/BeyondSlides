@@ -943,8 +943,8 @@ fn sources() -> Result<ValidatedSources, Box<dyn Error>> {
         Transcript {
             segments: vec![TranscriptSegment {
                 id: TranscriptSegmentId(0),
-                start_ms: 0,
-                end_ms: 1_000,
+                start_ms: Some(0),
+                end_ms: Some(1_000),
                 text: "二分查找的课堂讲解".into(),
             }],
         },

@@ -13,11 +13,13 @@ become another.
 _Avoid_: Written material, reference material
 
 **Transcript**:
-The ordered, timestamped textual record of a lecture.
+The ordered textual record of a lecture, with recording timestamps when the
+source provides them.
 _Avoid_: Notes, lecture summary
 
 **Transcript segment**:
-The smallest individually timestamped and referenced part of a transcript.
+The smallest individually referenced part of a transcript. Its recording
+interval is optional; an untimed text source does not establish audio timing.
 _Avoid_: Transcript sentence, ASR segment, utterance
 
 **Timed transcript token**:

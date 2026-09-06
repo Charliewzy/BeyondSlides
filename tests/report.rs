@@ -83,8 +83,8 @@ fn transcript_evidence_becomes_the_title_when_summary_is_absent() {
     let transcript = Transcript {
         segments: vec![TranscriptSegment {
             id: TranscriptSegmentId(0),
-            start_ms: 0,
-            end_ms: 1_000,
+            start_ms: Some(0),
+            end_ms: Some(1_000),
             text: "<二分 & 查找>".to_owned(),
         }],
     };

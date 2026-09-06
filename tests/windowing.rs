@@ -89,8 +89,8 @@ fn sources(segments: &[(&str, u64, u64)]) -> ValidatedSources {
             id: TranscriptSegmentId(
                 u32::try_from(position).expect("the test fixture should fit in a u32"),
             ),
-            start_ms,
-            end_ms,
+            start_ms: Some(start_ms),
+            end_ms: Some(end_ms),
             text: text.to_owned(),
         })
         .collect();

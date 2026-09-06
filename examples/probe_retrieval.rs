@@ -84,6 +84,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let transcript: Transcript = read_json(&transcript_path)?;
     let slide_deck: SlideDeck = read_json(&slides_path)?;
     let sources = ValidatedSources::new(transcript, slide_deck)?;
+    if !sources.transcript().has_timestamps() {
+        return Err("The time-based retrieval probe requires a timestamped transcript".into());
+    }
     let windowing = WindowingConfig::new(
         MAX_OWNED_CHARACTERS,
         Duration::from_secs(MAX_OWNED_DURATION_SECONDS),
@@ -203,8 +206,8 @@ fn segment_range(segments: &[TranscriptSegment]) -> Option<SentenceRange> {
     Some(SentenceRange {
         first_segment: first.id,
         last_segment: last.id,
-        start_ms: first.start_ms,
-        end_ms: last.end_ms,
+        start_ms: first.start_ms?,
+        end_ms: last.end_ms?,
         segment_count: segments.len(),
     })
 }

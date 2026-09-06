@@ -10,6 +10,35 @@ use beyond_slides::{
 };
 
 #[test]
+fn untimed_transcript_renders_without_inventing_playback_times() -> Result<(), Box<dyn Error>> {
+    let original = analysis()?;
+    let mut transcript = original.transcript().clone();
+    for segment in &mut transcript.segments {
+        segment.start_ms = None;
+        segment.end_ms = None;
+    }
+    let analysis = beyond_slides::ValidatedRestoredAnalysis::new(
+        ValidatedSources::new(transcript, original.slide_deck().clone())?,
+        original.restored_transcript().clone(),
+        original.passages().to_vec(),
+    )?;
+    let report = render_continuous_report(&analysis);
+    assert!(report.contains("data-time=\"未提供时间戳\""));
+    assert!(report.contains("data-audio-start-ms=\"\""));
+    let media = ContinuousReportMedia {
+        audio: Some(ReportAudio {
+            source: "lecture.mp4".into(),
+        }),
+        ..ContinuousReportMedia::default()
+    };
+    assert_eq!(
+        render_continuous_report_with_media(&analysis, &media).unwrap_err(),
+        ContinuousReportError::MissingPlaybackTiming
+    );
+    Ok(())
+}
+
+#[test]
 fn unassessed_connection_strength_is_distinct_from_a_measured_zero() -> Result<(), Box<dyn Error>> {
     let original = analysis()?;
     let mut passages = original.passages().to_vec();
@@ -339,8 +368,8 @@ fn comparative_score(percentile_basis_points: u16) -> ComparativeScore {
 fn segment(id: u32) -> TranscriptSegment {
     TranscriptSegment {
         id: TranscriptSegmentId(id),
-        start_ms: u64::from(id) * 1_000,
-        end_ms: u64::from(id + 1) * 1_000,
+        start_ms: Some(u64::from(id) * 1_000),
+        end_ms: Some(u64::from(id + 1) * 1_000),
         text: format!("原文{id}"),
     }
 }

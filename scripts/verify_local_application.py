@@ -52,7 +52,10 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument("--binary", type=Path, default=Path("target/debug/beyond-slides"))
     parser.add_argument("--recording", type=Path, help="Exercise real local ASR on this recording instead of uploading a transcript")
+    parser.add_argument("--untimed", action="store_true", help="Upload plain text and verify that no recording timeline is invented")
     args = parser.parse_args()
+    if args.untimed and args.recording:
+        parser.error("--untimed and --recording are mutually exclusive")
     args.output.mkdir(parents=True, exist_ok=False)
     model = ThreadingHTTPServer(("127.0.0.1", 0), Model)
     threading.Thread(target=model.serve_forever, daemon=True).start()
@@ -97,11 +100,15 @@ def main():
         if args.recording:
             del files["transcript"]
             files["recording"] = (args.recording.name, args.recording.read_bytes(), "application/octet-stream")
+        elif args.untimed:
+            files["transcript"] = ("transcript.txt", (text * 24).encode(), "text/plain")
         response = client.post("/api/jobs", data={"name": "本地应用完整流程验证"}, files=files)
         response.raise_for_status()
         job = response.json()
         job_id = job["id"]
-        assert job["preview"]["segment_count"] == (0 if args.recording else 24)
+        assert job["preview"]["segment_count"] == (0 if args.recording else 48 if args.untimed else 24)
+        if args.untimed:
+            assert job["preview"]["duration_ms"] is None
         assert status()["state"] == "ready"
         payload = {"api_key": "local-test-secret", "settings": {
             "base_url": f"http://127.0.0.1:{model.server_port}/v1", "model": "local-test-model", "extra_body": None,
@@ -141,12 +148,17 @@ def main():
         assert client.get(f"/reports/{job_id}/manifest.json").status_code == 404
         extension = args.recording.suffix if args.recording else ".mp4"
         audio = client.get(f"/reports/{job_id}/report.assets/lecture-audio{extension}", headers={"Range": "bytes=0-31"})
-        assert audio.status_code == 206 and len(audio.content) == 32
+        if args.untimed:
+            assert audio.status_code == 404
+            assert 'data-time="未提供时间戳"' in report.text
+            assert 'data-audio-start-ms=""' in report.text
+        else:
+            assert audio.status_code == 206 and len(audio.content) == 32
         exported = client.get(f"/api/jobs/{job_id}/export")
         exported.raise_for_status()
         with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
             assert "report.html" in archive.namelist()
-            assert f"report.assets/lecture-audio{extension}" in archive.namelist()
+            assert (f"report.assets/lecture-audio{extension}" in archive.namelist()) == (not args.untimed)
             assert all(name in ("report.html", "README.txt") or name.startswith("report.assets/") for name in archive.namelist())
             assert archive.read("report.html") == report.content
         saved = (args.output / job_id / "job.json").read_text()

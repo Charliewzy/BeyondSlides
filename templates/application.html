@@ -26,7 +26,7 @@
         <label>转写来源<select id="source-mode"><option value="transcript">上传已有转写</option><option value="recording">从录音 / 视频本地转写（CPU）</option></select></label>
         <div class="upload-grid">
           <label class="upload">① 幻灯片 PDF<input name="slides" type="file" accept=".pdf" required><small>提取每页文字，保留原始幻灯片展示。</small></label>
-          <label class="upload" id="transcript-upload-label">② 现有转写<input name="transcript" type="file" accept=".json,.tsv" required><small>当前支持 BeyondSlides JSON 或带时间戳的 TSV。</small></label>
+          <label class="upload" id="transcript-upload-label">② 现有转写<input name="transcript" type="file" accept=".json,.tsv,.srt,.vtt,.txt" required><small>支持 JSON、TSV、SRT、VTT、TXT。无时间戳的文本可以分析，但不能按段落回放。</small></label>
         </div>
         <label><span id="recording-label">录音 / 视频（可选，用于回放）</span><input name="recording" type="file" accept=".mp4,.webm,.mp3,.m4a,.wav,.flac,.ogg"></label>
         <p class="muted">导入预览不会向分析模型发送内容。录音转写使用本机 CPU，首次运行可能需要下载 SenseVoice 等模型；分析会在转写后开始。</p>

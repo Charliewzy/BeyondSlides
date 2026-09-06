@@ -69,8 +69,8 @@ pub fn import_tsv(input: &str) -> Result<Transcript, ImportError> {
             .ok_or(ImportError::TooManyRows)?;
         segments.push(TranscriptSegment {
             id,
-            start_ms,
-            end_ms,
+            start_ms: Some(start_ms),
+            end_ms: Some(end_ms),
             text: text.to_owned(),
         });
         previous_row = Some((line, end_ms));

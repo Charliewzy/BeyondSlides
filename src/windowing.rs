@@ -197,13 +197,12 @@ pub fn build_windows(
         let mut character_count = 0_usize;
         while let Some(segment) = segments.get(owned_end) {
             let next_character_count = character_count.saturating_add(segment.text.chars().count());
-            let next_duration = Duration::from_millis(
-                segment
-                    .end_ms
-                    .saturating_sub(segments[owned_start].start_ms),
-            );
+            let next_duration = segments[owned_start]
+                .start_ms
+                .zip(segment.end_ms)
+                .map(|(start, end)| Duration::from_millis(end.saturating_sub(start)));
             let exceeds_budget = next_character_count > config.max_owned_characters.get()
-                || next_duration > config.max_owned_duration;
+                || next_duration.is_some_and(|duration| duration > config.max_owned_duration);
             if owned_end > owned_start && exceeds_budget {
                 break;
             }
@@ -275,13 +274,12 @@ pub fn build_restored_windows<'a>(
             let span_text = restored_span_text(span);
             let next_character_count =
                 character_count.saturating_add(span_text.map_or(0, |text| text.chars().count()));
-            let next_duration = Duration::from_millis(
-                segments[span.source_end().index()]
-                    .end_ms
-                    .saturating_sub(segments[first_source].start_ms),
-            );
+            let next_duration = segments[first_source]
+                .start_ms
+                .zip(segments[span.source_end().index()].end_ms)
+                .map(|(start, end)| Duration::from_millis(end.saturating_sub(start)));
             let exceeds_budget = next_character_count > config.max_owned_characters.get()
-                || next_duration > config.max_owned_duration;
+                || next_duration.is_some_and(|duration| duration > config.max_owned_duration);
             if span_text.is_some() && contains_text && exceeds_budget {
                 break;
             }

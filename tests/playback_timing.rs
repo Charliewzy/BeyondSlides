@@ -104,8 +104,8 @@ fn transcript(text: &str, start_ms: u64, end_ms: u64) -> Transcript {
     Transcript {
         segments: vec![TranscriptSegment {
             id: TranscriptSegmentId(0),
-            start_ms,
-            end_ms,
+            start_ms: Some(start_ms),
+            end_ms: Some(end_ms),
             text: text.into(),
         }],
     }

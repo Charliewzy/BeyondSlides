@@ -277,7 +277,10 @@ fn token_count(tokens: Option<u64>) -> String {
     tokens.map_or_else(|| "未知".into(), |tokens| tokens.to_string())
 }
 
-fn format_timestamp(milliseconds: u64) -> String {
+fn format_timestamp(milliseconds: Option<u64>) -> String {
+    let Some(milliseconds) = milliseconds else {
+        return "无时间戳".into();
+    };
     let total_seconds = milliseconds / 1_000;
     let hours = total_seconds / 3_600;
     let minutes = (total_seconds % 3_600) / 60;

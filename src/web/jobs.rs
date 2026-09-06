@@ -7,7 +7,10 @@ use std::{
 
 use beyond_slides::{
     ChatCompletionsConfig, Transcript, ValidatedSources,
-    ingestion::{funasr, pdf},
+    ingestion::{
+        pdf,
+        transcript::{TranscriptFormat, import},
+    },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -30,7 +33,7 @@ pub(super) struct Job {
 pub(super) struct Preview {
     pub slide_count: usize,
     pub segment_count: usize,
-    pub duration_ms: u64,
+    pub duration_ms: Option<u64>,
     #[serde(default)]
     pub recording_duration_ms: Option<u64>,
     pub transcript_sample: String,
@@ -189,19 +192,17 @@ pub(super) fn import_job(
     } else {
         fs::read_to_string(directory.join("transcript-upload")).map_err(|e| e.to_string())?
     };
-    let transcript: Transcript =
-        match transcript_extension {
-            "" => Transcript {
-                segments: Vec::new(),
-            },
-            "json" => serde_json::from_str(&input)
-                .map_err(|e| format!("Invalid normalized transcript JSON: {e}"))?,
-            "tsv" => funasr::import_tsv(&input).map_err(|e| e.to_string())?,
-            _ => return Err(
-                "This first import slice accepts normalized JSON or timestamped TSV transcripts"
-                    .into(),
-            ),
-        };
+    let transcript: Transcript = match transcript_extension {
+        "" => Transcript {
+            segments: Vec::new(),
+        },
+        "json" => import(&input, TranscriptFormat::Json).map_err(|e| e.to_string())?,
+        "tsv" => import(&input, TranscriptFormat::Tsv).map_err(|e| e.to_string())?,
+        "srt" => import(&input, TranscriptFormat::SubRip).map_err(|e| e.to_string())?,
+        "vtt" => import(&input, TranscriptFormat::WebVtt).map_err(|e| e.to_string())?,
+        "txt" => import(&input, TranscriptFormat::PlainText).map_err(|e| e.to_string())?,
+        _ => return Err("Supported transcript formats: JSON, TSV, SRT, VTT and plain text".into()),
+    };
     if !transcribe_recording && transcript.segments.is_empty() {
         return Err("The transcript contains no segments".into());
     }
@@ -209,10 +210,10 @@ pub(super) fn import_job(
         ValidatedSources::new(transcript, imported.slide_deck).map_err(|e| e.to_string())?;
     let transcript = sources.transcript();
     let deck = sources.slide_deck();
-    let preview = Preview {
+    let mut preview = Preview {
         slide_count: deck.slides.len(),
         segment_count: transcript.segments.len(),
-        duration_ms: transcript.segments.last().map_or(0, |s| s.end_ms),
+        duration_ms: transcript.segments.last().and_then(|s| s.end_ms),
         recording_duration_ms,
         transcript_sample: transcript
             .segments
@@ -226,6 +227,9 @@ pub(super) fn import_job(
         slide_sample: deck.slides[0].text.chars().take(700).collect(),
         warnings: imported.warnings.iter().map(|w| format!("{w:?}")).collect(),
     };
+    if !transcribe_recording && !transcript.has_timestamps() {
+        preview.warnings.push("此转写未提供时间戳。可以分析文本，但无法按段落定位或播放录音；不会凭文字长度猜测时间。".into());
+    }
     if !transcribe_recording {
         write_json_atomically(
             &directory.join("transcript.json"),

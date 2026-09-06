@@ -138,13 +138,25 @@ Measurable stages show remaining time directly from indicatif's `ProgressBar::et
 and the corresponding elapsed-plus-remaining stage total. The estimator only
 sees newly completed work after the checkpoint baseline, never restored counts.
 It restarts on resume; no ETA appears until new work completes. Preparation and
-whole-call CPU transcription have no invented ETA. Speech-recognition progress
-still reports its measured work percentage separately.
+whole-call CPU transcription have no invented end-to-end ETA.
+
+During speech recognition, the controller feeds observed completed/total speech
+duration into indicatif and returns a separate recognition-only ETA. This is a
+read-only projection of `asr-progress.json`, so an already-running older worker
+can benefit after the controller is restarted. The first observation establishes
+a baseline; an estimate appears after further speech progress arrives. The
+controller's estimator is shared across browser polls and resets on controller
+restart, a new attempt, counter regression, changed total, reuse, inactivity, or
+leaving recognition. It never writes back to worker files. The UI labels this
+estimate “预计语音识别剩余” and explicitly excludes punctuation and saving;
+it does not add it to cumulative stage time as an end-to-end forecast.
 
 Reused stages are labeled. A hard kill may lose up to the last timing heartbeat;
 old progress files without timings show “耗时未记录” rather than fabricated
 historical durations. A worker already running older code will not acquire the
-new telemetry merely because the controller is rebuilt.
+worker-side stage telemetry merely because the controller is rebuilt. The
+read-only recognition ETA above is the exception: it uses observations older
+workers already publish.
 
 New debug captures have readable GMT start timestamps and explicitly identify
 subprocess output, not model retries. The UI translates old numeric markers for

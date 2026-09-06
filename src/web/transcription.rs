@@ -44,6 +44,9 @@ pub(super) struct Progress {
     pub total_speech_ms: Option<u64>,
     pub timings_seconds: BTreeMap<String, f64>,
     pub reused: bool,
+    /// Filled by the controller, never trusted from a worker checkpoint.
+    #[serde(skip_deserializing)]
+    pub recognition_eta_ms: Option<u64>,
 }
 
 pub(super) fn read_progress(run: &Path, attempt: u64) -> Result<Option<Progress>, io::Error> {

@@ -1,6 +1,7 @@
 mod export;
 mod jobs;
 mod logs;
+mod recognition_eta;
 mod slide_review;
 mod transcription;
 mod usage;
@@ -46,6 +47,7 @@ struct App {
     launching: Arc<Mutex<HashSet<String>>>,
     cursors: Arc<Mutex<HashMap<PathBuf, TraceCursor>>>,
     preview_renders: Arc<tokio::sync::Semaphore>,
+    recognition_estimators: Arc<Mutex<HashMap<String, recognition_eta::RecognitionEstimator>>>,
 }
 
 pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>> {
@@ -63,6 +65,7 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
         launching: Arc::default(),
         cursors: Arc::default(),
         preview_renders: Arc::new(tokio::sync::Semaphore::new(2)),
+        recognition_estimators: Arc::default(),
     };
     let router = Router::new()
         .route(
@@ -160,6 +163,7 @@ async fn local_only(State(app): State<App>, request: Request, next: Next) -> Res
     response
 }
 
+#[derive(Debug)]
 struct AppError(StatusCode, String);
 impl AppError {
     fn bad(error: impl std::fmt::Display) -> Self {
@@ -177,6 +181,72 @@ impl From<io::Error> for AppError {
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         Self(status, error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn live_asr_progress_produces_recognition_eta_without_changing_worker_files() {
+        let root = tempfile::tempdir().unwrap();
+        let id = "0123456789abcdef0123456789abcdef";
+        let directory = root.path().join(id);
+        let control = directory.join("run-0001/control");
+        fs::create_dir_all(&control).unwrap();
+        let job: Job = serde_json::from_value(json!({
+            "id": id, "name": "ETA regression", "created_ms": 1,
+            "preview": {"slide_count": 1, "segment_count": 0, "duration_ms": null,
+                "transcript_sample": "", "slide_sample": "", "warnings": []},
+            "recording": "recording.mp4", "transcribe_recording": true,
+            "runs": [{"number": 1, "started_ms": 10, "elapsed_before_ms": 0,
+                "settings": {"base_url": "http://localhost/v1", "model": "test", "extra_body": null,
+                    "max_concurrency": 2, "request_interval_ms": 0, "adaptive": false, "boundary_passages": true}}]
+        })).unwrap();
+        save_job(&directory, &job).unwrap();
+        let lock = jobs::worker_lock(&directory).unwrap();
+        lock.try_lock().unwrap();
+        let app = App {
+            root: root.path().into(),
+            port: 0,
+            launching: Arc::default(),
+            cursors: Arc::default(),
+            preview_renders: Arc::new(tokio::sync::Semaphore::new(2)),
+            recognition_estimators: Arc::default(),
+        };
+        let mut observed = json!({"phase": "recognizing", "attempt_started_ms": 10,
+            "completed_regions": 840, "total_regions": 1330,
+            "completed_speech_ms": 1804000, "total_speech_ms": 6277000});
+        let path = control.join("asr-progress.json");
+        write_json_atomically(&path, &observed, "test progress").unwrap();
+        let first = job_status(State(app.clone()), Path(id.into()))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(first.state, "running");
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        observed["completed_speech_ms"] = json!(1805000);
+        write_json_atomically(&path, &observed, "test progress").unwrap();
+        let before = fs::read(&path).unwrap();
+        let status = job_status(State(app.clone()), Path(id.into()))
+            .await
+            .unwrap()
+            .0;
+        let value = serde_json::to_value(status).unwrap();
+        assert!(
+            value["transcription"]["recognition_eta_ms"]
+                .as_u64()
+                .is_some_and(|eta| eta > 0),
+            "live speech progress must reach indicatif: {value}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        observed["phase"] = json!("punctuating");
+        write_json_atomically(&path, &observed, "test progress").unwrap();
+        let status = job_status(State(app), Path(id.into())).await.unwrap().0;
+        assert!(
+            serde_json::to_value(status).unwrap()["transcription"]["recognition_eta_ms"].is_null()
+        );
     }
 }
 impl IntoResponse for AppError {
@@ -360,8 +430,20 @@ async fn job_status(
     };
     if let Some(run) = job.runs.last() {
         let path = run.directory(&directory);
-        status.transcription = transcription::read_progress(&path, run.started_ms)?;
         let running = app.launching.lock().await.contains(&id) || is_worker_running(&directory)?;
+        {
+            // Serialize observation reads too: simultaneous browser polls must
+            // not feed an older snapshot after a newer one.
+            let mut estimators = app.recognition_estimators.lock().await;
+            status.transcription = transcription::read_progress(&path, run.started_ms)?;
+            let eta = estimators
+                .entry(id.clone())
+                .or_default()
+                .observe(status.transcription.as_ref(), running);
+            if let Some(progress) = &mut status.transcription {
+                progress.recognition_eta_ms = eta;
+            }
+        }
         let outcome: Option<Outcome> = if path.join("outcome.json").exists() {
             Some(read_json(&path.join("outcome.json"), "worker outcome")?)
         } else {

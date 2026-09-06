@@ -86,6 +86,18 @@ function stageTiming(data, isCurrent) {
   if (data.eta_ms == null) return `${elapsed} · 暂无剩余时间估计`;
   return `${elapsed} · 预计剩余 ${duration(data.eta_ms)} · 预计阶段总用时 ${duration(data.elapsed_ms + data.eta_ms)}`;
 }
+function transcriptionTiming(data, observed, active) {
+  const elapsed = data.elapsed_ms == null ? "累计用时未记录（旧版运行）" : `累计用时 ${duration(data.elapsed_ms)}`;
+  if (observed.reused) return `${elapsed} · 复用已保存结果`;
+  if (observed.phase === "complete") return `${elapsed} · 完成`;
+  if (!active) return elapsed;
+  if (observed.phase !== "recognizing") return `${elapsed} · 此步骤暂无剩余时间估计`;
+  if (!(observed.total_speech_ms > 0)) return `${elapsed} · 暂无可用的语音识别工作量`;
+  if (observed.completed_speech_ms >= observed.total_speech_ms) return `${elapsed} · 语音识别已完成，等待后续步骤`;
+  return observed.recognition_eta_ms == null
+    ? `${elapsed} · 正在采样语音识别速度…`
+    : `${elapsed} · 预计语音识别剩余 ${duration(observed.recognition_eta_ms)}（不含后续标点与保存）`;
+}
 function setSettings(settings) {
   if (!settings) return;
   $("base-url").value = settings.base_url; $("model").value = settings.model;
@@ -132,7 +144,7 @@ function transcriptionProgress(row, progress, count, observed, active) {
   else { progress.max = 1; progress.value = 0; }
   if (observed.total_regions !== null) {
     const detail = document.createElement("small");
-    detail.textContent = `${observed.completed_regions} / ${observed.total_regions} 个语音区域 · ${duration(observed.completed_speech_ms)} / ${duration(observed.total_speech_ms)} 有声时长。百分比仅表示语音识别工作量，不含静音，不是剩余时间估计。`;
+    detail.textContent = `${observed.completed_regions} / ${observed.total_regions} 个语音区域 · ${duration(observed.completed_speech_ms)} / ${duration(observed.total_speech_ms)} 有声时长。百分比按有声时长计算，不按区域个数计算。`;
     row.append(detail);
   }
 }
@@ -179,7 +191,9 @@ function render(status) {
     if (stage === "transcription" && status.transcription) transcriptionProgress(row, progress, count, status.transcription, active);
     if (data) {
       const timing = document.createElement("small"); timing.className = "stage-timing";
-      timing.textContent = stageTiming(data, active && status.progress.current === stage);
+      timing.textContent = stage === "transcription" && status.transcription
+        ? transcriptionTiming(data, status.transcription, active)
+        : stageTiming(data, active && status.progress.current === stage);
       row.append(timing);
     }
   }

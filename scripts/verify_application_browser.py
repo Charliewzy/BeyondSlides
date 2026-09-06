@@ -99,6 +99,10 @@ def main():
             bar = page.get_by_role("progressbar", name="本地 CPU 转写")
             assert bar.get_attribute("value") == "1000"
             assert bar.get_attribute("max") == "4000"
+            assert "正在采样语音识别速度" in page.locator("#stage-progress").inner_text()
+            observed["recognition_eta_ms"] = 123000
+            page.wait_for_function("document.getElementById('stage-progress').textContent.includes('预计语音识别剩余 2分03秒')")
+            assert "不含后续标点与保存" in page.locator("#stage-progress").inner_text()
             assert "预计剩余 10分13秒" in page.locator("#stage-progress").inner_text()
             assert "预计阶段总用时 16分50秒" in page.locator("#stage-progress").inner_text()
             page.get_by_text("检查导入内容", exact=True).click()
@@ -108,6 +112,10 @@ def main():
             page.screenshot(path=str(args.workspace / "browser-stage-timing.png"), full_page=True)
             observed["phase"] = "loading_models"
             page.wait_for_function("document.querySelector('progress[aria-label=\"本地 CPU 转写\"]').getAttribute('value') === null")
+            assert "预计语音识别剩余" not in page.locator("#stage-progress").inner_text()
+            observed["phase"] = "punctuating"
+            page.wait_for_function("document.getElementById('stage-progress').textContent.includes('添加标点')")
+            assert "预计语音识别剩余" not in page.locator("#stage-progress").inner_text()
             status["state"] = "paused"
             page.wait_for_function("document.getElementById('run-state').textContent === '已暂停，可继续'")
             page.wait_for_function("document.querySelector('progress[aria-label=\"本地 CPU 转写\"]').value === 0")

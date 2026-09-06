@@ -20,10 +20,11 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::{
-    ComparativeMetric, ComparativeRankingBatchResult, ComparativeRankingValidationError,
-    ModelExchangeTrace, ModelProviderError, ModelRequestKind, ModelWorkflow,
-    PassageProjectionDiagnostics, PassageProjectionError, RequestScheduler, SlideId, SlideScorer,
-    ValidatedSources,
+    BoundaryBatchResult, BoundaryBatchTask, BoundaryError, ComparativeMetric,
+    ComparativeRankingBatchResult, ComparativeRankingValidationError, ModelExchangeTrace,
+    ModelProviderError, ModelRequestKind, ModelWorkflow, PASSAGE_BOUNDARY_INSTRUCTIONS,
+    PassageProjectionDiagnostics, PassageProjectionError, ProposedBoundaryBatch, RequestScheduler,
+    SlideId, SlideScorer, ValidatedSources,
     annotation::{
         AnalysisAssemblyError, AnnotationToolError, AnnotationToolSession,
         TranscriptWindowAnalysis, TranscriptWindowTask, validate_window_analysis,
@@ -378,6 +379,23 @@ impl ChatCompletionsClient {
             metric: task.metric(),
             batch_index: task.batch_index(),
             comparisons: outcome.output,
+            diagnostics: AnnotationDiagnostics::from(outcome.diagnostics),
+        })
+    }
+
+    /// Classifies semantic gaps without copying source text or exposing tools.
+    pub async fn classify_passage_boundaries(
+        &self,
+        task: &BoundaryBatchTask,
+    ) -> Result<BoundaryBatchResult, ChatCompletionsError> {
+        let input = serde_json::to_string(task).map_err(ChatCompletionsError::SerializeTask)?;
+        let request = ChatRequest::from_user(input).with_system(PASSAGE_BOUNDARY_INSTRUCTIONS);
+        let outcome = self
+            .run_conversation(request, BoundaryWorkflow { task })
+            .await?;
+        Ok(BoundaryBatchResult {
+            batch_index: task.batch_index(),
+            decisions: outcome.output,
             diagnostics: AnnotationDiagnostics::from(outcome.diagnostics),
         })
     }
@@ -969,6 +987,52 @@ impl ConversationWorkflow for ComparativeRankingWorkflow<'_> {
     }
 }
 
+struct BoundaryWorkflow<'a> {
+    task: &'a BoundaryBatchTask,
+}
+
+impl ConversationWorkflow for BoundaryWorkflow<'_> {
+    type Output = ProposedBoundaryBatch;
+
+    fn trace_context(
+        &self,
+        conversation_turn: usize,
+        request_kind: ModelRequestKind,
+    ) -> ModelTraceContext {
+        ModelTraceContext {
+            workflow: ModelWorkflow::PassageBoundaries,
+            work_item_index: self.task.batch_index(),
+            conversation_turn,
+            request_kind,
+        }
+    }
+
+    fn tool_responses(
+        &mut self,
+        _tool_calls: &[ToolCall],
+    ) -> Result<Option<Vec<ToolResponse>>, ChatCompletionsError> {
+        Ok(None)
+    }
+
+    fn parse_and_validate(
+        &self,
+        content: &str,
+    ) -> Result<(Self::Output, bool), ChatCompletionsError> {
+        let (proposed, fence) = parse_json_content::<ProposedBoundaryBatch>(content)
+            .map_err(ChatCompletionsError::InvalidBoundaryJson)?;
+        self.task
+            .validate(&proposed)
+            .map_err(ChatCompletionsError::InvalidBoundaries)?;
+        Ok((proposed, fence))
+    }
+
+    fn repair_instruction(&self, error: &ChatCompletionsError) -> String {
+        format!(
+            "上一份边界 JSON 无效：{error}。请完整回答原来的 windows，每个 owned boundary 恰好出现一次，保留原始编号，只返回指定 JSON。"
+        )
+    }
+}
+
 struct ConversationOutcome<T> {
     output: T,
     diagnostics: ConversationDiagnostics,
@@ -1127,11 +1191,15 @@ pub enum ChatCompletionsError {
     InvalidWindowRestoration(RestorationError),
     InvalidComparativeRankingJson(serde_json::Error),
     InvalidComparativeRanking(ComparativeRankingValidationError),
+    InvalidBoundaryJson(serde_json::Error),
+    InvalidBoundaries(BoundaryError),
 }
 
 impl fmt::Display for ChatCompletionsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidBoundaryJson(error) => write!(formatter, "invalid boundary-classification JSON: {error}"),
+            Self::InvalidBoundaries(error) => error.fmt(formatter),
             Self::Provider(error) => {
                 write!(formatter, "the model endpoint request failed: {error}")
             }
@@ -1224,12 +1292,14 @@ impl Error for ChatCompletionsError {
             | Self::InvalidAnalysisJson(error)
             | Self::InvalidRestoredAnalysisJson(error)
             | Self::InvalidRestorationJson(error)
+            | Self::InvalidBoundaryJson(error)
             | Self::InvalidComparativeRankingJson(error) => Some(error),
             Self::Tool(error) => Some(error),
             Self::InvalidWindowAnalysis(error) => Some(error),
             Self::InvalidRestoredWindowAnalysis(error) => Some(error),
             Self::InvalidWindowRestoration(error) => Some(error),
             Self::InvalidComparativeRanking(error) => Some(error),
+            Self::InvalidBoundaries(error) => Some(error),
             Self::FinalAnswerRepairLimit { source, .. } => Some(source.as_ref()),
             Self::Provider(_)
             | Self::UnexpectedChoiceCount { .. }
@@ -1398,7 +1468,9 @@ fn trace_error_category(error: &ChatCompletionsError) -> &'static str {
         ChatCompletionsError::InvalidAnalysisJson(_)
         | ChatCompletionsError::InvalidRestoredAnalysisJson(_)
         | ChatCompletionsError::InvalidRestorationJson(_)
+        | ChatCompletionsError::InvalidBoundaryJson(_)
         | ChatCompletionsError::InvalidComparativeRankingJson(_) => "malformed_json",
+        ChatCompletionsError::InvalidBoundaries(_) => "invalid_boundaries",
         ChatCompletionsError::InvalidComparativeRanking(_) => "invalid_comparative_ranking",
         ChatCompletionsError::InvalidWindowRestoration(error) => restoration_error_category(error),
         ChatCompletionsError::InvalidWindowAnalysis(error) => analysis_error_category(error),

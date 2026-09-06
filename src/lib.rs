@@ -9,6 +9,7 @@ pub mod evaluation;
 pub mod ingestion;
 mod model_trace;
 mod orchestration;
+mod passage_boundaries;
 mod passage_projection;
 mod playback_timing;
 mod ranking;
@@ -57,6 +58,11 @@ pub use orchestration::{
     LectureAnalysisConfig, LectureAnalysisConfigError, LectureAnalysisError,
     LectureAnalysisProgress, LectureAnalysisProgressError, LectureAnalysisResult,
     LectureAnalysisSession,
+};
+pub use passage_boundaries::{
+    BoundaryBatchResult, BoundaryBatchTask, BoundaryDecision, BoundaryError,
+    BoundarySegmentationPlan, BoundaryStrength, BoundaryWindowDecision,
+    PASSAGE_BOUNDARY_INSTRUCTIONS, ProposedBoundaryBatch,
 };
 pub use passage_projection::{
     PassageProjection, PassageProjectionDiagnostics, PassageProjectionError,

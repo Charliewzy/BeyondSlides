@@ -18,6 +18,51 @@ use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate, matchers::a
 
 struct FixedScorer(Vec<SlideScore>);
 
+#[tokio::test(flavor = "multi_thread")]
+async fn boundary_classification_repairs_unknown_ids_and_traces_without_tools()
+-> Result<(), Box<dyn Error>> {
+    let restored = RestoredTranscript {
+        spans: vec![RestoredTranscriptSpan::Text {
+            source_start: TranscriptSegmentId(0),
+            source_end: TranscriptSegmentId(0),
+            text: "为什么会这样？因为类型不同。".into(),
+        }],
+    };
+    let plan = beyond_slides::BoundarySegmentationPlan::new(&restored);
+    let response = |id| {
+        json!({"windows":[{"window_index":0,"boundaries":[{"after_atom":id,"strength":"continue"}]}]}).to_string()
+    };
+    let api = mock_api(vec![
+        final_response("bad", response(99)),
+        final_response("good", response(0)),
+    ])
+    .await;
+    let directory = tempfile::tempdir()?;
+    let trace_path = directory.path().join("model.jsonl");
+    let client = beyond_slides::ChatCompletionsClient::new(
+        ChatCompletionsConfig::new(base_url(&api), "test-key", "test-model")?
+            .with_model_trace(ModelExchangeTrace::open(&trace_path)?),
+    );
+    let result = client.classify_passage_boundaries(&plan.tasks()[0]).await?;
+    assert_eq!(result.diagnostics.final_answer_repairs, 1);
+    assert_eq!(result.diagnostics.tool_rounds, 0);
+    assert_eq!(plan.partition(&[result])?, vec![0..restored.text().len()]);
+    let requests = api.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        let body: Value = request.body_json()?;
+        assert!(body.get("tools").is_none_or(Value::is_null));
+    }
+    let records = read_model_trace(&trace_path)?;
+    assert!(
+        records
+            .iter()
+            .all(|r| r.workflow == beyond_slides::ModelWorkflow::PassageBoundaries)
+    );
+    assert!(records.iter().any(|r| matches!(&r.event, ModelTraceEvent::Validation { accepted: false, category: Some(category), .. } if category == "invalid_boundaries")));
+    Ok(())
+}
+
 impl SlideScorer for FixedScorer {
     fn score_slides(&self, _query: &str) -> Result<Vec<SlideScore>, SearchError> {
         Ok(self.0.clone())

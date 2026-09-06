@@ -299,6 +299,7 @@ impl SummaryAccumulator {
 
 fn workflow_name(workflow: ModelWorkflow) -> &'static str {
     match workflow {
+        ModelWorkflow::PassageBoundaries => "passage_boundaries",
         ModelWorkflow::Annotation => "annotation",
         ModelWorkflow::Restoration => "restoration",
         ModelWorkflow::ImportanceComparison => "importance_comparison",

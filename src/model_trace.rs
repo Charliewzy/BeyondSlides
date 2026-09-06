@@ -292,6 +292,7 @@ pub(crate) struct ModelProviderFailure {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelWorkflow {
+    PassageBoundaries,
     Annotation,
     Restoration,
     ImportanceComparison,

@@ -476,7 +476,7 @@ fn validate_related_slides(
     Ok(())
 }
 
-fn source_provenance(
+pub(crate) fn source_provenance(
     spans: &[RestoredTranscriptSpan],
     passage_range: &Range<usize>,
 ) -> Option<(crate::TranscriptSegmentId, crate::TranscriptSegmentId)> {

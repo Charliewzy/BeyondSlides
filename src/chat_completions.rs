@@ -1,8 +1,8 @@
 use std::{
     error::Error,
     fmt, io,
-    sync::Mutex,
-    time::{Duration, Instant},
+    num::NonZeroUsize,
+    time::{Duration, Instant, SystemTime},
 };
 
 use genai::{
@@ -22,13 +22,15 @@ use url::Url;
 use crate::{
     ComparativeMetric, ComparativeRankingBatchResult, ComparativeRankingValidationError,
     ModelExchangeTrace, ModelProviderError, ModelRequestKind, ModelWorkflow,
-    PassageProjectionDiagnostics, PassageProjectionError, SlideId, SlideScorer, ValidatedSources,
+    PassageProjectionDiagnostics, PassageProjectionError, RequestScheduler, SlideId, SlideScorer,
+    ValidatedSources,
     annotation::{
         AnalysisAssemblyError, AnnotationToolError, AnnotationToolSession,
         TranscriptWindowAnalysis, TranscriptWindowTask, validate_window_analysis,
     },
     comparative_ranking::{ComparativeRankingTask, ProposedComparativeRanking},
     model_trace::{ModelProviderFailure, ModelTraceContext},
+    request_scheduling::RequestFeedback,
     restoration::{
         RestorationError, TranscriptRestorationTask, TranscriptWindowRestoration,
         validate_window_restoration,
@@ -59,7 +61,7 @@ pub struct ChatCompletionsConfig {
     max_search_results: usize,
     max_output_tokens: u32,
     max_provider_retries: usize,
-    minimum_request_interval: Duration,
+    request_scheduler: RequestScheduler,
     extra_body: Option<Value>,
     model_trace: Option<ModelExchangeTrace>,
 }
@@ -103,7 +105,7 @@ impl ChatCompletionsConfig {
             max_search_results: DEFAULT_MAX_SEARCH_RESULTS,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             max_provider_retries: 0,
-            minimum_request_interval: Duration::ZERO,
+            request_scheduler: RequestScheduler::fixed(NonZeroUsize::MAX, Duration::ZERO),
             extra_body: None,
             model_trace: None,
         })
@@ -160,9 +162,16 @@ impl ChatCompletionsConfig {
         self
     }
 
-    /// Sets the minimum time between HTTP request starts across this client.
-    pub const fn with_minimum_request_interval(mut self, interval: Duration) -> Self {
-        self.minimum_request_interval = interval;
+    /// Uses fixed request spacing; workflow concurrency limits still apply.
+    /// For shared/adaptive admission, use `with_request_scheduler` instead.
+    pub fn with_minimum_request_interval(mut self, interval: Duration) -> Self {
+        self.request_scheduler = RequestScheduler::fixed(NonZeroUsize::MAX, interval);
+        self
+    }
+
+    /// Shares attempt-level admission with other clients in the same quota scope.
+    pub fn with_request_scheduler(mut self, scheduler: RequestScheduler) -> Self {
+        self.request_scheduler = scheduler;
         self
     }
 
@@ -235,8 +244,7 @@ pub struct ChatCompletionsClient {
     max_final_answer_repairs: usize,
     max_search_results: usize,
     max_provider_retries: usize,
-    minimum_request_interval: Duration,
-    next_request_at: Mutex<Option<Instant>>,
+    request_scheduler: RequestScheduler,
     endpoint: String,
     model: String,
     model_trace: Option<ModelExchangeTrace>,
@@ -268,8 +276,7 @@ impl ChatCompletionsClient {
             max_final_answer_repairs: config.max_final_answer_repairs,
             max_search_results: config.max_search_results,
             max_provider_retries: config.max_provider_retries,
-            minimum_request_interval: config.minimum_request_interval,
-            next_request_at: Mutex::new(None),
+            request_scheduler: config.request_scheduler,
             endpoint,
             model,
             model_trace: config.model_trace,
@@ -526,7 +533,7 @@ impl ChatCompletionsClient {
         };
         let mut retries = 0;
         loop {
-            self.wait_for_request_slot().await;
+            let permit = self.request_scheduler.acquire().await;
             let provider_attempt = retries;
             let exchange_id = self
                 .model_trace
@@ -550,6 +557,7 @@ impl ChatCompletionsClient {
                 .await
             {
                 Ok(response) => {
+                    permit.finish(RequestFeedback::Success);
                     if let (Some(trace), Some(exchange_id)) = (&self.model_trace, exchange_id) {
                         trace
                             .record_response(
@@ -567,6 +575,19 @@ impl ChatCompletionsClient {
                 Err(error) => {
                     let retryable = is_retryable_provider_error(&error);
                     let will_retry = retries < self.max_provider_retries && retryable;
+                    let retry_delay = provider_retry_delay(&error, retries + 1);
+                    let feedback = if provider_error_status(&error) == Some(429) {
+                        RequestFeedback::RateLimited {
+                            retry_after: retry_delay,
+                        }
+                    } else {
+                        RequestFeedback::Failed {
+                            retry_after: retry_after_delay(&error),
+                        }
+                    };
+                    // Release admission before recording/backoff; sleeping
+                    // retries must not occupy an in-flight HTTP slot.
+                    permit.finish(feedback);
                     if let (Some(trace), Some(exchange_id)) = (&self.model_trace, exchange_id) {
                         trace
                             .record_provider_error(
@@ -586,27 +607,10 @@ impl ChatCompletionsClient {
                         return Err(provider_error(error));
                     }
                     retries += 1;
-                    tokio::time::sleep(provider_retry_delay(&error, retries)).await;
+                    tokio::time::sleep(retry_delay).await;
                 }
             }
         }
-    }
-
-    async fn wait_for_request_slot(&self) {
-        if self.minimum_request_interval.is_zero() {
-            return;
-        }
-        let now = Instant::now();
-        let delay = {
-            let mut next_request_at = self
-                .next_request_at
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let scheduled_at = next_request_at.map_or(now, |next| next.max(now));
-            *next_request_at = scheduled_at.checked_add(self.minimum_request_interval);
-            scheduled_at.saturating_duration_since(now)
-        };
-        tokio::time::sleep(delay).await;
     }
 
     fn record_validation(
@@ -1266,13 +1270,15 @@ fn is_retryable_status(status: u16) -> bool {
 
 fn provider_retry_delay(error: &genai::Error, retry: usize) -> Duration {
     if let Some(delay) = retry_after_delay(error) {
-        return delay;
+        return delay.saturating_add(Duration::from_millis(fastrand::u64(0..=250)));
     }
-    if provider_error_status(error) == Some(429) {
+    let base = if provider_error_status(error) == Some(429) {
         let exponent = u32::try_from(retry.saturating_sub(1).min(4)).unwrap_or(4);
-        return Duration::from_secs(5_u64.saturating_mul(2_u64.pow(exponent)));
-    }
-    Duration::from_secs(retry.min(5) as u64)
+        5_000_u64.saturating_mul(2_u64.pow(exponent))
+    } else {
+        (retry.min(5) as u64) * 1_000
+    };
+    Duration::from_millis(base / 2 + fastrand::u64(0..=base / 2))
 }
 
 fn retry_after_delay(error: &genai::Error) -> Option<Duration> {
@@ -1284,13 +1290,25 @@ fn retry_after_delay(error: &genai::Error) -> Option<Duration> {
     let genai::webc::Error::ResponseFailedStatus { headers, .. } = web_error else {
         return None;
     };
-    let seconds = headers
-        .get("retry-after")?
-        .to_str()
-        .ok()?
-        .parse::<u64>()
-        .ok()?;
-    Some(Duration::from_secs(seconds.min(120)))
+    parse_retry_after(
+        headers.get("retry-after")?.to_str().ok()?,
+        SystemTime::now(),
+    )
+}
+
+fn parse_retry_after(value: &str, now: SystemTime) -> Option<Duration> {
+    let value = value.trim();
+    let delay = if value.bytes().all(|byte| byte.is_ascii_digit()) {
+        let seconds = value.parse::<u64>().ok()?;
+        Duration::from_secs(seconds)
+    } else {
+        httpdate::parse_http_date(value)
+            .ok()?
+            .duration_since(now)
+            .unwrap_or_default()
+    };
+    // Unrepresentable numeric garbage is not a usable deadline.
+    Instant::now().checked_add(delay).map(|_| delay)
 }
 
 fn provider_error_status(error: &genai::Error) -> Option<u16> {
@@ -1654,6 +1672,25 @@ struct ToolErrorMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_after_supports_dates_and_preserves_long_delays() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        assert_eq!(
+            parse_retry_after("3600", now),
+            Some(Duration::from_secs(3600))
+        );
+        let future = httpdate::fmt_http_date(now + Duration::from_secs(90));
+        assert_eq!(
+            parse_retry_after(&future, now),
+            Some(Duration::from_secs(90))
+        );
+        let past = httpdate::fmt_http_date(now - Duration::from_secs(90));
+        assert_eq!(parse_retry_after(&past, now), Some(Duration::ZERO));
+        for invalid in ["", "-1", "+1", "1.5", "tomorrow", "18446744073709551616"] {
+            assert!(parse_retry_after(invalid, now).is_none(), "{invalid}");
+        }
+    }
 
     const ANALYSIS: &str = r#"{
         "passages": [{

@@ -593,6 +593,61 @@ async fn request_pacing_spaces_tool_follow_ups() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn clients_share_admission_and_retry_backoff_releases_capacity() -> Result<(), Box<dyn Error>>
+{
+    let api = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(503))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&api)
+        .await;
+    Mock::given(any())
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(final_response("ok", restoration_json())),
+        )
+        .mount(&api)
+        .await;
+    let gate = beyond_slides::RequestScheduler::fixed(
+        std::num::NonZeroUsize::new(1).unwrap(),
+        Duration::ZERO,
+    );
+    let first = beyond_slides::ChatCompletionsClient::new(
+        ChatCompletionsConfig::new(base_url(&api), "test-key", "test-model")?
+            .with_max_provider_retries(1)
+            .with_request_scheduler(gate.clone()),
+    );
+    let second = beyond_slides::ChatCompletionsClient::new(
+        ChatCompletionsConfig::new(base_url(&api), "test-key", "test-model")?
+            .with_request_scheduler(gate.clone()),
+    );
+    let sources = sources()?;
+    let windows = build_windows(
+        &sources,
+        WindowingConfig::new(100, Duration::from_secs(60), 20)?,
+    );
+    let tasks = build_restoration_tasks(&windows);
+    let (first_result, second_result) = tokio::join!(first.restore_window(&tasks[0]), async {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while gate.snapshot().failed_responses == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        // The first request is sleeping for at least 500 ms. Its HTTP slot is free.
+        tokio::time::timeout(Duration::from_millis(300), second.restore_window(&tasks[0]))
+            .await?
+            .map_err(|error| Box::new(error) as Box<dyn Error>)
+    });
+    assert_eq!(first_result?.diagnostics.provider_retries, 1);
+    second_result?;
+    assert_eq!(gate.snapshot().requests_started, 3);
+    assert_eq!(gate.snapshot().peak_in_flight, 1);
+    assert_eq!(gate.snapshot().in_flight, 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn construction_performs_no_model_discovery() -> Result<(), Box<dyn Error>> {
     let api = mock_api(vec![]).await;
     let _client = beyond_slides::ChatCompletionsClient::new(ChatCompletionsConfig::new(

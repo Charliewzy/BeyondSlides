@@ -13,6 +13,7 @@ mod passage_projection;
 mod playback_timing;
 mod ranking;
 mod report;
+mod request_scheduling;
 mod restoration;
 mod restored_annotation;
 mod retrieval;
@@ -67,6 +68,7 @@ pub use playback_timing::{
 };
 pub use ranking::rank_oral_additions;
 pub use report::render_report;
+pub use request_scheduling::{RequestScheduler, RequestSchedulingSnapshot};
 pub use restoration::{
     CompleteTranscriptRestoration, RestorationError, RestorationMessage, RestorationProgress,
     RestorationProgressError, RestorationSessionError, TranscriptRestorationConfig,

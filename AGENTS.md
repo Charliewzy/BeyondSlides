@@ -1,3 +1,9 @@
+## Commit workflow
+
+Commit completed, verified work at coherent milestones without waiting for
+pre-commit review. Keep unrelated changes separate and report the commits made.
+Pushing still requires a user request.
+
 ## Agent skills
 
 ### Issue tracker

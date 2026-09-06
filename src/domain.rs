@@ -307,7 +307,9 @@ pub struct RestoredLecturePassage {
     pub slide_position: SlideId,
     /// Coarse presentation level derived from `comparative_novelty` when present.
     pub novelty: Score5,
-    pub connection_strength: Score5,
+    /// None means this preparation mode did not assess conceptual connections.
+    /// Legacy numeric scores still deserialize as Some(score).
+    pub connection_strength: Option<Score5>,
     /// Coarse presentation level derived from `comparative_importance` when present.
     pub importance: Score5,
     #[serde(default, skip_serializing_if = "Option::is_none")]

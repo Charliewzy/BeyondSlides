@@ -122,7 +122,7 @@ struct PassageView {
     novelty: u8,
     importance_percentile: String,
     novelty_percentile: String,
-    connection_strength: u8,
+    connection_strength: String,
     text: String,
 }
 
@@ -166,7 +166,10 @@ impl PassageView {
                 .comparative_novelty
                 .map(|score| format!("{:.1}", score.percentile()))
                 .unwrap_or_default(),
-            connection_strength: passage.connection_strength.get(),
+            connection_strength: passage
+                .connection_strength
+                .map(|score| score.get().to_string())
+                .unwrap_or_default(),
             text: passage.text.clone(),
         }
     }

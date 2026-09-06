@@ -286,7 +286,7 @@ pub fn project_window_analysis(
             source_end,
             slide_position: task.slide_position,
             novelty: Score5::ZERO,
-            connection_strength: proposed.connection_strength,
+            connection_strength: Some(proposed.connection_strength),
             importance: Score5::ZERO,
             comparative_novelty: None,
             comparative_importance: None,

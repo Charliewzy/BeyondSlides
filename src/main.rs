@@ -5,6 +5,7 @@ mod restoration_review_run;
 mod restoration_run;
 mod run_support;
 mod trace_summary_run;
+mod web;
 mod worker_control;
 
 use std::{
@@ -35,6 +36,12 @@ async fn main() -> ExitCode {
 
 async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
     match arguments.as_slice() {
+        [command] if command == OsStr::new("serve") => web::serve(OsStr::new("run/application"), 7842).await,
+        [command, directory, port] if command == OsStr::new("serve") => {
+            let port: u16 = port.to_str().ok_or("invalid port")?.parse()?;
+            web::serve(directory, port).await
+        }
+        [command, directory] if command == OsStr::new("application-worker") => web::worker::run(directory).await,
         [command, trace_path] if command == OsStr::new("summarize-trace") => {
             trace_summary_run::run(trace_path)
         }
@@ -97,7 +104,8 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
         ),
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "usage: beyond-slides <transcript.json> <slides.json> <annotations.json> <result.html>\n\
+            "usage: beyond-slides serve [<application-directory> <port>]\n\
+             or:    beyond-slides <transcript.json> <slides.json> <annotations.json> <result.html>\n\
              or:    beyond-slides summarize-trace <model-trace.jsonl>\n\
              or:    beyond-slides canary <transcript.json> <slides.json> <canary.json>\n\
              or:    beyond-slides analyze <transcript.json> <slides.json> <run-directory> [--slides-pdf <slides.pdf>] [--audio <recording> --timed-tokens <timing.json>]\n\

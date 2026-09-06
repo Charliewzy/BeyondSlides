@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BeyondSlides · 讲座工作台</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <aside class="library">
+    <a class="brand" href="/">Beyond<span>Slides</span></a>
+    <p class="muted">从课堂中，发现讲义之外。</p>
+    <button id="new-lecture" class="primary">＋ 导入讲座</button>
+    <nav id="lectures" aria-label="我的讲座"></nav>
+    <div class="local-badge">● 本地工作台 <small>文件保存在这台电脑上</small></div>
+  </aside>
+  <main>
+    <header><span class="eyebrow">LECTURE WORKSPACE</span><span class="muted">本地文件 · 可恢复处理</span></header>
+    <div id="notice" role="status" hidden></div>
+    <section id="import-panel">
+      <h1>把一堂课，变成可探索的内容。</h1>
+      <p class="intro">先导入讲义与转写，确认内容，再开始分析。</p>
+      <form id="import-form" class="card">
+        <label>讲座名称<input name="name" maxlength="100" placeholder="例如：泛型、特型与生命周期"></label>
+        <div class="upload-grid">
+          <label class="upload">① 幻灯片 PDF<input name="slides" type="file" accept=".pdf" required><small>提取每页文字，保留原始幻灯片展示。</small></label>
+          <label class="upload">② 现有转写<input name="transcript" type="file" accept=".json,.tsv" required><small>当前支持 BeyondSlides JSON 或带时间戳的 TSV。</small></label>
+        </div>
+        <label>录音 / 视频（可选，用于回放）<input name="recording" type="file" accept=".mp4,.webm,.mp3,.m4a,.wav,.flac,.ogg"></label>
+        <p class="muted">视频自动转写将在下一步接入；当前请选择已有转写。导入预览不会向模型发送内容。</p>
+        <button class="primary" id="import-button">导入并预览</button><span id="import-status" role="status"></span>
+      </form>
+    </section>
+    <section id="workspace" hidden>
+      <h1 id="lecture-title"></h1>
+      <p id="lecture-meta" class="intro"></p>
+      <details class="card" id="source-preview" open><summary>检查导入内容</summary>
+        <div class="preview-grid"><div><h3>转写预览</h3><p id="transcript-preview"></p></div><div><h3>第一页文字</h3><p id="slide-preview"></p></div></div>
+        <p id="source-warnings" class="warning"></p>
+      </details>
+      <section class="card" id="provider-panel">
+        <h2>分析模型</h2>
+        <p class="disclosure">开始后，转写文字与幻灯片文字会发送到你指定的模型端点。PDF、录音和视频文件不会作为模型附件上传。</p>
+        <form id="start-form">
+          <div class="provider-grid">
+            <label>OpenAI-compatible API base URL<input id="base-url" type="url" required placeholder="https://provider.example/api/v1"></label>
+            <label>模型名称<input id="model" required placeholder="输入服务商提供的准确名称"></label>
+          </div>
+          <label>API key<input id="api-key" type="password" required autocomplete="off" placeholder="仅传给本地后端；不写入讲座配置"></label>
+          <details><summary>高级设置</summary>
+            <div class="provider-grid">
+              <label>最大并发数<input id="concurrency" type="number" min="1" max="32" value="2" required></label>
+              <label>请求间隔下限（ms）<input id="spacing" type="number" min="0" max="60000" value="0" required></label>
+            </div>
+            <label class="check"><input id="adaptive" type="checkbox"> 自动调整并发（以上数值为上限）</label>
+            <label class="check"><input id="boundaries" type="checkbox"> 使用实验性的全局语义边界分段</label>
+            <label>服务商额外请求字段（JSON，可选）<textarea id="extra-body" rows="3" placeholder='例如 GLM 关闭思考：{"thinking":{"type":"disabled"}}'></textarea></label>
+            <p class="muted">更改并发或间隔可直接续跑；更改模型或分段方式会先提示需要重跑的阶段。</p>
+          </details>
+          <div class="actions"><button class="primary" id="start-button">开始分析</button><button type="button" id="stop-button" hidden>完成当前任务后停止</button><a class="primary button" id="open-report" hidden target="_blank" rel="noopener">打开阅读报告 ↗</a></div>
+        </form>
+      </section>
+      <section class="card" id="processing-panel" hidden>
+        <div class="section-heading"><h2 id="run-state">处理进度</h2><span id="elapsed" class="muted"></span></div>
+        <p class="muted" id="run-description">关闭或刷新这个页面不会停止后端处理。</p>
+        <div id="stage-progress"></div>
+        <div class="usage-grid"><div><small>输入 token</small><strong id="input-tokens">—</strong></div><div><small>输出 token</small><strong id="output-tokens">—</strong></div><div><small>正在请求</small><strong id="active-requests">0</strong></div><div><small>已安排重试</small><strong id="retries">0</strong></div></div>
+        <p class="muted">用量随模型响应到达而更新，包含本次运行历史中已记录的响应，不是未完成请求的实时生成计数。缺失用量不会当作零。</p>
+        <p id="run-error" class="warning" role="alert"></p>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

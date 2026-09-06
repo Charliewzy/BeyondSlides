@@ -1,0 +1,15 @@
+BeyondSlides software is licensed under the MIT License; see LICENSE.
+
+Third-party course material
+--------------------------
+The lecture text and slide images embedded in examples/demo/report.html are
+third-party course material, not covered by this project's MIT license.
+Their copyright and any applicable permissions remain with their respective
+rights holders. Original attribution is preserved in the slides.
+
+The bundled example is retained for the current course-repository submission.
+This notice does not grant permission to redistribute the course material
+publicly. Before a public release, confirm redistribution permission or replace
+the example and remove historical copies from the public repository as needed.
+
+Third-party dependencies and model weights retain their own licenses.

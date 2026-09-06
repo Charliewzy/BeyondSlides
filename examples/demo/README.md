@@ -1,5 +1,10 @@
 # Example lecture report
 
+The embedded lecture text and slide images are third-party course material,
+excluded from the project's MIT license. This demo is retained for the current
+course submission; public redistribution still requires permission or replacement.
+See [NOTICE](../../NOTICE).
+
 Open `report.html` directly in a browser, or choose **查看示例报告** in the
 application. It is self-contained: slide images, styles and interactions are
 embedded, with no API key, uploads, model calls or network assets required.

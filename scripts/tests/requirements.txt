@@ -1,0 +1,2 @@
+# Imported by experiment helpers; tests make no model requests.
+httpx==0.28.1

@@ -106,6 +106,18 @@ experimental answers. This difference demonstrates remaining model variability.
 Replaying the production classifications through the Python reference DP
 produced the **identical partition** to Rust (1,064 atoms / 1,063 candidate gaps).
 
+Across the two fresh model runs, however, only 792/1,063 candidate-strength
+labels agree (74.5%); 203 gaps change between `continue` and a cuttable label.
+Their selected cuts share 147 positions out of 216 experimental and 221
+production cuts: boundary F1 is **0.673**, Jaccard overlap **0.507**. Of the
+production cuts, 178/221 lie within 50 source characters of an experimental
+cut. Structured task inputs and system prompts were verified identical across
+the 12 batches; transport serialization and scheduling differ. These are
+repeatability measurements, **not accuracy scores**, and two runs on one
+lecture cannot establish general reliability. The marked improvement in
+forced fragments coexists with substantial uncertainty about exact semantic
+boundaries. This is an important reason to retain opt-in status.
+
 | Measurement | Existing report | Final boundary report |
 | --- | ---: | ---: |
 | Passages | 292 | 222 |
@@ -146,8 +158,12 @@ selected new comparison namespaces under the conservative exact-passage hash.
 Restoration and all 12 boundary batches were reused; 84 comparison batches were
 rerun (85 HTTP requests, one repaired importance response selecting the same
 candidate as both most and least, no provider failures). The final report uses
-these latter comparisons. Its 896 best–worst judgments give every passage eight
-comparisons for each metric. The original namespaces and traces remain intact.
+these latter comparisons. Its 896 best–worst judgments cover eight shuffled
+rounds per metric. Because 222 is not divisible by four, the existing scheduler
+fills each round's last quartet with additional candidates: 206 passages have
+eight appearances and 16 have nine for each metric. Aggregation uses each
+passage's recorded comparison count, not an assumed denominator of eight.
+The original namespaces and traces remain intact.
 The follow-up command's wall time was not successfully captured; its comparative
 trace spans 50.72 seconds for novelty and 35.30 seconds for importance, overlapping.
 

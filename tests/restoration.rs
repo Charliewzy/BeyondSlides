@@ -37,6 +37,10 @@ fn restoration_uses_context_across_window_edges_without_claiming_it() -> Result<
             .contains("不要为了让当前窗口看起来完整而强行加句号")
     );
     assert!(input.get("window_index").is_none());
+    assert_eq!(
+        json_source_ids(&input["output_contract"]["required_source_ids"]),
+        vec![0, 1]
+    );
     assert_eq!(json_segment_ids(&input, "owned_region"), vec![0, 1]);
     assert_eq!(json_segment_ids(&input, "right_context"), vec![2, 3]);
 
@@ -52,6 +56,31 @@ fn restoration_uses_context_across_window_edges_without_claiming_it() -> Result<
         restored.text(),
         "所以当我们把所有权转移时，原来的变量就不能再使用了。"
     );
+    Ok(())
+}
+
+#[test]
+fn restoration_message_binds_output_to_lecture_global_source_ids() -> Result<(), Box<dyn Error>> {
+    let sources = sources(&["甲甲", "乙乙", "丙丙", "丁丁"])?;
+    let windows = build_windows(
+        &sources,
+        WindowingConfig::new(4, Duration::from_secs(60), 4)?,
+    );
+    let tasks = build_restoration_tasks(&windows);
+    let message = tasks[1].message()?;
+    let input: serde_json::Value = serde_json::from_str(&message.input)?;
+
+    assert_eq!(
+        json_source_ids(&input["output_contract"]["required_source_ids"]),
+        vec![2, 3]
+    );
+    assert_eq!(json_segment_ids(&input, "owned_region"), vec![2, 3]);
+    assert!(
+        message
+            .instructions
+            .contains("不得从 0 开始按窗口位置重新编号")
+    );
+    assert!(!message.instructions.contains("\"source_start\": 0"));
     Ok(())
 }
 
@@ -189,5 +218,14 @@ fn json_segment_ids(input: &serde_json::Value, field: &str) -> Vec<u64> {
                 .as_u64()
                 .expect("every transcript segment should have a numeric ID")
         })
+        .collect()
+}
+
+fn json_source_ids(input: &serde_json::Value) -> Vec<u64> {
+    input
+        .as_array()
+        .expect("source IDs should be an array")
+        .iter()
+        .map(|id| id.as_u64().expect("every source ID should be numeric"))
         .collect()
 }

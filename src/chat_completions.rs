@@ -912,7 +912,7 @@ impl ConversationWorkflow for RestorationWorkflow<'_> {
     }
 
     fn repair_instruction(&self, error: &ChatCompletionsError) -> String {
-        restoration_repair_instruction(error)
+        restoration_repair_instruction(&self.task, error)
     }
 }
 
@@ -1538,9 +1538,19 @@ fn restored_analysis_repair_instruction(error: &ChatCompletionsError) -> String 
     )
 }
 
-fn restoration_repair_instruction(error: &ChatCompletionsError) -> String {
+fn restoration_repair_instruction(
+    task: &TranscriptRestorationTask<'_>,
+    error: &ChatCompletionsError,
+) -> String {
+    let owned_range = match (task.owned_region.first(), task.owned_region.last()) {
+        (Some(first), Some(last)) => format!(
+            "本窗口只允许讲座全局来源 ID {} 至 {}。第一个 span 的 source_start 必须是 {}，最后一个 span 的 source_end 必须是 {}。",
+            first.id.0, last.id.0, first.id.0, last.id.0
+        ),
+        _ => "本窗口的 owned_region 为空，不得输出任何 span。".into(),
+    };
     format!(
-        "你上一条最终答案未通过验证：{error}\n请返回修正后的完整 TranscriptWindowRestoration JSON 对象，不要只返回局部修改。spans 必须按顺序、无重叠、无遗漏地完整划分 owned_region；不要输出 Markdown 或解释。"
+        "你上一条最终答案未通过验证：{error}\n请丢弃上一答案，从原始输入的 owned_region 重新生成完整 TranscriptWindowRestoration JSON 对象；不要平移或局部修补上一答案的 ID。{owned_range} source_start 和 source_end 必须直接复制 owned_region 中的 segment.id，不得按窗口位置从 0 重新编号。不得输出 left_context 或 right_context 的文字，即使句子因此不完整。spans 必须按顺序、无重叠、无遗漏地完整划分 owned_region；不要输出 Markdown 或解释。"
     )
 }
 

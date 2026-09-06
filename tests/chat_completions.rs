@@ -255,6 +255,13 @@ async fn invalid_restoration_is_returned_to_the_model_for_repair() -> Result<(),
             .expect("repair instruction is text")
             .contains("owned_region")
     );
+    let repair_instruction = repair_request["messages"][3]["content"]
+        .as_str()
+        .expect("repair instruction is text");
+    assert!(repair_instruction.contains("请丢弃上一答案"));
+    assert!(repair_instruction.contains("只允许讲座全局来源 ID 0 至 0"));
+    assert!(repair_instruction.contains("不得按窗口位置从 0 重新编号"));
+    assert!(repair_instruction.contains("不得输出 left_context 或 right_context 的文字"));
     Ok(())
 }
 

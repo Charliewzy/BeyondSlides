@@ -29,11 +29,32 @@ pub struct TranscriptRestorationTask<'a> {
 impl TranscriptRestorationTask<'_> {
     /// Separates trusted restoration instructions from untrusted transcript text.
     pub fn message(&self) -> Result<RestorationMessage, serde_json::Error> {
+        let input = TranscriptRestorationInput {
+            output_contract: RestorationOutputContract {
+                required_source_ids: self.owned_region.iter().map(|segment| segment.id).collect(),
+            },
+            left_context: self.left_context,
+            owned_region: self.owned_region,
+            right_context: self.right_context,
+        };
         Ok(RestorationMessage {
             instructions: RESTORATION_INSTRUCTIONS,
-            input: serde_json::to_string(self)?,
+            input: serde_json::to_string(&input)?,
         })
     }
+}
+
+#[derive(Serialize)]
+struct TranscriptRestorationInput<'a> {
+    output_contract: RestorationOutputContract,
+    left_context: &'a [TranscriptSegment],
+    owned_region: &'a [TranscriptSegment],
+    right_context: &'a [TranscriptSegment],
+}
+
+#[derive(Serialize)]
+struct RestorationOutputContract {
+    required_source_ids: Vec<TranscriptSegmentId>,
 }
 
 /// Provider-neutral content for one transcript-restoration request.

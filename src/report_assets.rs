@@ -46,24 +46,31 @@ pub fn prepare_audio_asset(
     let asset_directory = report_parent.join(&asset_directory_name);
     fs::create_dir_all(&asset_directory)?;
 
-    remove_stale_audio_assets(&asset_directory)?;
     let file_name = audio_path.extension().map_or_else(
         || AUDIO_ASSET_STEM.into(),
         |extension| format!("{AUDIO_ASSET_STEM}.{}", extension.to_string_lossy()),
     );
     let target = asset_directory.join(&file_name);
-    if let Err(link_error) = fs::hard_link(audio_path, &target) {
-        fs::copy(audio_path, &target).map_err(|copy_error| {
-            io::Error::new(
-                copy_error.kind(),
-                format!(
-                    "could not hard-link {} ({link_error}) or copy it to {} ({copy_error})",
-                    audio_path.display(),
-                    target.display()
-                ),
-            )
-        })?;
+    let already_staged = target.exists() && audio_path.canonicalize()? == target.canonicalize()?;
+    if !already_staged {
+        // Secure the replacement before touching any existing report assets.
+        let staging = tempfile::tempdir_in(&asset_directory)?;
+        let staged = staging.path().join(&file_name);
+        if let Err(link_error) = fs::hard_link(audio_path, &staged) {
+            fs::copy(audio_path, &staged).map_err(|copy_error| {
+                io::Error::new(
+                    copy_error.kind(),
+                    format!(
+                        "could not hard-link {} ({link_error}) or copy it to {} ({copy_error})",
+                        audio_path.display(),
+                        target.display()
+                    ),
+                )
+            })?;
+        }
+        fs::rename(&staged, &target)?;
     }
+    remove_stale_audio_assets(&asset_directory, &target)?;
 
     Ok(ReportAudio {
         source: PathBuf::from(asset_directory_name)
@@ -211,12 +218,13 @@ fn remove_stale_slides(directory: &Path, slide_count: usize) -> Result<(), io::E
     Ok(())
 }
 
-fn remove_stale_audio_assets(directory: &Path) -> Result<(), io::Error> {
+fn remove_stale_audio_assets(directory: &Path, retained: &Path) -> Result<(), io::Error> {
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy();
-        if (file_name == AUDIO_ASSET_STEM || file_name.starts_with("lecture-audio."))
+        if entry.path() != retained
+            && (file_name == AUDIO_ASSET_STEM || file_name.starts_with("lecture-audio."))
             && entry.file_type()?.is_file()
         {
             fs::remove_file(entry.path())?;
@@ -228,6 +236,46 @@ fn remove_stale_audio_assets(directory: &Path) -> Result<(), io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rerender_preserves_audio_already_in_the_assets_directory()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let assets = directory.path().join("report.assets");
+        fs::create_dir(&assets)?;
+        let input = assets.join("lecture-audio.flac");
+        fs::write(&input, b"only recording copy")?;
+        prepare_audio_asset(&input, &directory.path().join("report.html"))?;
+        prepare_audio_asset(
+            &assets.join("./lecture-audio.flac"),
+            &directory.path().join("report.html"),
+        )?;
+        assert_eq!(fs::read(&input)?, b"only recording copy");
+        Ok(())
+    }
+
+    #[test]
+    fn audio_replacement_keeps_old_asset_until_new_input_is_available()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let report = directory.path().join("report.html");
+        let input = directory.path().join("original.flac");
+        fs::write(&input, b"original")?;
+        prepare_audio_asset(&input, &report)?;
+        let old = directory.path().join("report.assets/lecture-audio.flac");
+        assert!(prepare_audio_asset(&directory.path().join("missing.mp3"), &report).is_err());
+        assert_eq!(fs::read(&old)?, b"original");
+        let replacement = directory.path().join("replacement.mp3");
+        fs::write(&replacement, b"replacement")?;
+        prepare_audio_asset(&replacement, &report)?;
+        assert!(!old.exists());
+        assert_eq!(
+            fs::read(directory.path().join("report.assets/lecture-audio.mp3"))?,
+            b"replacement"
+        );
+        assert_eq!(fs::read(&input)?, b"original");
+        Ok(())
+    }
 
     #[test]
     fn pdf_pages_become_ordered_report_assets() -> Result<(), Box<dyn std::error::Error>> {

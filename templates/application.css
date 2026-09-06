@@ -50,6 +50,7 @@ summary { cursor: pointer; font-size: 14px; font-weight: 650; }
 details[open] > summary { margin-bottom: 20px; }
 .preview-grid p { font-size: 14px; line-height: 1.9; max-height: 240px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .disclosure { font-size: 13px; line-height: 1.8; background: #f4f0fb; border-left: 3px solid #b9a4e4; padding: 12px 15px; margin-bottom: 24px; }
+.disclosure code { overflow-wrap: anywhere; }
 .check { display: flex; align-items: center; font-weight: 400; }
 .check input { width: auto; accent-color: var(--accent); }
 .warning, #notice { color: #9d4431; font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; white-space: pre-wrap; }

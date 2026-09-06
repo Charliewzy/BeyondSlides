@@ -64,6 +64,12 @@ def main():
             page.locator("#open-report").wait_for(state="visible")
             assert page.locator("#run-state").inner_text() == "处理完成"
             assert page.locator("#api-key").input_value() == ""
+            disclosure = page.locator("#provider-panel .disclosure")
+            assert disclosure.locator("strong").is_visible()
+            assert "建议尝试关闭模型的思考模式" in disclosure.locator("strong").inner_text()
+            assert "GLM-5" in disclosure.inner_text()
+            assert json.loads(disclosure.locator("code").inner_text()) == {"thinking": {"type": "disabled"}}
+            assert not page.locator("#start-form details").evaluate("element => element.open")
             page.reload()
             page.locator("#open-report").wait_for(state="visible")
             # Existing jobs need no migration or new analysis to review sources.

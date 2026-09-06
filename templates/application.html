@@ -53,7 +53,10 @@
       </details>
       <section class="card" id="provider-panel">
         <h2>分析模型</h2>
-        <p class="disclosure">开始后，转写文字与幻灯片文字会发送到你指定的模型端点。PDF、录音和视频文件不会作为模型附件上传。</p>
+        <p class="disclosure">开始后，转写文字与幻灯片文字会发送到你指定的模型端点。PDF、录音和视频文件不会作为模型附件上传。<br>
+          <strong>为加快处理，建议尝试关闭模型的思考模式（如模型支持）。</strong><br>
+          使用 GLM-5 时，可在「高级设置 → 服务商额外请求字段」中填写 <code>{"thinking":{"type": "disabled"}}</code>。其他模型或服务商的设置方式可能不同，请查阅对应文档。
+        </p>
         <form id="start-form">
           <div class="provider-grid">
             <label>OpenAI-compatible API base URL<input id="base-url" type="url" required placeholder="https://provider.example/api/v1"></label>

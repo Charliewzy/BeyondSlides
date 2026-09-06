@@ -98,12 +98,18 @@ def simulate(mode, scenario, seed, count=160):
     if scenario == "slow_request_quota":
         durations = [.2] * count
     policy = Controller(mode)
-    waiting = [(0., item, 0) for item in range(count)]
+    # Mirror the pipeline's bounded conversation pool, not an unbounded queue
+    # of already-started conversations. Backoff retains a conversation slot,
+    # but releases the separate HTTP admission slot.
+    workers = policy.cap if mode.startswith("fixed") else policy.ceiling
+    items = iter(range(count))
+    waiting = [(0., item, 0) for item in [next(items, None) for _ in range(workers)] if item is not None]
     heapq.heapify(waiting)
     active = []
     now, serial, completed, failed, peak = 0., 0, 0, 0, 0
     statuses, successful_starts = Counter(), []
     while waiting or active:
+        assert len(waiting) + len(active) <= workers
         while active and active[0][0] <= now + 1e-9:
             _, _, item, attempt, status, began, generation, retry_after = heapq.heappop(active)
             policy.finish(now, generation, status, now - began, retry_after)
@@ -115,6 +121,10 @@ def simulate(mode, scenario, seed, count=160):
                 heapq.heappush(waiting, (now + delay, item, attempt + 1))
             else:
                 failed += 1
+            if status == 200 or attempt == 5:
+                replacement = next(items, None)
+                if replacement is not None:
+                    heapq.heappush(waiting, (now, replacement, 0))
         while waiting and len(active) < policy.cap and max(waiting[0][0], policy.next_start, policy.cooldown) <= now + 1e-9:
             _, item, attempt = heapq.heappop(waiting)
             generation = policy.admit(now, len(active))
@@ -139,8 +149,9 @@ def simulate(mode, scenario, seed, count=160):
             heapq.heappush(active, (now + duration, serial, item, attempt, status, now, generation, retry_after))
             peak = max(peak, len(active))
         events = [active[0][0]] if active else []
-        policy.pressure |= bool(waiting) and len(active) >= policy.cap
-        policy.paced_pressure |= bool(waiting) and len(active) < policy.cap and policy.next_start > now
+        ready_work = bool(waiting) and waiting[0][0] <= now
+        policy.pressure |= ready_work and len(active) >= policy.cap
+        policy.paced_pressure |= ready_work and len(active) < policy.cap and policy.next_start > now
         if waiting and len(active) < policy.cap:
             events.append(max(waiting[0][0], policy.next_start, policy.cooldown))
         if events:

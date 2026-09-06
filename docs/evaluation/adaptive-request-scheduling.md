@@ -41,7 +41,7 @@ safe. No live throttling was observed, so recovery requires separate tests.
 ## Deterministic synthetic providers
 
 The discrete-event simulator runs 160 jobs per scenario and three seeds. It
-includes concurrency limits, rolling request-rate limits, heterogeneous latency,
+includes a bounded conversation pool, concurrency limits, rolling request-rate limits, heterogeneous latency,
 a mid-run capacity drop, and isolated transient 503s. All strategies allow at
 most five retries per job. Baseline fixed modes model the previous independent
 retry behavior; adaptive modes share cooldowns. Thus this compares complete
@@ -52,19 +52,31 @@ Mean elapsed seconds and mean 429 counts across the three seeds:
 | Provider scenario | Concurrency-only AIMD | AIMD + spacing | 429s: concurrency only / combined |
 | --- | ---: | ---: | ---: |
 | Healthy, unlimited | 28.53 | 28.53 | 0 / 0 |
-| Maximum four concurrent | 60.25 | 69.91 | 5 / 3 |
-| Three starts per second | 121.77 | 114.08 | 10.3 / 3 |
-| One start/sec, 0.2 s service time | 165.05 | 218.45 | 157 / 7 |
+| Maximum four concurrent | 60.15 | 67.64 | 5 / 3 |
+| Three starts per second | 120.35 | 113.73 | 11 / 3 |
+| One start/sec, 0.2 s service time | 145.15 | 218.45 | 139 / 7 |
 | Heterogeneous 0.25–15 s service time | 172.92 | 172.92 | 0 / 0 |
-| Capacity drops from eight to two | 101.87 | 111.39 | 8.3 / 4.3 |
-| Isolated transient 503s | 31.59 | 31.59 | 0 / 0 |
+| Capacity drops from eight to two | 102.57 | 111.25 | 8.3 / 4.3 |
+| Isolated transient 503s | 30.81 | 30.81 | 0 / 0 |
 
 Combined adaptation completed every job in all scenarios. Concurrency-only
-AIMD exhausted retries on two jobs per seed under the one-request/sec quota.
+AIMD exhausted retries on 21 jobs per seed under the one-request/sec quota.
 Fixed eight exhausted many retry budgets under restrictive providers; its short
 elapsed time there reflects failed work and is not a throughput win. Combined
 adaptation pays a conservative recovery cost in some scenarios. These synthetic
 limits are explicitly chosen test cases, not fitted estimates of the proxy.
+Fixed two completed that quota scenario faster (167.15 s) but made 317
+throttled attempts per seed versus seven for the combined strategy. Low retry
+pressure is a deliberate part of the selection criterion, not an assertion
+that combined adaptation always minimizes elapsed time.
+
+The first simulator version admitted an unbounded pool of conversations waiting
+to retry. It overstated the baseline's retry pressure relative to production's
+bounded work pool. The corrected table above uses two/eight conversation slots
+for the corresponding fixed strategies and eight for adaptive strategies. A
+backoff retains a conversation slot while releasing the separate HTTP slot.
+The corrected results still support separate rate control. Original simulation
+outputs are retained as exploratory artifacts rather than overwritten.
 
 An initial combined candidate recovered pacing before considering concurrency;
 that left an unnecessarily low concurrency cap in place. The selected policy
@@ -111,8 +123,9 @@ timing measurements do not silently mix fresh and cached responses. The script
 is restricted to the existing GLM-5 comparison payload for this live experiment;
 the production scheduler itself must remain provider-neutral.
 
-Results are in `run/real_course/scheduling-experiment/`: `simulation.json`,
+Live results are in `run/real_course/scheduling-experiment/`: `simulation.json` (initial unbounded-pool simulation),
 `sample.json`, `live-summary.json`, and each cell's complete responses. Earlier
 simulation iterations remain separately under `scheduling-simulation-v1/` and
-`scheduling-simulation-v2/`. No production checkpoints or reports were modified
+`scheduling-simulation-v2/`; corrected bounded-pool results are in
+`scheduling-bounded-pool-simulation/simulation.json`. No production checkpoints or reports were modified
 by this experiment, and no credentials were written into its artifacts.

@@ -6,6 +6,34 @@ use super::jobs::{ElapsedCheckpoint, Outcome, OutcomeStatus, now_ms, read_job, w
 use crate::run_support::write_json_atomically;
 
 pub(crate) async fn run(directory: &OsStr) -> Result<(), Box<dyn Error>> {
+    if std::env::var_os("BEYOND_SLIDES_CAPTURED_WORKER").as_deref() == Some(OsStr::new("1")) {
+        return execute(directory).await;
+    }
+    // The log-draining supervisor is independent of the web server, just like
+    // the worker itself. Only its child executes the lecture pipeline.
+    let job_path = Path::new(directory);
+    let job = read_job(job_path)?;
+    let run = job.runs.last().ok_or("lecture job has no configured run")?;
+    let mut command = tokio::process::Command::new(std::env::current_exe()?);
+    command
+        .arg("application-worker")
+        .arg(directory)
+        .env("BEYOND_SLIDES_CAPTURED_WORKER", "1")
+        .stdin(std::process::Stdio::null());
+    let key = std::env::var("BEYOND_SLIDES_API_KEY").unwrap_or_default();
+    let status = super::logs::capture(
+        &mut command,
+        &run.directory(job_path).join("worker-debug.log"),
+        &key,
+    )
+    .await?;
+    if !status.success() {
+        return Err(format!("Processing worker exited: {status}").into());
+    }
+    Ok(())
+}
+
+async fn execute(directory: &OsStr) -> Result<(), Box<dyn Error>> {
     let directory = Path::new(directory);
     let lock = worker_lock(directory)?;
     lock.try_lock()?;

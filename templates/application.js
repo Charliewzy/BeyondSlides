@@ -3,6 +3,7 @@ const $ = (id) => document.getElementById(id);
 let currentId = null;
 let pollingTimer;
 let jobs = [];
+let debugLoading = false;
 
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { "X-BeyondSlides": "local-ui", ...(typeof options.body === "string" ? { "Content-Type": "application/json" } : {}), ...options.headers } });
@@ -34,6 +35,8 @@ async function select(id) {
   history.replaceState(null, "", `#${id}`);
   $("import-panel").hidden = true; $("workspace").hidden = false;
   $("api-key").value = "";
+  $("debug-output").textContent = ""; $("debug-status").textContent = "";
+  $("debug-download").hidden = true;
   const job = jobs.find(j => j.id === id);
   setSettings(job?.runs.at(-1)?.settings);
   $("source-preview").open = !job?.runs.length;
@@ -43,6 +46,22 @@ function tokenUsage(known, missing, responses) {
   if (!responses) return "等待响应";
   if (missing === responses) return "服务商未提供";
   return `${missing ? "≥ " : ""}${known.toLocaleString()}${missing ? `（${missing}次缺失）` : ""}`;
+}
+const asrPhases = { checking_recording: "检查录音", extracting_audio: "提取音频", loading_models: "加载模型", detecting_speech: "检测语音", recognizing: "识别语音", punctuating: "添加标点", saving: "保存转写", finalizing: "验证并保存", complete: "完成" };
+function transcriptionProgress(row, progress, count, observed, active) {
+  const measurable = observed.phase === "recognizing" && observed.total_speech_ms > 0 && observed.total_regions > 0;
+  const ratio = measurable ? Math.min(1, observed.completed_speech_ms / observed.total_speech_ms) : null;
+  const label = asrPhases[observed.phase] || "处理中";
+  count.textContent = `${label}${ratio === null ? "" : ` · ${Math.floor(ratio * 100)}%`}${observed.reused ? "（复用已保存结果）" : ""}`;
+  if (observed.phase === "complete") { progress.max = 1; progress.value = 1; }
+  else if (ratio !== null) { progress.max = observed.total_speech_ms; progress.value = observed.completed_speech_ms; }
+  else if (active) { progress.removeAttribute("value"); }
+  else { progress.max = 1; progress.value = 0; }
+  if (observed.total_regions !== null) {
+    const detail = document.createElement("small");
+    detail.textContent = `${observed.completed_regions} / ${observed.total_regions} 个语音区域 · ${duration(observed.completed_speech_ms)} / ${duration(observed.total_speech_ms)} 有声时长。百分比仅表示语音识别工作量，不含静音，不是剩余时间估计。`;
+    row.append(detail);
+  }
 }
 function render(status) {
   const { job, usage, state } = status;
@@ -78,20 +97,48 @@ function render(status) {
     const progress = document.createElement("progress"); progress.setAttribute("aria-label", label);
     if (data?.total !== null) { progress.max = data?.total || 1; progress.value = data?.completed || 0; }
     row.append(progress); $("stage-progress").append(row);
+    if (stage === "transcription" && status.transcription) transcriptionProgress(row, progress, count, status.transcription, active);
   }
   $("input-tokens").textContent = tokenUsage(usage.known_input_tokens, usage.missing_input_usage, usage.responses);
   $("output-tokens").textContent = tokenUsage(usage.known_output_tokens, usage.missing_output_usage, usage.responses);
   $("active-requests").textContent = usage.active_requests; $("retries").textContent = usage.retries;
   $("run-error").textContent = [status.error, status.usage_error].filter(Boolean).join("\n");
+  const timings = status.transcription?.timings_seconds || {};
+  $("asr-timings").textContent = Object.entries(timings).map(([phase, seconds]) => `${asrPhases[phase] || phase}：${seconds.toFixed(2)} 秒`).join(" · ");
+  if (status.transcription?.reused) $("asr-timings").textContent += "（模型阶段耗时来自复用的转写结果）";
+}
+async function pollDebug() {
+  if (!currentId || !$("debug-panel").open || debugLoading) return;
+  const id = currentId, kind = $("debug-kind").value;
+  debugLoading = true;
+  try {
+    const log = await api(`/api/jobs/${id}/logs/${kind}`);
+    if (id !== currentId || kind !== $("debug-kind").value) return;
+    $("debug-download").href = `/api/jobs/${id}/logs/${kind}/download`;
+    $("debug-download").hidden = !log.available;
+    if ($("debug-follow").checked || !$("debug-output").textContent) {
+      $("debug-output").textContent = log.text;
+      if ($("debug-follow").checked) $("debug-output").scrollTop = $("debug-output").scrollHeight;
+    }
+    $("debug-status").textContent = !log.available ? "尚无此版本捕获的日志。旧日志仅保存在本地；下次启动或恢复后开始捕获。" : !$("debug-follow").checked ? "显示已暂停，后台继续记录。勾选跟随可查看最新输出。" : log.truncated ? "显示最近 128 KiB；更早的输出请下载完整日志。" : "实时更新（约每秒）；后台持续保存日志。";
+  } catch (error) { if (id === currentId) $("debug-status").textContent = `日志暂不可用：${error.message}`; }
+  finally { debugLoading = false; }
 }
 async function poll() {
   clearTimeout(pollingTimer);
   const id = currentId;
   if (!id) return;
-  try { const status = await api(`/api/jobs/${id}`); if (id === currentId) render(status); }
+  try { const status = await api(`/api/jobs/${id}`); if (id === currentId) { render(status); await pollDebug(); } }
   catch (error) { if (id === currentId) notice(`无法连接工作台：${error.message}。页面会继续尝试连接。`); }
   if (id === currentId) { clearTimeout(pollingTimer); pollingTimer = setTimeout(poll, 1000); }
 }
+$("debug-panel").addEventListener("toggle", pollDebug);
+$("debug-kind").addEventListener("change", () => { $("debug-output").textContent = ""; $("debug-download").hidden = true; pollDebug(); });
+$("debug-follow").addEventListener("change", pollDebug);
+$("debug-output").addEventListener("scroll", () => {
+  const output = $("debug-output");
+  if (output.scrollHeight - output.clientHeight - output.scrollTop > 20) $("debug-follow").checked = false;
+});
 $("new-lecture").addEventListener("click", () => {
   currentId = null; clearTimeout(pollingTimer); history.replaceState(null, "", "/");
   $("workspace").hidden = true; $("import-panel").hidden = false; notice("");

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+strip-ansi-escapes = "0.2"
 askama = "0.16"
 axum = { version = "0.8", features = ["multipart"] }
 colorous = "1"

@@ -1,9 +1,11 @@
 use std::{
+    collections::BTreeMap,
     error::Error,
     fs,
     io::{self, Read},
     path::{Path, PathBuf},
     process::Stdio,
+    time::Instant,
 };
 
 use beyond_slides::{SlideDeck, TimedTranscript, Transcript, ValidatedSources};
@@ -30,6 +32,37 @@ struct Checkpoint {
     result: Transcription,
 }
 
+#[derive(Default, Deserialize, Serialize)]
+#[serde(default)]
+pub(super) struct Progress {
+    pub observer_version: u32,
+    pub phase: String,
+    pub attempt_started_ms: u64,
+    pub completed_regions: usize,
+    pub total_regions: Option<usize>,
+    pub completed_speech_ms: u64,
+    pub total_speech_ms: Option<u64>,
+    pub timings_seconds: BTreeMap<String, f64>,
+    pub reused: bool,
+}
+
+pub(super) fn read_progress(run: &Path, attempt: u64) -> Result<Option<Progress>, io::Error> {
+    let path = run.join("control/asr-progress.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let progress: Progress = read_json(&path, "transcription progress")?;
+    Ok((progress.attempt_started_ms == attempt).then_some(progress))
+}
+
+fn publish_progress(run: &Path, progress: &Progress) -> Result<(), io::Error> {
+    write_json_atomically(
+        &run.join("control/asr-progress.json"),
+        progress,
+        "transcription progress",
+    )
+}
+
 pub(super) async fn prepare(
     directory: &Path,
     run: &Path,
@@ -41,6 +74,13 @@ pub(super) async fn prepare(
     let control = WorkerControl::from_environment()?;
     control.check_stop()?;
     control.progress(Stage::Transcription, 0, None)?;
+    let attempt = job.runs.last().ok_or("Missing run metadata")?.started_ms;
+    let mut progress = Progress {
+        phase: "checking_recording".into(),
+        attempt_started_ms: attempt,
+        ..Progress::default()
+    };
+    publish_progress(run, &progress)?;
     let recording = directory.join(job.recording.as_ref().ok_or("Missing recording")?);
     let recording_sha256 = file_hash(&recording)?;
     let asr_directory = directory.join("transcription");
@@ -51,8 +91,15 @@ pub(super) async fn prepare(
         if checkpoint.recording_sha256 != recording_sha256 {
             return Err("Recording changed after transcription; import it as a new lecture".into());
         }
+        progress.reused = true;
+        progress.timings_seconds =
+            serde_json::from_value(checkpoint.result.metadata["timings_seconds"].clone())
+                .unwrap_or_default();
         checkpoint
     } else {
+        progress.phase = "extracting_audio".into();
+        publish_progress(run, &progress)?;
+        let extracting = Instant::now();
         let audio = asr_directory.join("audio.wav");
         let status = tokio::process::Command::new("ffmpeg")
             .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i"])
@@ -65,6 +112,12 @@ pub(super) async fn prepare(
         if !status.success() {
             return Err("Audio extraction failed; see worker.log".into());
         }
+        let extraction_seconds = extracting.elapsed().as_secs_f64();
+        progress
+            .timings_seconds
+            .insert("extracting_audio".into(), extraction_seconds);
+        progress.phase = "loading_models".into();
+        publish_progress(run, &progress)?;
         control.check_stop()?;
         let script = asr_directory.join("transcribe.py");
         fs::write(
@@ -76,22 +129,33 @@ pub(super) async fn prepare(
         )?;
         // Preserve even a rejected attempt's output for diagnosis. Only the
         // validated checkpoint below is eligible for reuse.
-        let attempt = job.runs.last().ok_or("Missing run metadata")?.started_ms;
         let result_path = asr_directory.join(format!("result-{attempt}.json"));
-        let log = fs::File::options()
-            .create(true)
-            .append(true)
-            .open(asr_directory.join("asr.log"))?;
         let python = python_executable();
-        let status = tokio::process::Command::new(&python)
-            .arg(&script).arg(&audio).arg(&result_path).arg(run.join("control/asr-progress.json"))
-            .env_remove("BEYOND_SLIDES_API_KEY").env("CUDA_VISIBLE_DEVICES", "")
-            .stdin(Stdio::null()).stdout(log.try_clone()?).stderr(log)
-            .status().await.map_err(|e| format!("Could not run local ASR Python {}: {e}. See docs/local-application.md for setup.", python.display()))?;
+        let mut command = tokio::process::Command::new(&python);
+        command
+            .arg("-u")
+            .arg(&script)
+            .arg(&audio)
+            .arg(&result_path)
+            .arg(run.join("control/asr-progress.json"))
+            .arg("--attempt-started-ms")
+            .arg(attempt.to_string())
+            .arg("--extraction-seconds")
+            .arg(extraction_seconds.to_string())
+            .env_remove("BEYOND_SLIDES_API_KEY")
+            .env("CUDA_VISIBLE_DEVICES", "")
+            .stdin(Stdio::null());
+        let key = std::env::var("BEYOND_SLIDES_API_KEY").unwrap_or_default();
+        let status = super::logs::capture(&mut command, &asr_directory.join("asr-debug.log"), &key).await
+            .map_err(|e| format!("Could not run local ASR Python {}: {e}. See docs/local-application.md for setup.", python.display()))?;
         if !status.success() {
-            return Err(format!("Local CPU transcription failed ({status}). See {}. Install FunASR and CPU PyTorch in the configured Python environment.", asr_directory.join("asr.log").display()).into());
+            return Err(format!("Local CPU transcription failed ({status}). See {}. Install FunASR and CPU PyTorch in the configured Python environment.", asr_directory.join("asr-debug.log").display()).into());
         }
-        let result: Transcription = read_json(&result_path, "local ASR result")?;
+        let mut result: Transcription = read_json(&result_path, "local ASR result")?;
+        if let Some(observed) = read_progress(run, attempt)? {
+            progress = observed;
+        }
+        result.metadata["timings_seconds"] = serde_json::to_value(&progress.timings_seconds)?;
         let checkpoint = Checkpoint {
             recording_sha256,
             result,
@@ -100,6 +164,9 @@ pub(super) async fn prepare(
         write_json_atomically(&checkpoint_path, &checkpoint, "transcription checkpoint")?;
         checkpoint
     };
+    let saving = Instant::now();
+    progress.phase = "finalizing".into();
+    publish_progress(run, &progress)?;
     validate(directory, &checkpoint.result)?;
     write_json_atomically(
         &directory.join("transcript.json"),
@@ -130,6 +197,11 @@ pub(super) async fn prepare(
         }
     }
     save_job(directory, job)?;
+    progress
+        .timings_seconds
+        .insert("finalizing".into(), saving.elapsed().as_secs_f64());
+    progress.phase = "complete".into();
+    publish_progress(run, &progress)?;
     control.progress(Stage::Transcription, 1, Some(1))?;
     control.check_stop()?;
     Ok(())
@@ -175,4 +247,25 @@ fn file_hash(path: &Path) -> Result<String, io::Error> {
         hash.update(&bytes[..count]);
     }
     Ok(format!("{:x}", hash.finalize()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn progress_from_a_previous_attempt_is_not_presented_as_live() -> io::Result<()> {
+        let run = tempfile::tempdir()?;
+        fs::create_dir(run.path().join("control"))?;
+        publish_progress(
+            run.path(),
+            &Progress {
+                phase: "recognizing".into(),
+                attempt_started_ms: 10,
+                ..Progress::default()
+            },
+        )?;
+        assert!(read_progress(run.path(), 11)?.is_none());
+        assert_eq!(read_progress(run.path(), 10)?.unwrap().phase, "recognizing");
+        Ok(())
+    }
 }

@@ -1,5 +1,6 @@
 mod export;
 mod jobs;
+mod logs;
 mod transcription;
 mod usage;
 pub(crate) mod worker;
@@ -102,6 +103,8 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
         )
         .route("/api/jobs/{id}/stop", post(stop))
         .route("/api/jobs/{id}/export", get(export_report))
+        .route("/api/jobs/{id}/logs/{kind}", get(log_tail))
+        .route("/api/jobs/{id}/logs/{kind}/download", get(log_download))
         .route("/reports/{id}/{*file}", get(report_file))
         .layer(DefaultBodyLimit::max(4 * 1024 * 1024 * 1024_usize))
         .layer(middleware::from_fn_with_state(app.clone(), local_only))
@@ -190,6 +193,51 @@ async fn list_jobs(State(app): State<App>) -> Result<Json<Vec<Job>>, AppError> {
     }
     jobs.sort_by_key(|job| std::cmp::Reverse(job.created_ms));
     Ok(Json(jobs))
+}
+
+fn log_path(app: &App, id: &str, kind: &str) -> Result<PathBuf, AppError> {
+    let directory = job_path(&app.root, id)?;
+    let job = read_job(&directory)?;
+    let run = job
+        .runs
+        .last()
+        .ok_or_else(|| AppError::bad("No processing run yet"))?;
+    Ok(logs::path(&directory, &run.directory(&directory), kind)?)
+}
+
+async fn log_tail(
+    State(app): State<App>,
+    Path((id, kind)): Path<(String, String)>,
+) -> Result<Json<logs::Tail>, AppError> {
+    let path = log_path(&app, &id, &kind)?;
+    let tail = tokio::task::spawn_blocking(move || logs::tail(&path))
+        .await
+        .map_err(AppError::bad)??;
+    Ok(Json(tail))
+}
+
+async fn log_download(
+    State(app): State<App>,
+    Path((id, kind)): Path<(String, String)>,
+    request: Request,
+) -> Result<Response, AppError> {
+    let path = log_path(&app, &id, &kind)?;
+    let mut response = ServeFile::new(path)
+        .try_call(request)
+        .await
+        .map_err(AppError::bad)?
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "text/plain; charset=utf-8".parse().unwrap(),
+    );
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        format!("attachment; filename=\"{kind}-debug.log\"")
+            .parse()
+            .unwrap(),
+    );
+    Ok(response)
 }
 
 async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json<Job>, AppError> {
@@ -285,6 +333,7 @@ struct Status {
     error: Option<String>,
     elapsed_ms: u64,
     report_url: Option<String>,
+    transcription: Option<transcription::Progress>,
 }
 
 async fn job_status(
@@ -302,9 +351,11 @@ async fn job_status(
         error: None,
         elapsed_ms: 0,
         report_url: None,
+        transcription: None,
     };
     if let Some(run) = job.runs.last() {
         let path = run.directory(&directory);
+        status.transcription = transcription::read_progress(&path, run.started_ms)?;
         let running = app.launching.lock().await.contains(&id) || is_worker_running(&directory)?;
         let outcome: Option<Outcome> = if path.join("outcome.json").exists() {
             Some(read_json(&path.join("outcome.json"), "worker outcome")?)

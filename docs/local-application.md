@@ -66,12 +66,44 @@ launching the server. This is server configuration, not an uploaded command.
 Transcription uses SenseVoiceSmall + FSMN VAD + punctuation, always on CPU. The
 first use may download model weights; recording contents remain local. It runs
 one complete recording inference and saves an atomic validated checkpoint.
-There is no trustworthy percentage for this call, so the UI uses an
-indeterminate stage. A graceful stop during transcription waits for that call
+The UI distinguishes audio extraction, model loading, speech detection,
+recognition, and finalization. Recognition progress is the duration of completed
+detected speech regions divided by their total duration, with region counts
+shown alongside it. Silence is excluded; FunASR can process regions in length
+order, so this is work completed, not a chronological playback position or time
+remaining. Other substages remain indeterminate. If the library's observed
+batch structure is unsupported, recognition also remains indeterminate rather
+than inventing a percentage. A graceful stop during transcription waits for that call
 to finish and saves it before pausing. A hard interruption before the checkpoint
 requires retranscribing; completed transcription is reused across resumes and
 analysis-model changes. Fine-grained token timing is used when available,
 otherwise playback retains explicitly coarser transcript-segment timing.
+
+The **Debug logs and stage timings** panel exposes separate processing-worker
+and Python-transcription logs. It polls while expanded, displays the most recent
+128 KiB as plain text, and pauses the displayed output when you scroll upward
+or uncheck follow. Full sanitized logs can be downloaded. Model request/response
+traces are not exposed here; logs can still contain lecture content and local
+paths, so inspect them before sharing.
+
+Configured API keys (including JSON-escaped and URL-encoded forms) are redacted
+across pipe-read boundaries before browser-visible logs are saved. A lightweight
+worker supervisor owns the log pipes independently of the controller, preserving
+processing and log capture across server restarts. Python runs unbuffered. Old
+raw `worker.log`/`asr.log` files are never served; new captures use
+`worker-debug.log` and `transcription/asr-debug.log`. This is credential filtering,
+not a guarantee that arbitrary secrets printed by third-party code are removed.
+
+Stage timings include model loading, speech detection, recognition, punctuation,
+and saving/finalization. Completed timing values appear in debug details; reused
+transcription results label their original model timings as historical. Existing
+transcription checkpoints remain reusable without rerunning ASR just to obtain
+telemetry. Instrumentation observes existing inference calls without changing
+their audio inputs, segmentation, text, or timestamp processing.
+
+The capture uses [Tokio subprocess pipes](https://docs.rs/tokio/latest/tokio/process/struct.Command.html)
+and [strip-ansi-escapes](https://docs.rs/strip-ansi-escapes/latest/strip_ansi_escapes/fn.strip.html)
+for readable terminal output, rather than treating terminal text as executable HTML.
 
 Implementation references: [FunASR CPU/SenseVoice usage](https://github.com/modelscope/FunASR)
 and [ZIP writer](https://docs.rs/zip/latest/zip/write/struct.ZipWriter.html).

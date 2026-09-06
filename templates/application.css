@@ -47,5 +47,9 @@ progress { width: 100%; height: 8px; accent-color: var(--accent); display: block
 .usage-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; border-top: 1px solid var(--line); margin-top: 24px; padding-top: 24px; }
 .usage-grid strong { display: block; font-size: 20px; font-weight: 650; margin-top: 5px; overflow-wrap: anywhere; }
 #import-status { font-size: 13px; margin-left: 15px; color: var(--accent); }
+.debug-toolbar { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-top: 16px; }
+.debug-toolbar label { margin: 0; }
+#debug-output { height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 ui-monospace, monospace; color: #e5e2ee; background: #252333; padding: 14px; border-radius: 8px; }
+#debug-panel { border-top: 1px solid var(--line); padding-top: 16px; }
 @media(max-width: 900px) { body { grid-template-columns: 200px minmax(0,1fr); } main { padding: 25px; } .upload-grid, .provider-grid, .preview-grid { grid-template-columns: 1fr; gap: 0; } header > .muted { display: none; } }
 @media(max-width: 620px) { body { display: block; } .library { height: auto; position: static; padding: 18px; } .library .muted, .local-badge { display: none; } .library > button { margin-top: 15px; } nav { max-height: 140px; margin-top: 10px; } main { padding: 22px 16px; } header { margin-bottom: 24px; } .card { padding: 20px; } .usage-grid { grid-template-columns: 1fr 1fr; } }

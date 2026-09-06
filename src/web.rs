@@ -327,9 +327,15 @@ async fn job_status(
         }
         .into();
         status.elapsed_ms = outcome.as_ref().map_or_else(
-            || run.elapsed_before_ms + now_ms().saturating_sub(run.started_ms),
-            |o| o.elapsed_ms,
-        );
+            || {
+                if running {
+                    Ok(run.elapsed_before_ms + now_ms().saturating_sub(run.started_ms))
+                } else {
+                    run.checkpointed_elapsed(&directory)
+                }
+            },
+            |o| Ok(o.elapsed_ms),
+        )?;
         status.error = outcome.and_then(|o| o.error);
         if status.state == "interrupted" {
             status.error = Some(
@@ -422,6 +428,8 @@ async fn start(
                 run.directory(&directory)
                     .join(format!("outcome-{}.json", run.started_ms)),
             )?;
+        } else {
+            run.elapsed_before_ms = run.checkpointed_elapsed(&directory)?;
         }
         run.settings = request.settings;
         run

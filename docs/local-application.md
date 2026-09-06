@@ -85,6 +85,9 @@ The job owns its worker independently of the browser. A server restart also
 leaves an existing worker running; an OS file lock prevents starting a duplicate.
 A worker that exits without a recorded outcome is shown as interrupted, never
 assumed to have completed. Restart the server against the same data directory.
+Worker elapsed time is checkpointed once per second. After a hard interruption,
+the UI shows the last recorded lower bound rather than counting time spent
+offline; a subsequent resume carries that recorded work time forward.
 
 Scheduling changes reuse the same validated checkpoints. Changes to provider,
 model, or request options require confirmation and create a new run revision.
@@ -137,6 +140,31 @@ a whole-lecture speed estimate.
 
 `--untimed` tests plain-text import through the complete analysis/report/export
 workflow and verifies that no zero-valued timestamps or audio links are invented.
+
+The final MP4 check is retained under `run/application-video-JMA7Kd/verified/`.
+A 60-second speech excerpt produced 31 source segments and 318 timed tokens;
+CPU transcription including model loading took 33.3 seconds in that run. The
+test stopped during transcription, verified that its result was saved before
+pausing, resumed without retranscribing, and completed both passage-preparation
+modes while preserving the first report and reusing restoration. Model analysis
+in these application tests uses a deterministic mock: this verifies integration,
+not the semantic quality of a fresh real-provider run.
+
+The completed timed-input/settings-revision verification is in
+`run/application-reprocessing-final-20260906/`; the untimed path is in
+`run/application-untimed-verification-20260906/`. To repeat browser checks against
+one of those completed verifier workspaces:
+
+```sh
+uv run scripts/verify_application_browser.py run/application-untimed-verification-20260906
+# If needed, pass --chromium /path/to/an/existing/chromium/executable.
+```
+
+The browser check requires Playwright's Chromium (or the explicit executable),
+imports one additional small test lecture into the specified workspace, and
+saves desktop/mobile screenshots there. It checks report/slide loading, ZIP
+download, reload/reconnection, source-mode controls, and untimed upload without
+contacting a model provider.
 
 HTTP implementation references: [Axum multipart uploads](https://docs.rs/axum/latest/axum/extract/struct.Multipart.html)
 and [Tower HTTP file serving](https://docs.rs/tower-http/latest/tower_http/services/struct.ServeDir.html).

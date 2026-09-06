@@ -63,7 +63,7 @@ function render(status) {
   $("export-report").textContent = job.recording && job.preview.duration_ms !== null ? "下载分享包（含录音）" : "下载分享包";
   const stateLabels = { running: "正在处理", stopping: "正在完成当前任务…", paused: "已暂停，可继续", failed: "处理失败，检查后可恢复", interrupted: "运行中断，可恢复", complete: "处理完成" };
   $("run-state").textContent = stateLabels[state] || "准备就绪";
-  $("elapsed").textContent = `已处理 ${duration(status.elapsed_ms)}`;
+  $("elapsed").textContent = `已处理 ${state === "interrupted" ? "至少 " : ""}${duration(status.elapsed_ms)}`;
   $("run-description").textContent = state === "stopping" ? "不再启动新任务。当前本地转写或模型窗口/批次会完成并保存结果，可能还需要一段时间。" : "关闭或刷新这个页面不会停止后端处理。恢复前需要重新输入 API key。";
   $("stage-progress").replaceChildren();
   const labels = { transcription: "本地 CPU 转写", restoration: "恢复可读转写", retrieval: "建立幻灯片检索", passages: "语义分段与幻灯片对齐", comparisons: "重要性与新颖度比较", rendering: "生成阅读报告" };
@@ -85,11 +85,12 @@ function render(status) {
   $("run-error").textContent = [status.error, status.usage_error].filter(Boolean).join("\n");
 }
 async function poll() {
+  clearTimeout(pollingTimer);
   const id = currentId;
   if (!id) return;
   try { const status = await api(`/api/jobs/${id}`); if (id === currentId) render(status); }
   catch (error) { if (id === currentId) notice(`无法连接工作台：${error.message}。页面会继续尝试连接。`); }
-  if (id === currentId) pollingTimer = setTimeout(poll, 1000);
+  if (id === currentId) { clearTimeout(pollingTimer); pollingTimer = setTimeout(poll, 1000); }
 }
 $("new-lecture").addEventListener("click", () => {
   currentId = null; clearTimeout(pollingTimer); history.replaceState(null, "", "/");
@@ -115,13 +116,14 @@ $("import-form").addEventListener("submit", async (event) => {
 });
 $("start-form").addEventListener("submit", async (event) => {
   event.preventDefault(); notice(""); $("start-button").disabled = true;
+  const id = currentId;
   try {
     const request = {
       settings: { base_url: $("base-url").value.trim(), model: $("model").value.trim(), extra_body: $("extra-body").value.trim() ? JSON.parse($("extra-body").value) : null,
         max_concurrency: Number($("concurrency").value), request_interval_ms: Number($("spacing").value), adaptive: $("adaptive").checked, boundary_passages: $("boundaries").checked },
       api_key: $("api-key").value, confirm_reprocessing: false,
     };
-    const send = () => api(`/api/jobs/${currentId}/start`, { method: "POST", body: JSON.stringify(request) });
+    const send = () => api(`/api/jobs/${id}/start`, { method: "POST", body: JSON.stringify(request) });
     try { await send(); }
     catch (error) {
       if (error.status !== 409 || !error.message.includes("Confirm to continue") || !window.confirm(error.message)) throw error;

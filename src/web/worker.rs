@@ -2,7 +2,7 @@ use std::{error::Error, ffi::OsStr, path::Path, time::Instant};
 
 use beyond_slides::{ComparativeRankingError, LectureAnalysisError, RestorationSessionError};
 
-use super::jobs::{Outcome, OutcomeStatus, now_ms, read_job, worker_lock};
+use super::jobs::{ElapsedCheckpoint, Outcome, OutcomeStatus, now_ms, read_job, worker_lock};
 use crate::run_support::write_json_atomically;
 
 pub(crate) async fn run(directory: &OsStr) -> Result<(), Box<dyn Error>> {
@@ -17,6 +17,26 @@ pub(crate) async fn run(directory: &OsStr) -> Result<(), Box<dyn Error>> {
         .clone();
     let run_directory = run.directory(directory);
     let started = Instant::now();
+    let elapsed_path = run_directory.join("control/elapsed.json");
+    let elapsed_before_ms = run.elapsed_before_ms;
+    let started_ms = run.started_ms;
+    let heartbeat = tokio::spawn(async move {
+        loop {
+            if let Err(error) = write_json_atomically(
+                &elapsed_path,
+                &ElapsedCheckpoint {
+                    started_ms,
+                    elapsed_ms: elapsed_before_ms
+                        .saturating_add(started.elapsed().as_millis() as u64),
+                },
+                "worker elapsed checkpoint",
+            ) {
+                eprintln!("Could not checkpoint worker elapsed time: {error}");
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    });
     let result = async {
         super::transcription::prepare(directory, &run_directory, &mut job).await?;
         let recording = job
@@ -36,6 +56,7 @@ pub(crate) async fn run(directory: &OsStr) -> Result<(), Box<dyn Error>> {
         .await
     }
     .await;
+    heartbeat.abort();
     let status = match &result {
         Ok(()) => OutcomeStatus::Complete,
         Err(error) if is_stopped(error.as_ref()) => OutcomeStatus::Paused,

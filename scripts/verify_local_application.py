@@ -37,6 +37,8 @@ class Model(BaseHTTPRequestHandler):
             answer = {"windows": [dict(window_index=w["window_index"], boundaries=[dict(after_atom=i, strength="preferred_break") for i in w["owned_boundary_after_atom_ids"]]) for w in task["windows"]]}
         elif "comparisons" in task:
             answer = {"comparisons": [dict(comparison_id=c["comparison_id"], most="A", least=list(c["candidates"])[-1]) for c in task["comparisons"]]}
+        elif "owned_text" in task:
+            answer = {"passages": [dict(text=task["owned_text"], connection_strength=0, related_slides=[])]}
         else:
             raise AssertionError(f"Unexpected task keys: {list(task)}")
         payload = json.dumps({"id": "local-test", "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": json.dumps(answer, ensure_ascii=False)}}], "usage": {"prompt_tokens": 100, "completion_tokens": 50}}).encode()
@@ -117,6 +119,16 @@ def main():
         response = client.post(f"/api/jobs/{job_id}/start", json=payload)
         response.raise_for_status()
         assert client.post(f"/api/jobs/{job_id}/start", json=payload).status_code == 409
+        if args.recording:
+            # Stop inside the indivisible ASR call: finish and checkpoint it,
+            # but do not admit the first model conversation.
+            phase = args.output / job_id / "run-0001/control/asr-progress.json"
+            wait(lambda s: phase.is_file())
+            client.post(f"/api/jobs/{job_id}/stop").raise_for_status()
+            wait(lambda s: s["state"] == "paused")
+            assert Model.calls == 0
+            assert (args.output / job_id / "transcription/checkpoint.json").is_file()
+            client.post(f"/api/jobs/{job_id}/start", json=payload).raise_for_status()
         wait(lambda s: s["usage"]["active_requests"] > 0)
         client.post(f"/api/jobs/{job_id}/stop").raise_for_status()
         paused = wait(lambda s: s["state"] == "paused")
@@ -166,7 +178,20 @@ def main():
         payload["settings"]["boundary_passages"] = False
         changed = client.post(f"/api/jobs/{job_id}/start", json=payload)
         assert changed.status_code == 409 and "keep restoration" in changed.json()["error"]
+        old_report = args.output / job_id / "run-0001/analysis/report.html"
+        old_report_bytes = old_report.read_bytes()
+        restoration_before = {p.name: p.read_bytes() for p in (args.output / job_id / "run-0001/analysis/restoration").glob("window-*.json")}
+        payload["confirm_reprocessing"] = True
+        client.post(f"/api/jobs/{job_id}/start", json=payload).raise_for_status()
+        revised = wait(lambda s: s["state"] == "complete" and len(s["job"]["runs"]) == 2)
+        for filename, content in restoration_before.items():
+            assert (args.output / job_id / "run-0002/analysis/restoration" / filename).read_bytes() == content
+        assert old_report.read_bytes() == old_report_bytes
+        if args.recording:
+            assert asr_checkpoint.read_bytes() == asr_before
         summary = {"job_id": job_id, "model_calls": Model.calls, "status": done, "verified": ["import", "preview", "duplicate-start rejection", "graceful stop", "checkpoint resume", "controller restart while worker runs", "token totals", "report and ranged media", "shareable ZIP excludes private run files", "cross-origin rejection", "settings-change confirmation", "key absent from metadata"]}
+        summary["revision_status"] = revised
+        summary["verified"].append("confirmed reprocessing reuses restoration and preserves old report")
         if args.recording:
             summary["verified"].append("real CPU ASR and transcription checkpoint reuse")
         (args.output / "verification.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2))

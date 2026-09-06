@@ -102,6 +102,26 @@ impl Run {
     pub fn directory(&self, job: &Path) -> PathBuf {
         job.join(format!("run-{:04}", self.number))
     }
+
+    /// A lower bound after a hard interruption, never time spent offline.
+    pub fn checkpointed_elapsed(&self, job: &Path) -> Result<u64, io::Error> {
+        let path = self.directory(job).join("control/elapsed.json");
+        if !path.exists() {
+            return Ok(self.elapsed_before_ms);
+        }
+        let checkpoint: ElapsedCheckpoint = read_json(&path, "worker elapsed checkpoint")?;
+        Ok(if checkpoint.started_ms == self.started_ms {
+            checkpoint.elapsed_ms.max(self.elapsed_before_ms)
+        } else {
+            self.elapsed_before_ms
+        })
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub(super) struct ElapsedCheckpoint {
+    pub started_ms: u64,
+    pub elapsed_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -332,6 +352,47 @@ mod tests {
         assert!(is_worker_running(directory.path())?);
         drop(worker);
         assert!(!is_worker_running(directory.path())?);
+        Ok(())
+    }
+
+    #[test]
+    fn interrupted_elapsed_uses_only_the_current_attempt_checkpoint() -> Result<(), io::Error> {
+        let directory = tempfile::tempdir()?;
+        let run = Run {
+            number: 1,
+            settings: Settings {
+                base_url: "http://localhost/v1".into(),
+                model: "test".into(),
+                extra_body: None,
+                max_concurrency: 2,
+                request_interval_ms: 0,
+                adaptive: false,
+                boundary_passages: false,
+            },
+            started_ms: 1000,
+            elapsed_before_ms: 500,
+        };
+        assert_eq!(run.checkpointed_elapsed(directory.path())?, 500);
+        let path = run.directory(directory.path()).join("control/elapsed.json");
+        fs::create_dir_all(path.parent().unwrap())?;
+        write_json_atomically(
+            &path,
+            &ElapsedCheckpoint {
+                started_ms: 1000,
+                elapsed_ms: 1750,
+            },
+            "test",
+        )?;
+        assert_eq!(run.checkpointed_elapsed(directory.path())?, 1750);
+        write_json_atomically(
+            &path,
+            &ElapsedCheckpoint {
+                started_ms: 999,
+                elapsed_ms: 8000,
+            },
+            "test",
+        )?;
+        assert_eq!(run.checkpointed_elapsed(directory.path())?, 500);
         Ok(())
     }
 }

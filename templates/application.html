@@ -37,6 +37,11 @@
             <label>讲次<select id="rain-lecture" disabled><option value="">先选择课程</option></select></label>
           </div>
           <p id="rain-status" class="muted" role="status"></p>
+          <div id="rain-download" class="import-progress" hidden>
+            <div class="stage-label"><span id="rain-download-phase">正在准备录像下载…</span><span id="rain-download-percent"></span></div>
+            <progress id="rain-download-bar" aria-label="雨课堂录像下载进度"></progress>
+            <small id="rain-download-bytes"></small>
+          </div>
         </section>
         <div class="upload-grid">
           <label class="upload">① 幻灯片 PDF<input name="slides" type="file" accept=".pdf" required><small>提取每页文字，保留原始幻灯片展示。</small></label>

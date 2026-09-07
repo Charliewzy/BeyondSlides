@@ -123,6 +123,10 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
             get(rain_classroom_lectures),
         )
         .route(
+            "/api/rain-classroom/imports/{import_id}",
+            get(rain_classroom_download_progress),
+        )
+        .route(
             "/example/report.html",
             get(|| async { Html(EXAMPLE_REPORT) }),
         )
@@ -337,6 +341,21 @@ async fn rain_classroom_lectures(
     ))
 }
 
+async fn rain_classroom_download_progress(
+    State(app): State<App>,
+    Path(import_id): Path<String>,
+) -> Result<Json<rain_classroom::DownloadProgress>, AppError> {
+    app.rain_classroom
+        .download_progress(&import_id)
+        .map(Json)
+        .ok_or_else(|| {
+            AppError(
+                StatusCode::NOT_FOUND,
+                "Rain Classroom import not found".into(),
+            )
+        })
+}
+
 fn log_path(app: &App, id: &str, kind: &str) -> Result<PathBuf, AppError> {
     let directory = job_path(&app.root, id)?;
     let job = read_job(&directory)?;
@@ -389,6 +408,7 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
     let mut extension = String::new();
     let mut recording = None;
     let mut rain_selection = None;
+    let mut rain_import_id = None;
     while let Some(mut field) = multipart.next_field().await.map_err(AppError::bad)? {
         let name = field.name().unwrap_or("").to_owned();
         if !fields.insert(name.clone()) {
@@ -423,6 +443,16 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
                 serde_json::from_slice::<rain_classroom::LectureSelection>(&bytes)
                     .map_err(AppError::bad)?,
             );
+            continue;
+        }
+        if name == "rain_import_id" {
+            let bytes = field.bytes().await.map_err(AppError::bad)?;
+            if bytes.len() > 64 {
+                return Err(AppError::bad(
+                    "Invalid Rain Classroom import progress identifier",
+                ));
+            }
+            rain_import_id = Some(String::from_utf8(bytes.to_vec()).map_err(AppError::bad)?);
             continue;
         }
         let ext = FsPath::new(field.file_name().unwrap_or(""))
@@ -467,6 +497,11 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
             "Choose either a Rain Classroom lecture or local transcript/recording files",
         ));
     }
+    if rain_selection.is_some() != rain_import_id.is_some() {
+        return Err(AppError::bad(
+            "Rain Classroom imports require a progress identifier",
+        ));
+    }
     if !fields.contains("slides")
         || (!fields.contains("transcript") && recording.is_none() && rain_selection.is_none())
     {
@@ -474,9 +509,13 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
             "Upload slides and provide a transcript, a recording, or a Rain Classroom lecture",
         ));
     }
-    if let Some(selection) = rain_selection {
+    if let (Some(selection), Some(import_id)) = (rain_selection, rain_import_id) {
         app.rain_classroom
-            .acquire_recording(&selection, &directory.path().join("recording.mp4"))
+            .acquire_recording(
+                &selection,
+                &directory.path().join("recording.mp4"),
+                &import_id,
+            )
             .await
             .map_err(AppError::bad)?;
         recording = Some("recording.mp4".into());

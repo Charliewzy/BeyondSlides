@@ -37,6 +37,8 @@ and the existing dense-retrieval model may download on first use.
    uploaded manually. Provider-declared replay entries are downloaded and
    assembled into one `recording.mp4` before the unchanged transcription
    pipeline sees them; replay segmentation is not part of the UI or job model.
+   During the import, the page reports downloaded bytes and uses the media
+   server's content lengths for a percentage bar when they are available.
 2. Inspect the text preview and extraction warnings. Upload/preview does not
    contact the analysis provider.
    “建议检查的页面” lists flagged pages in a horizontal thumbnail strip, with

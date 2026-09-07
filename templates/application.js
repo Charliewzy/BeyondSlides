@@ -9,6 +9,8 @@ let reviewLoading = false;
 let reviewLoaded = false;
 let rainLoginTimer;
 let rainSessionChecked = false;
+let rainDownloadTimer;
+let activeRainImportId;
 
 function showReviewPage(page, source) {
   $("review-page-title").textContent = `第 ${page.page} 页`;
@@ -60,6 +62,50 @@ async function api(path, options = {}) {
 }
 function notice(message) { $("notice").textContent = message; $("notice").hidden = !message; }
 function duration(ms) { const seconds = Math.floor(ms / 1000); return `${Math.floor(seconds / 60)}分${String(seconds % 60).padStart(2, "0")}秒`; }
+function fileSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KiB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
+  return `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
+}
+function renderRainDownloadProgress(observed) {
+  const container = $("rain-download"), progress = $("rain-download-bar");
+  container.hidden = false;
+  if (observed.phase === "assembling") {
+    $("rain-download-phase").textContent = "正在整理录像…";
+    $("rain-download-percent").textContent = "下载完成";
+    progress.max = 1; progress.value = 1;
+  } else if (observed.phase === "downloading") {
+    $("rain-download-phase").textContent = "正在下载雨课堂录像…";
+    if (observed.total_bytes > 0) {
+      const percent = Math.min(100, Math.floor(observed.downloaded_bytes / observed.total_bytes * 100));
+      $("rain-download-percent").textContent = `${percent}%`;
+      progress.max = observed.total_bytes; progress.value = observed.downloaded_bytes;
+    } else {
+      $("rain-download-percent").textContent = "";
+      progress.removeAttribute("value");
+    }
+  } else {
+    $("rain-download-phase").textContent = "正在准备录像下载…";
+    $("rain-download-percent").textContent = "";
+    progress.removeAttribute("value");
+  }
+  $("rain-download-bytes").textContent = observed.total_bytes > 0
+    ? `${fileSize(observed.downloaded_bytes)} / ${fileSize(observed.total_bytes)}`
+    : observed.downloaded_bytes > 0 ? `已下载 ${fileSize(observed.downloaded_bytes)}` : "正在获取录像信息…";
+}
+async function pollRainDownload(importId) {
+  if (activeRainImportId !== importId) return;
+  try {
+    renderRainDownloadProgress(await api(`/api/rain-classroom/imports/${importId}`));
+  } catch (error) {
+    if (error.status !== 404) notice(error.message);
+  }
+  if (activeRainImportId === importId) rainDownloadTimer = setTimeout(() => pollRainDownload(importId), 500);
+}
+function stopRainDownloadProgress() {
+  activeRainImportId = null; clearTimeout(rainDownloadTimer); $("rain-download").hidden = true;
+}
 // Old jobs keep their original metadata; translate legacy diagnostics only for display.
 function importWarnings(warnings) {
   const sparse = [], messages = [];
@@ -350,11 +396,15 @@ $("import-form").addEventListener("submit", async (event) => {
       const classroomId = Number($("rain-course").value), lessonId = $("rain-lecture").value;
       if (!classroomId || !lessonId) throw new Error("请选择要导入的雨课堂讲次");
       form.set("rain_classroom", JSON.stringify({ classroom_id: classroomId, lesson_id: lessonId }));
+      activeRainImportId = crypto.randomUUID();
+      form.set("rain_import_id", activeRainImportId);
+      renderRainDownloadProgress({ phase: "preparing", downloaded_bytes: 0, total_bytes: null });
+      pollRainDownload(activeRainImportId);
     }
     const job = await api("/api/jobs", { method: "POST", body: form });
     await refreshLibrary(); await select(job.id); event.target.reset(); $("source-mode").dispatchEvent(new Event("change"));
   } catch (error) { notice(error.message); }
-  finally { $("import-button").disabled = false; $("import-status").textContent = ""; }
+  finally { stopRainDownloadProgress(); $("import-button").disabled = false; $("import-status").textContent = ""; }
 });
 $("start-form").addEventListener("submit", async (event) => {
   event.preventDefault(); notice(""); $("start-button").disabled = true;

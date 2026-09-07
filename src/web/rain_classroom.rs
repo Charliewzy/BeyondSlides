@@ -1,6 +1,8 @@
 use std::{
+    collections::HashMap,
     io,
     path::{Path, PathBuf},
+    sync::Mutex as StdMutex,
     time::Duration,
 };
 
@@ -38,6 +40,29 @@ pub(super) struct Lecture {
 pub(super) struct RainClassroom {
     profile: PathBuf,
     session: Mutex<Option<BrowserSession>>,
+    downloads: StdMutex<HashMap<String, DownloadProgress>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct DownloadProgress {
+    phase: &'static str,
+    downloaded_bytes: u64,
+    total_bytes: Option<u64>,
+}
+
+struct DownloadRegistration<'a> {
+    rain_classroom: &'a RainClassroom,
+    import_id: &'a str,
+}
+
+impl Drop for DownloadRegistration<'_> {
+    fn drop(&mut self) {
+        self.rain_classroom
+            .downloads
+            .lock()
+            .expect("Rain Classroom download progress lock is not poisoned")
+            .remove(self.import_id);
+    }
 }
 
 struct BrowserSession {
@@ -52,7 +77,16 @@ impl RainClassroom {
         Self {
             profile: application_root.join(".rain-classroom-browser"),
             session: Mutex::new(None),
+            downloads: StdMutex::new(HashMap::new()),
         }
+    }
+
+    pub fn download_progress(&self, import_id: &str) -> Option<DownloadProgress> {
+        self.downloads
+            .lock()
+            .expect("Rain Classroom download progress lock is not poisoned")
+            .get(import_id)
+            .cloned()
     }
 
     /// Opens a dedicated headless browser. Its profile is retained locally so
@@ -195,7 +229,9 @@ impl RainClassroom {
         &self,
         selection: &LectureSelection,
         destination: &Path,
+        import_id: &str,
     ) -> Result<u64, String> {
+        let registration = self.register_download(import_id)?;
         if selection.lesson_id.is_empty()
             || !selection
                 .lesson_id
@@ -251,14 +287,33 @@ impl RainClassroom {
             .timeout(Duration::from_secs(60 * 60))
             .build()
             .map_err(provider_error)?;
+        let mut responses = Vec::with_capacity(entries.len());
+        let mut total_bytes = Some(0_u64);
         for (index, entry) in entries.iter().enumerate() {
+            let response = request_download(&client, &entry.url).await?;
+            total_bytes = total_bytes
+                .zip(response.content_length())
+                .and_then(|(total, length)| total.checked_add(length));
+            responses.push((index, response));
+        }
+        self.update_download(import_id, |progress| {
+            progress.phase = "downloading";
+            progress.total_bytes = total_bytes;
+        });
+        for (index, response) in responses {
             download(
-                &client,
-                &entry.url,
+                response,
                 &parts.join(format!("part-{index:04}.mp4")),
+                |bytes| {
+                    self.update_download(import_id, |progress| {
+                        progress.downloaded_bytes = progress.downloaded_bytes.saturating_add(bytes);
+                    });
+                },
             )
             .await?;
         }
+
+        self.update_download(import_id, |progress| progress.phase = "assembling");
 
         if entries.len() == 1 {
             tokio::fs::rename(parts.join("part-0000.mp4"), destination)
@@ -306,7 +361,52 @@ impl RainClassroom {
                 .map_err(io_error)?;
         }
         tokio::fs::remove_dir_all(&parts).await.map_err(io_error)?;
+        drop(registration);
         Ok(lesson_duration)
+    }
+
+    fn register_download<'a>(
+        &'a self,
+        import_id: &'a str,
+    ) -> Result<DownloadRegistration<'a>, String> {
+        if import_id.is_empty()
+            || import_id.len() > 64
+            || !import_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err("Invalid Rain Classroom import progress identifier".into());
+        }
+        let mut downloads = self
+            .downloads
+            .lock()
+            .expect("Rain Classroom download progress lock is not poisoned");
+        if downloads.contains_key(import_id) {
+            return Err("This Rain Classroom import is already in progress".into());
+        }
+        downloads.insert(
+            import_id.into(),
+            DownloadProgress {
+                phase: "preparing",
+                downloaded_bytes: 0,
+                total_bytes: None,
+            },
+        );
+        Ok(DownloadRegistration {
+            rain_classroom: self,
+            import_id,
+        })
+    }
+
+    fn update_download(&self, import_id: &str, update: impl FnOnce(&mut DownloadProgress)) {
+        if let Some(progress) = self
+            .downloads
+            .lock()
+            .expect("Rain Classroom download progress lock is not poisoned")
+            .get_mut(import_id)
+        {
+            update(progress);
+        }
     }
 
     async fn evaluate<T: DeserializeOwned>(&self, script: &str) -> Result<T, String> {
@@ -340,26 +440,35 @@ impl RainClassroom {
     }
 }
 
-async fn download(client: &reqwest::Client, url: &str, destination: &Path) -> Result<(), String> {
+async fn request_download(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<reqwest::Response, String> {
     let url = url::Url::parse(url).map_err(provider_error)?;
     if url.scheme() != "https" {
         return Err("Rain Classroom returned a recording URL that is not HTTPS".into());
     }
-    let response = client
+    client
         .get(url)
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
-        .map_err(|error| format!("Could not download the Rain Classroom recording: {error}"))?;
+        .map_err(|error| format!("Could not download the Rain Classroom recording: {error}"))
+}
+
+async fn download(
+    response: reqwest::Response,
+    destination: &Path,
+    mut report_bytes: impl FnMut(u64),
+) -> Result<(), String> {
     let mut output = tokio::fs::File::create(destination)
         .await
         .map_err(io_error)?;
     let mut bytes = response.bytes_stream();
     while let Some(chunk) = bytes.next().await {
-        output
-            .write_all(&chunk.map_err(provider_error)?)
-            .await
-            .map_err(io_error)?;
+        let chunk = chunk.map_err(provider_error)?;
+        output.write_all(&chunk).await.map_err(io_error)?;
+        report_bytes(chunk.len() as u64);
     }
     output.flush().await.map_err(io_error)
 }
@@ -452,6 +561,58 @@ struct ReplayEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_progress_exists_only_for_the_registered_import() {
+        let root = tempfile::tempdir().unwrap();
+        let rain_classroom = RainClassroom::new(root.path());
+
+        let registration = rain_classroom
+            .register_download("browser-import-1")
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(
+                rain_classroom
+                    .download_progress("browser-import-1")
+                    .unwrap()
+            )
+            .unwrap(),
+            serde_json::json!({
+                "phase": "preparing",
+                "downloaded_bytes": 0,
+                "total_bytes": null
+            })
+        );
+
+        rain_classroom.update_download("browser-import-1", |progress| {
+            progress.phase = "downloading";
+            progress.downloaded_bytes = 125;
+            progress.total_bytes = Some(500);
+        });
+        let progress = rain_classroom
+            .download_progress("browser-import-1")
+            .unwrap();
+        assert_eq!(progress.phase, "downloading");
+        assert_eq!(progress.downloaded_bytes, 125);
+        assert_eq!(progress.total_bytes, Some(500));
+
+        drop(registration);
+        assert!(
+            rain_classroom
+                .download_progress("browser-import-1")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn download_progress_rejects_unsafe_or_duplicate_identifiers() {
+        let root = tempfile::tempdir().unwrap();
+        let rain_classroom = RainClassroom::new(root.path());
+        assert!(rain_classroom.register_download("../escape").is_err());
+
+        let _registration = rain_classroom.register_download("same-import").unwrap();
+        assert!(rain_classroom.register_download("same-import").is_err());
+    }
 
     #[test]
     fn provider_replay_entries_are_private_implementation_details() {

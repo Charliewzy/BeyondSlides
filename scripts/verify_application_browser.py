@@ -193,6 +193,13 @@ def main():
             page.locator("#rain-course").select_option("3195306")
             page.locator("#rain-lecture").select_option("1765600343592779520")
             assert page.locator('[name="name"]').input_value() == "⑥并发编程"
+            page.evaluate("renderRainDownloadProgress({phase: 'downloading', downloaded_bytes: 26214400, total_bytes: 104857600})")
+            assert page.locator("#rain-download").is_visible()
+            assert page.locator("#rain-download-percent").inner_text() == "25%"
+            assert page.locator("#rain-download-bytes").inner_text() == "25.0 MiB / 100.0 MiB"
+            assert page.locator("#rain-download-bar").evaluate("progress => progress.value / progress.max") == 0.25
+            page.evaluate("stopRainDownloadProgress()")
+            assert page.locator("#rain-download").is_hidden()
             page.unroute("**/api/rain-classroom/connect")
             page.unroute("**/api/rain-classroom/courses")
             page.unroute("**/api/rain-classroom/courses/3195306/lectures")

@@ -14,7 +14,9 @@ body { margin: 0; display: grid; grid-template-columns: 260px minmax(0,1fr); min
 .review-card small { white-space: pre-line; }
 .review-arrows { display: flex; gap: 8px; }
 #review-dialog { width: min(1100px, 94vw); max-height: 90vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 14px; padding: 24px; color: inherit; }
-#review-dialog::backdrop { background: #18142699; }
+#review-dialog::backdrop, #rain-login-dialog::backdrop { background: #18142699; }
+#rain-login-dialog { width: min(880px, 94vw); max-height: 94vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 14px; padding: 24px; color: inherit; }
+#rain-login-view { display: block; width: min(800px, 100%); height: auto; margin: 18px auto 12px; border: 1px solid var(--line); border-radius: 10px; background: #f7f7fb; }
 .review-detail { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 24px; align-items: start; }
 .review-detail img { width: 100%; max-height: 65vh; object-fit: contain; background: #f7f7fb; border: 1px solid var(--line); }
 #review-page-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; }
@@ -45,6 +47,7 @@ input[type=file] { font-size: 12px; }
 .provider-import h3 { color: inherit; margin-top: 0; }
 .provider-import .actions { margin: 0 0 18px; }
 .provider-import .provider-grid label { margin-bottom: 0; }
+.session-status { align-self: center; color: #28765f; font-size: 13px; font-weight: 700; }
 button, .button { border: 1px solid #dcd8e6; border-radius: 8px; padding: 11px 17px; font: inherit; font-size: 13px; font-weight: 600; background: white; cursor: pointer; text-decoration: none; text-align: center; }
 button:hover, .button:hover { filter: brightness(.97); }
 button:disabled { opacity: .55; cursor: wait; }

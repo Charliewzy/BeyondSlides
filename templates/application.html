@@ -27,10 +27,10 @@
         <label>转写来源<select id="source-mode"><option value="transcript">上传已有转写</option><option value="recording">从录音 / 视频本地转写（CPU）</option><option value="rain">从雨课堂导入录像并转写</option></select></label>
         <section id="rain-classroom-import" class="provider-import" hidden>
           <h3>雨课堂录像</h3>
-          <p class="muted">BeyondSlides 会打开一个独立的浏览器窗口。扫码登录后，在这里选择一门课程和一堂课；录像会作为一份完整录音导入。</p>
+          <p class="muted">在 BeyondSlides 中扫码登录后，选择一门课程和一堂课；录像会作为一份完整录音导入。</p>
           <div class="actions">
-            <button type="button" id="rain-connect">打开雨课堂登录</button>
-            <button type="button" id="rain-load-courses">登录完成，加载课程</button>
+            <span id="rain-authenticated" class="session-status" hidden>● 已登录雨课堂</span>
+            <button type="button" id="rain-connect">扫码登录雨课堂</button>
           </div>
           <div class="provider-grid">
             <label>课程<select id="rain-course" disabled><option value="">先加载课程</option></select></label>
@@ -115,6 +115,12 @@
     <div class="section-heading"><h2 id="review-page-title"></h2><button type="button" id="review-close" autofocus>关闭</button></div>
     <p id="review-page-warning" class="warning"></p>
     <div class="review-detail"><img id="review-page-image" alt=""><div><h3>提取文字</h3><p id="review-page-text"></p></div></div>
+  </dialog>
+  <dialog id="rain-login-dialog" aria-labelledby="rain-login-title">
+    <div class="section-heading"><h2 id="rain-login-title">扫码登录雨课堂</h2><button type="button" id="rain-login-close">关闭</button></div>
+    <p class="muted">使用微信或雨课堂 App 扫描下方二维码，并在手机上确认。BeyondSlides 只在本机保存这个登录会话。</p>
+    <img id="rain-login-view" alt="雨课堂扫码登录页面">
+    <p id="rain-login-status" class="muted" role="status">正在准备登录页面…</p>
   </dialog>
 </body>
 </html>

@@ -188,9 +188,8 @@ def main():
             assert page.locator("#rain-classroom-import").is_visible()
             assert page.locator('[name="transcript"]').is_disabled()
             assert page.locator('[name="recording"]').is_disabled()
-            page.locator("#rain-connect").click()
-            page.wait_for_function("document.getElementById('rain-status').textContent.includes('扫码')")
-            page.locator("#rain-load-courses").click()
+            page.locator("#rain-authenticated").wait_for(state="visible")
+            assert page.locator("#rain-connect").is_hidden()
             page.locator("#rain-course").select_option("3195306")
             page.locator("#rain-lecture").select_option("1765600343592779520")
             assert page.locator('[name="name"]').input_value() == "⑥并发编程"

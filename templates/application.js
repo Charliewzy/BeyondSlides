@@ -7,6 +7,8 @@ let debugLoading = false;
 let reviewJob = null;
 let reviewLoading = false;
 let reviewLoaded = false;
+let rainLoginTimer;
+let rainSessionChecked = false;
 
 function showReviewPage(page, source) {
   $("review-page-title").textContent = `第 ${page.page} 页`;
@@ -261,30 +263,62 @@ $("source-mode").addEventListener("change", () => {
   $("recording-upload-label").hidden = fromRain;
   $("rain-classroom-import").hidden = !fromRain;
   $("recording-label").textContent = fromRecording ? "② 录音 / 视频（必选，将在本机转写）" : "录音 / 视频（可选，用于回放）";
+  if (fromRain && !rainSessionChecked) checkRainSession();
 });
-$("rain-connect").addEventListener("click", async () => {
-  $("rain-connect").disabled = true; $("rain-status").textContent = "正在打开雨课堂…";
+function setRainAuthenticated(authenticated) {
+  $("rain-authenticated").hidden = !authenticated;
+  $("rain-connect").hidden = authenticated;
+}
+function showRainCourses(courses) {
+  const select = $("rain-course"); select.replaceChildren(new Option("请选择课程", ""));
+  for (const course of courses) {
+    const suffix = course.classroom_name && course.classroom_name !== course.course_name ? ` · ${course.classroom_name}` : "";
+    select.add(new Option(`${course.course_name}${suffix}`, String(course.classroom_id)));
+  }
+  select.disabled = false; $("rain-lecture").disabled = true;
+  $("rain-lecture").replaceChildren(new Option("先选择课程", ""));
+  $("rain-status").textContent = courses.length ? "请选择课程。" : "当前账号没有可导入的课程。";
+  setRainAuthenticated(true);
+}
+function refreshRainLoginView() {
+  $("rain-login-view").src = `/api/rain-classroom/login-view?t=${Date.now()}`;
+}
+async function pollRainLogin() {
+  if (!$("rain-login-dialog").open) return;
+  try {
+    const courses = await api("/api/rain-classroom/courses");
+    showRainCourses(courses);
+    $("rain-login-status").textContent = "登录成功。";
+    $("rain-login-dialog").close();
+    return;
+  } catch (_) {
+    $("rain-login-status").textContent = "等待扫码并在手机上确认…";
+    refreshRainLoginView();
+  }
+  rainLoginTimer = setTimeout(pollRainLogin, 1500);
+}
+async function checkRainSession() {
+  rainSessionChecked = true;
+  $("rain-connect").disabled = true; $("rain-status").textContent = "正在检查雨课堂登录状态…";
   try {
     await api("/api/rain-classroom/connect", { method: "POST" });
-    $("rain-status").textContent = "请在新窗口中扫码并确认登录；完成后点击“加载课程”。";
+    showRainCourses(await api("/api/rain-classroom/courses"));
+  } catch (_) {
+    setRainAuthenticated(false);
+    $("rain-status").textContent = "尚未登录，请扫码后继续。";
+  } finally { $("rain-connect").disabled = false; }
+}
+$("rain-connect").addEventListener("click", async () => {
+  $("rain-connect").disabled = true; $("rain-status").textContent = "正在准备雨课堂登录…";
+  try {
+    await api("/api/rain-classroom/connect", { method: "POST" });
+    $("rain-login-status").textContent = "等待扫码并在手机上确认…";
+    refreshRainLoginView(); $("rain-login-dialog").showModal(); pollRainLogin();
   } catch (error) { $("rain-status").textContent = error.message; }
   finally { $("rain-connect").disabled = false; }
 });
-$("rain-load-courses").addEventListener("click", async () => {
-  $("rain-load-courses").disabled = true; $("rain-status").textContent = "正在加载课程…";
-  try {
-    const rainCourses = await api("/api/rain-classroom/courses");
-    const select = $("rain-course"); select.replaceChildren(new Option("请选择课程", ""));
-    for (const course of rainCourses) {
-      const suffix = course.classroom_name && course.classroom_name !== course.course_name ? ` · ${course.classroom_name}` : "";
-      select.add(new Option(`${course.course_name}${suffix}`, String(course.classroom_id)));
-    }
-    select.disabled = false; $("rain-lecture").disabled = true;
-    $("rain-lecture").replaceChildren(new Option("先选择课程", ""));
-    $("rain-status").textContent = rainCourses.length ? "请选择课程。" : "当前账号没有可导入的课程。";
-  } catch (error) { $("rain-status").textContent = `${error.message}。如果尚未登录，请在雨课堂窗口完成扫码后重试。`; }
-  finally { $("rain-load-courses").disabled = false; }
-});
+$("rain-login-close").addEventListener("click", () => $("rain-login-dialog").close());
+$("rain-login-dialog").addEventListener("close", () => clearTimeout(rainLoginTimer));
 $("rain-course").addEventListener("change", async () => {
   const classroomId = $("rain-course").value;
   const select = $("rain-lecture"); select.disabled = true;
@@ -298,7 +332,7 @@ $("rain-course").addEventListener("change", async () => {
       const option = new Option(lecture.title, lecture.lesson_id); option.dataset.title = lecture.title; select.add(option);
     }
     select.disabled = false; $("rain-status").textContent = lectures.length ? "请选择一堂课。" : "这门课程没有可导入的课堂录像。";
-  } catch (error) { select.replaceChildren(new Option("加载失败", "")); $("rain-status").textContent = error.message; }
+  } catch (error) { setRainAuthenticated(false); select.replaceChildren(new Option("加载失败", "")); $("rain-status").textContent = `${error.message}。请重新扫码登录。`; }
 });
 $("rain-lecture").addEventListener("change", () => {
   const title = $("rain-lecture").selectedOptions[0]?.dataset.title;

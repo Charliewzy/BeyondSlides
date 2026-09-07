@@ -4,7 +4,8 @@ use std::{
     time::Duration,
 };
 
-use chromiumoxide::{Browser, Page, browser::BrowserConfig};
+use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
+use chromiumoxide::{Browser, Page, browser::BrowserConfig, page::ScreenshotParams};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{io::AsyncWriteExt, sync::Mutex, task::JoinHandle};
@@ -40,9 +41,10 @@ pub(super) struct RainClassroom {
 }
 
 struct BrowserSession {
-    _browser: Browser,
+    browser: Browser,
     page: Page,
-    _handler: JoinHandle<()>,
+    handler: JoinHandle<()>,
+    authenticated: bool,
 }
 
 impl RainClassroom {
@@ -53,8 +55,8 @@ impl RainClassroom {
         }
     }
 
-    /// Opens a dedicated visible browser. Its profile is retained locally so a
-    /// user normally needs to scan the QR code only once.
+    /// Opens a dedicated headless browser. Its profile is retained locally so
+    /// a user normally needs to scan the QR code only once.
     pub async fn connect(&self) -> Result<(), String> {
         let mut session = self.session.lock().await;
         if let Some(current) = session.as_ref() {
@@ -70,8 +72,7 @@ impl RainClassroom {
                 format!("Could not create the Rain Classroom browser profile: {error}")
             })?;
         let config = BrowserConfig::builder()
-            .with_head()
-            .viewport(None)
+            .new_headless_mode()
             .user_data_dir(&self.profile)
             .request_timeout(Duration::from_secs(45))
             .launch_timeout(Duration::from_secs(30))
@@ -87,11 +88,46 @@ impl RainClassroom {
         });
         let page = browser.new_page(HOME_URL).await.map_err(provider_error)?;
         *session = Some(BrowserSession {
-            _browser: browser,
+            browser,
             page,
-            _handler: handler,
+            handler,
+            authenticated: false,
         });
         Ok(())
+    }
+
+    /// Gives Chromium an opportunity to flush its persistent profile before
+    /// the local controller exits.
+    pub async fn shutdown(&self) {
+        let Some(mut session) = self.session.lock().await.take() else {
+            return;
+        };
+        let closed = tokio::time::timeout(Duration::from_secs(5), session.browser.close()).await;
+        if closed.is_err() || closed.is_ok_and(|result| result.is_err()) {
+            let _ = session.browser.kill().await;
+        } else {
+            let _ = tokio::time::timeout(Duration::from_secs(5), session.browser.wait()).await;
+        }
+        session.handler.abort();
+    }
+
+    pub async fn login_view(&self) -> Result<Vec<u8>, String> {
+        let session = self.session.lock().await;
+        let session = session
+            .as_ref()
+            .ok_or("Start Rain Classroom login before requesting its QR code")?;
+        if session.authenticated {
+            return Err("Rain Classroom is already authenticated".into());
+        }
+        session
+            .page
+            .screenshot(
+                ScreenshotParams::builder()
+                    .format(CaptureScreenshotFormat::Png)
+                    .build(),
+            )
+            .await
+            .map_err(provider_error)
     }
 
     pub async fn courses(&self) -> Result<Vec<Course>, String> {
@@ -101,7 +137,13 @@ impl RainClassroom {
             )
             .await?;
         if response.errcode != 0 {
+            if let Some(session) = self.session.lock().await.as_mut() {
+                session.authenticated = false;
+            }
             return Err(login_error(&response.errmsg));
+        }
+        if let Some(session) = self.session.lock().await.as_mut() {
+            session.authenticated = true;
         }
         let mut courses: Vec<_> = response
             .data

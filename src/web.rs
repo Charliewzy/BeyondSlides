@@ -76,6 +76,7 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
         recognition_estimators: Arc::default(),
         rain_classroom,
     };
+    let rain_classroom = app.rain_classroom.clone();
     let router = Router::new()
         .route(
             "/",
@@ -112,6 +113,10 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
         )
         .route("/api/jobs", get(list_jobs).post(upload))
         .route("/api/rain-classroom/connect", post(connect_rain_classroom))
+        .route(
+            "/api/rain-classroom/login-view",
+            get(rain_classroom_login_view),
+        )
         .route("/api/rain-classroom/courses", get(rain_classroom_courses))
         .route(
             "/api/rain-classroom/courses/{classroom_id}/lectures",
@@ -137,7 +142,13 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
         .layer(middleware::from_fn_with_state(app.clone(), local_only))
         .with_state(app);
     println!("BeyondSlides application: http://127.0.0.1:{port}");
-    axum::serve(listener, router).await?;
+    let result = axum::serve(listener, router)
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await;
+    rain_classroom.shutdown().await;
+    result?;
     Ok(())
 }
 
@@ -303,6 +314,15 @@ async fn rain_classroom_courses(
     Ok(Json(
         app.rain_classroom.courses().await.map_err(AppError::bad)?,
     ))
+}
+
+async fn rain_classroom_login_view(State(app): State<App>) -> Result<Response, AppError> {
+    let image = app
+        .rain_classroom
+        .login_view()
+        .await
+        .map_err(AppError::bad)?;
+    Ok(([(header::CONTENT_TYPE, "image/png")], image).into_response())
 }
 
 async fn rain_classroom_lectures(

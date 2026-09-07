@@ -177,6 +177,26 @@ def main():
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
             page.screenshot(path=str(args.workspace / "browser-mobile.png"), full_page=True)
             page.locator("#new-lecture").click()
+            page.route("**/api/rain-classroom/connect", lambda route: route.fulfill(json={"opened": True}))
+            page.route("**/api/rain-classroom/courses", lambda route: route.fulfill(json=[{
+                "classroom_id": 3195306, "course_name": "程序设计训练", "classroom_name": "Rust 语言",
+            }]))
+            page.route("**/api/rain-classroom/courses/3195306/lectures", lambda route: route.fulfill(json=[{
+                "lesson_id": "1765600343592779520", "title": "⑥并发编程",
+            }]))
+            page.locator("#source-mode").select_option("rain")
+            assert page.locator("#rain-classroom-import").is_visible()
+            assert page.locator('[name="transcript"]').is_disabled()
+            assert page.locator('[name="recording"]').is_disabled()
+            page.locator("#rain-connect").click()
+            page.wait_for_function("document.getElementById('rain-status').textContent.includes('扫码')")
+            page.locator("#rain-load-courses").click()
+            page.locator("#rain-course").select_option("3195306")
+            page.locator("#rain-lecture").select_option("1765600343592779520")
+            assert page.locator('[name="name"]').input_value() == "⑥并发编程"
+            page.unroute("**/api/rain-classroom/connect")
+            page.unroute("**/api/rain-classroom/courses")
+            page.unroute("**/api/rain-classroom/courses/3195306/lectures")
             page.locator("#source-mode").select_option("recording")
             assert page.locator('[name="transcript"]').is_disabled()
             assert page.locator('[name="recording"]').evaluate("input => input.required")

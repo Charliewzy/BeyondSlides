@@ -24,12 +24,25 @@
       <p class="intro">先导入讲义与转写，确认内容，再开始分析。</p>
       <form id="import-form" class="card">
         <label>讲座名称<input name="name" maxlength="100" placeholder="例如：泛型、特型与生命周期"></label>
-        <label>转写来源<select id="source-mode"><option value="transcript">上传已有转写</option><option value="recording">从录音 / 视频本地转写（CPU）</option></select></label>
+        <label>转写来源<select id="source-mode"><option value="transcript">上传已有转写</option><option value="recording">从录音 / 视频本地转写（CPU）</option><option value="rain">从雨课堂导入录像并转写</option></select></label>
+        <section id="rain-classroom-import" class="provider-import" hidden>
+          <h3>雨课堂录像</h3>
+          <p class="muted">BeyondSlides 会打开一个独立的浏览器窗口。扫码登录后，在这里选择一门课程和一堂课；录像会作为一份完整录音导入。</p>
+          <div class="actions">
+            <button type="button" id="rain-connect">打开雨课堂登录</button>
+            <button type="button" id="rain-load-courses">登录完成，加载课程</button>
+          </div>
+          <div class="provider-grid">
+            <label>课程<select id="rain-course" disabled><option value="">先加载课程</option></select></label>
+            <label>讲次<select id="rain-lecture" disabled><option value="">先选择课程</option></select></label>
+          </div>
+          <p id="rain-status" class="muted" role="status"></p>
+        </section>
         <div class="upload-grid">
           <label class="upload">① 幻灯片 PDF<input name="slides" type="file" accept=".pdf" required><small>提取每页文字，保留原始幻灯片展示。</small></label>
           <label class="upload" id="transcript-upload-label">② 现有转写<input name="transcript" type="file" accept=".json,.tsv,.srt,.vtt,.txt" required><small>支持 JSON、TSV、SRT、VTT、TXT。无时间戳的文本可以分析，但不能按段落回放。</small></label>
         </div>
-        <label><span id="recording-label">录音 / 视频（可选，用于回放）</span><input name="recording" type="file" accept=".mp4,.webm,.mp3,.m4a,.wav,.flac,.ogg"></label>
+        <label id="recording-upload-label"><span id="recording-label">录音 / 视频（可选，用于回放）</span><input name="recording" type="file" accept=".mp4,.webm,.mp3,.m4a,.wav,.flac,.ogg"></label>
         <p class="muted">导入预览不会向分析模型发送内容。录音转写使用本机 CPU，首次运行可能需要下载 SenseVoice 等模型；分析会在转写后开始。</p>
         <button class="primary" id="import-button">导入并预览</button><span id="import-status" role="status"></span>
       </form>

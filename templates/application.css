@@ -41,6 +41,10 @@ input[type=file] { font-size: 12px; }
 .upload-grid, .provider-grid, .preview-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
 .upload { background: #faf9fd; border: 1px dashed #d4cbe8; border-radius: 10px; padding: 22px; }
 .upload small { font-weight: 400; }
+.provider-import { background: #faf9fd; border: 1px solid #d4cbe8; border-radius: 10px; padding: 18px 20px; margin-bottom: 20px; }
+.provider-import h3 { color: inherit; margin-top: 0; }
+.provider-import .actions { margin: 0 0 18px; }
+.provider-import .provider-grid label { margin-bottom: 0; }
 button, .button { border: 1px solid #dcd8e6; border-radius: 8px; padding: 11px 17px; font: inherit; font-size: 13px; font-weight: 600; background: white; cursor: pointer; text-decoration: none; text-align: center; }
 button:hover, .button:hover { filter: brightness(.97); }
 button:disabled { opacity: .55; cursor: wait; }

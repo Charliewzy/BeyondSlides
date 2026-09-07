@@ -252,17 +252,71 @@ $("new-lecture").addEventListener("click", () => {
 });
 $("source-mode").addEventListener("change", () => {
   const fromRecording = $("source-mode").value === "recording";
+  const fromRain = $("source-mode").value === "rain";
   const transcript = document.querySelector('[name="transcript"]');
-  transcript.disabled = fromRecording; transcript.required = !fromRecording;
-  $("transcript-upload-label").hidden = fromRecording;
-  document.querySelector('[name="recording"]').required = fromRecording;
+  const recording = document.querySelector('[name="recording"]');
+  transcript.disabled = fromRecording || fromRain; transcript.required = !fromRecording && !fromRain;
+  $("transcript-upload-label").hidden = fromRecording || fromRain;
+  recording.disabled = fromRain; recording.required = fromRecording;
+  $("recording-upload-label").hidden = fromRain;
+  $("rain-classroom-import").hidden = !fromRain;
   $("recording-label").textContent = fromRecording ? "② 录音 / 视频（必选，将在本机转写）" : "录音 / 视频（可选，用于回放）";
 });
+$("rain-connect").addEventListener("click", async () => {
+  $("rain-connect").disabled = true; $("rain-status").textContent = "正在打开雨课堂…";
+  try {
+    await api("/api/rain-classroom/connect", { method: "POST" });
+    $("rain-status").textContent = "请在新窗口中扫码并确认登录；完成后点击“加载课程”。";
+  } catch (error) { $("rain-status").textContent = error.message; }
+  finally { $("rain-connect").disabled = false; }
+});
+$("rain-load-courses").addEventListener("click", async () => {
+  $("rain-load-courses").disabled = true; $("rain-status").textContent = "正在加载课程…";
+  try {
+    const rainCourses = await api("/api/rain-classroom/courses");
+    const select = $("rain-course"); select.replaceChildren(new Option("请选择课程", ""));
+    for (const course of rainCourses) {
+      const suffix = course.classroom_name && course.classroom_name !== course.course_name ? ` · ${course.classroom_name}` : "";
+      select.add(new Option(`${course.course_name}${suffix}`, String(course.classroom_id)));
+    }
+    select.disabled = false; $("rain-lecture").disabled = true;
+    $("rain-lecture").replaceChildren(new Option("先选择课程", ""));
+    $("rain-status").textContent = rainCourses.length ? "请选择课程。" : "当前账号没有可导入的课程。";
+  } catch (error) { $("rain-status").textContent = `${error.message}。如果尚未登录，请在雨课堂窗口完成扫码后重试。`; }
+  finally { $("rain-load-courses").disabled = false; }
+});
+$("rain-course").addEventListener("change", async () => {
+  const classroomId = $("rain-course").value;
+  const select = $("rain-lecture"); select.disabled = true;
+  select.replaceChildren(new Option(classroomId ? "正在加载讲次…" : "先选择课程", ""));
+  if (!classroomId) return;
+  $("rain-status").textContent = "正在加载讲次…";
+  try {
+    const lectures = await api(`/api/rain-classroom/courses/${classroomId}/lectures`);
+    select.replaceChildren(new Option("请选择讲次", ""));
+    for (const lecture of lectures) {
+      const option = new Option(lecture.title, lecture.lesson_id); option.dataset.title = lecture.title; select.add(option);
+    }
+    select.disabled = false; $("rain-status").textContent = lectures.length ? "请选择一堂课。" : "这门课程没有可导入的课堂录像。";
+  } catch (error) { select.replaceChildren(new Option("加载失败", "")); $("rain-status").textContent = error.message; }
+});
+$("rain-lecture").addEventListener("change", () => {
+  const title = $("rain-lecture").selectedOptions[0]?.dataset.title;
+  const name = document.querySelector('[name="name"]');
+  if (title && !name.value.trim()) name.value = title;
+});
 $("import-form").addEventListener("submit", async (event) => {
-  event.preventDefault(); notice(""); $("import-button").disabled = true; $("import-status").textContent = "正在上传并检查文件…";
+  event.preventDefault(); notice(""); $("import-button").disabled = true;
+  const fromRain = $("source-mode").value === "rain";
+  $("import-status").textContent = fromRain ? "正在导入雨课堂录像并检查文件…" : "正在上传并检查文件…";
   try {
     const form = new FormData(event.target);
     if (!form.get("recording")?.size) form.delete("recording");
+    if (fromRain) {
+      const classroomId = Number($("rain-course").value), lessonId = $("rain-lecture").value;
+      if (!classroomId || !lessonId) throw new Error("请选择要导入的雨课堂讲次");
+      form.set("rain_classroom", JSON.stringify({ classroom_id: classroomId, lesson_id: lessonId }));
+    }
     const job = await api("/api/jobs", { method: "POST", body: form });
     await refreshLibrary(); await select(job.id); event.target.reset(); $("source-mode").dispatchEvent(new Event("change"));
   } catch (error) { notice(error.message); }

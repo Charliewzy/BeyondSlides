@@ -1,9 +1,10 @@
 # Local application implementation
 
 The local-first application supports PDF + existing transcript or recording
-import, CPU transcription, resumable analysis, live progress/token usage, the
-interactive reader, and shareable ZIP export. Transcripts can be timed subtitles
-or untimed plain text; missing timestamps are never fabricated.
+import, one-lecture recording import from Rain Classroom, CPU transcription,
+resumable analysis, live progress/token usage, the interactive reader, and
+shareable ZIP export. Transcripts can be timed subtitles or untimed plain text;
+missing timestamps are never fabricated.
 
 The sidebar's **查看示例报告** button opens a bundled real-lecture report in a
 new tab, without importing a lecture, creating a job, or configuring a model.
@@ -30,6 +31,11 @@ and the existing dense-retrieval model may download on first use.
    Alternatively choose local CPU transcription and upload a recording instead
    of a transcript. Recordings are inspected with `ffprobe`; transcription
    requires an audio track. The whole upload is limited to 4 GiB.
+   As a third option, open the dedicated Rain Classroom browser, complete QR
+   login, and select one course and one lecture. The slide PDF is still uploaded
+   manually. Provider-declared replay entries are downloaded and assembled into
+   one `recording.mp4` before the unchanged transcription pipeline sees them;
+   replay segmentation is not part of the UI or job model.
 2. Inspect the text preview and extraction warnings. Upload/preview does not
    contact the analysis provider.
    “建议检查的页面” lists flagged pages in a horizontal thumbnail strip, with
@@ -62,6 +68,14 @@ full text/slides reader, but passage-linked playback is unavailable even if a
 recording is attached. The export does not include that unused recording.
 SRT and WebVTT use the [subtp parsers](https://docs.rs/subtp/latest/subtp/);
 subtitle sequence labels are normalized into contiguous source IDs.
+
+Rain Classroom authentication stays in a dedicated Chrome/Chromium profile at
+`.rain-classroom-browser` inside the application data directory. Course and
+lecture discovery run in that authenticated page context. The browser submits
+only the selected classroom and lecture identifiers to the local backend; the
+backend obtains fresh, short-lived replay URLs and never accepts signed media
+URLs from the UI. This adapter targets Rain Classroom's current private web
+interface and may require maintenance when the site changes.
 
 ## Local CPU transcription setup
 

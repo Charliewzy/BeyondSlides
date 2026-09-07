@@ -1,6 +1,7 @@
 mod export;
 mod jobs;
 mod logs;
+mod rain_classroom;
 mod recognition_eta;
 mod slide_review;
 mod transcription;
@@ -53,6 +54,7 @@ struct App {
     cursors: Arc<Mutex<HashMap<PathBuf, TraceCursor>>>,
     preview_renders: Arc<tokio::sync::Semaphore>,
     recognition_estimators: Arc<Mutex<HashMap<String, recognition_eta::RecognitionEstimator>>>,
+    rain_classroom: Arc<rain_classroom::RainClassroom>,
 }
 
 pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>> {
@@ -64,6 +66,7 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
         .map_err(|e| format!("another application is using {}: {e}", root.display()))?;
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
     let port = listener.local_addr()?.port();
+    let rain_classroom = Arc::new(rain_classroom::RainClassroom::new(&root));
     let app = App {
         root,
         port,
@@ -71,6 +74,7 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
         cursors: Arc::default(),
         preview_renders: Arc::new(tokio::sync::Semaphore::new(2)),
         recognition_estimators: Arc::default(),
+        rain_classroom,
     };
     let router = Router::new()
         .route(
@@ -107,6 +111,12 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
             }),
         )
         .route("/api/jobs", get(list_jobs).post(upload))
+        .route("/api/rain-classroom/connect", post(connect_rain_classroom))
+        .route("/api/rain-classroom/courses", get(rain_classroom_courses))
+        .route(
+            "/api/rain-classroom/courses/{classroom_id}/lectures",
+            get(rain_classroom_lectures),
+        )
         .route(
             "/example/report.html",
             get(|| async { Html(EXAMPLE_REPORT) }),
@@ -223,6 +233,7 @@ mod tests {
             cursors: Arc::default(),
             preview_renders: Arc::new(tokio::sync::Semaphore::new(2)),
             recognition_estimators: Arc::default(),
+            rain_classroom: Arc::new(rain_classroom::RainClassroom::new(root.path())),
         };
         let mut observed = json!({"phase": "recognizing", "attempt_started_ms": 10,
             "completed_regions": 840, "total_regions": 1330,
@@ -279,6 +290,33 @@ async fn list_jobs(State(app): State<App>) -> Result<Json<Vec<Job>>, AppError> {
     Ok(Json(jobs))
 }
 
+async fn connect_rain_classroom(
+    State(app): State<App>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    app.rain_classroom.connect().await.map_err(AppError::bad)?;
+    Ok(Json(json!({"opened": true})))
+}
+
+async fn rain_classroom_courses(
+    State(app): State<App>,
+) -> Result<Json<Vec<rain_classroom::Course>>, AppError> {
+    Ok(Json(
+        app.rain_classroom.courses().await.map_err(AppError::bad)?,
+    ))
+}
+
+async fn rain_classroom_lectures(
+    State(app): State<App>,
+    Path(classroom_id): Path<u64>,
+) -> Result<Json<Vec<rain_classroom::Lecture>>, AppError> {
+    Ok(Json(
+        app.rain_classroom
+            .lectures(classroom_id)
+            .await
+            .map_err(AppError::bad)?,
+    ))
+}
+
 fn log_path(app: &App, id: &str, kind: &str) -> Result<PathBuf, AppError> {
     let directory = job_path(&app.root, id)?;
     let job = read_job(&directory)?;
@@ -330,6 +368,7 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
     let mut title = "Untitled lecture".to_owned();
     let mut extension = String::new();
     let mut recording = None;
+    let mut rain_selection = None;
     while let Some(mut field) = multipart.next_field().await.map_err(AppError::bad)? {
         let name = field.name().unwrap_or("").to_owned();
         if !fields.insert(name.clone()) {
@@ -350,6 +389,20 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
             if title.is_empty() {
                 title = "Untitled lecture".into();
             }
+            continue;
+        }
+        if name == "rain_classroom" {
+            let mut bytes = Vec::new();
+            while let Some(chunk) = field.chunk().await.map_err(AppError::bad)? {
+                if bytes.len() + chunk.len() > 512 {
+                    return Err(AppError::bad("Invalid Rain Classroom selection"));
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            rain_selection = Some(
+                serde_json::from_slice::<rain_classroom::LectureSelection>(&bytes)
+                    .map_err(AppError::bad)?,
+            );
             continue;
         }
         let ext = FsPath::new(field.file_name().unwrap_or(""))
@@ -389,10 +442,24 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
         }
         output.flush().await?;
     }
-    if !fields.contains("slides") || (!fields.contains("transcript") && recording.is_none()) {
+    if rain_selection.is_some() && (fields.contains("transcript") || recording.is_some()) {
         return Err(AppError::bad(
-            "Upload slides and either a transcript or a recording",
+            "Choose either a Rain Classroom lecture or local transcript/recording files",
         ));
+    }
+    if !fields.contains("slides")
+        || (!fields.contains("transcript") && recording.is_none() && rain_selection.is_none())
+    {
+        return Err(AppError::bad(
+            "Upload slides and provide a transcript, a recording, or a Rain Classroom lecture",
+        ));
+    }
+    if let Some(selection) = rain_selection {
+        app.rain_classroom
+            .acquire_recording(&selection, &directory.path().join("recording.mp4"))
+            .await
+            .map_err(AppError::bad)?;
+        recording = Some("recording.mp4".into());
     }
     let root = app.root.clone();
     let job = tokio::task::spawn_blocking(move || {

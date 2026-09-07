@@ -1,0 +1,440 @@
+use std::{
+    io,
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+use chromiumoxide::{Browser, Page, browser::BrowserConfig};
+use futures::StreamExt;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use tokio::{io::AsyncWriteExt, sync::Mutex, task::JoinHandle};
+
+const HOME_URL: &str = "https://pro.yuketang.cn/v2/web/index";
+
+/// The stable identity selected by the user. Replay URLs are intentionally not
+/// accepted from the browser because Rain Classroom signs them for a limited
+/// time and the server must establish which entries belong to the lecture.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct LectureSelection {
+    pub classroom_id: u64,
+    pub lesson_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct Course {
+    pub classroom_id: u64,
+    pub course_name: String,
+    pub classroom_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct Lecture {
+    pub lesson_id: String,
+    pub title: String,
+}
+
+pub(super) struct RainClassroom {
+    profile: PathBuf,
+    session: Mutex<Option<BrowserSession>>,
+}
+
+struct BrowserSession {
+    _browser: Browser,
+    page: Page,
+    _handler: JoinHandle<()>,
+}
+
+impl RainClassroom {
+    pub fn new(application_root: &Path) -> Self {
+        Self {
+            profile: application_root.join(".rain-classroom-browser"),
+            session: Mutex::new(None),
+        }
+    }
+
+    /// Opens a dedicated visible browser. Its profile is retained locally so a
+    /// user normally needs to scan the QR code only once.
+    pub async fn connect(&self) -> Result<(), String> {
+        let mut session = self.session.lock().await;
+        if let Some(current) = session.as_ref() {
+            if current.page.bring_to_front().await.is_ok() {
+                return Ok(());
+            }
+            *session = None;
+        }
+
+        tokio::fs::create_dir_all(&self.profile)
+            .await
+            .map_err(|error| {
+                format!("Could not create the Rain Classroom browser profile: {error}")
+            })?;
+        let config = BrowserConfig::builder()
+            .with_head()
+            .viewport(None)
+            .user_data_dir(&self.profile)
+            .request_timeout(Duration::from_secs(45))
+            .launch_timeout(Duration::from_secs(30))
+            .build()
+            .map_err(provider_error)?;
+        let (browser, mut handler) = Browser::launch(config).await.map_err(provider_error)?;
+        let handler = tokio::spawn(async move {
+            while let Some(event) = handler.next().await {
+                if event.is_err() {
+                    break;
+                }
+            }
+        });
+        let page = browser.new_page(HOME_URL).await.map_err(provider_error)?;
+        *session = Some(BrowserSession {
+            _browser: browser,
+            page,
+            _handler: handler,
+        });
+        Ok(())
+    }
+
+    pub async fn courses(&self) -> Result<Vec<Course>, String> {
+        let response: CourseResponse = self
+            .evaluate(
+                "async function() { const response = await (await fetch('/v/course_meta/learning_list/?front_time=' + Date.now(), {credentials: 'include'})).json(); const valid = Array.isArray(response.data); return {errcode: valid ? Number(response.errcode ?? response.code ?? 0) : -1, errmsg: String(response.errmsg ?? response.msg ?? ''), data: valid ? response.data : []}; }",
+            )
+            .await?;
+        if response.errcode != 0 {
+            return Err(login_error(&response.errmsg));
+        }
+        let mut courses: Vec<_> = response
+            .data
+            .into_iter()
+            .map(|course| {
+                let classroom_id = course.classroom_id;
+                Course {
+                    classroom_id,
+                    course_name: course
+                        .course_name
+                        .filter(|name| !name.trim().is_empty())
+                        .unwrap_or_else(|| format!("Course {classroom_id}")),
+                    classroom_name: course.classroom_name.unwrap_or_default(),
+                }
+            })
+            .collect();
+        courses.sort_by(|left, right| left.course_name.cmp(&right.course_name));
+        Ok(courses)
+    }
+
+    pub async fn lectures(&self, classroom_id: u64) -> Result<Vec<Lecture>, String> {
+        let script = format!(
+            "async function() {{ const response = await (await fetch('/v2/api/web/logs/learn/{classroom_id}?actype=-1&page=0&offset=100&sort=-1', {{credentials: 'include'}})).json(); const valid = Array.isArray(response.data?.activities); return {{errcode: valid ? Number(response.errcode ?? response.code ?? 0) : -1, errmsg: String(response.errmsg ?? response.msg ?? ''), data: {{activities: valid ? response.data.activities : []}}}}; }}"
+        );
+        let response: LectureResponse = self.evaluate(&script).await?;
+        if response.errcode != 0 {
+            return Err(login_error(&response.errmsg));
+        }
+        let mut lectures: Vec<_> = response
+            .data
+            .activities
+            .into_iter()
+            .filter(|activity| activity.kind == 14 && !activity.courseware_id.is_empty())
+            .map(|activity| Lecture {
+                lesson_id: activity.courseware_id,
+                title: activity
+                    .title
+                    .filter(|title| !title.trim().is_empty())
+                    .unwrap_or_else(|| "未命名讲次".into()),
+            })
+            .collect();
+        lectures.reverse();
+        Ok(lectures)
+    }
+
+    /// Materializes all replay entries for one lecture as one recording. The
+    /// provider's segmentation never crosses this interface.
+    pub async fn acquire_recording(
+        &self,
+        selection: &LectureSelection,
+        destination: &Path,
+    ) -> Result<u64, String> {
+        if selection.lesson_id.is_empty()
+            || !selection
+                .lesson_id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+        {
+            return Err("Invalid Rain Classroom lecture identifier".into());
+        }
+        // Checking the classroom prevents a stale or edited form from importing
+        // a lesson that was not offered by the selected course.
+        if !self
+            .lectures(selection.classroom_id)
+            .await?
+            .iter()
+            .any(|lecture| lecture.lesson_id == selection.lesson_id)
+        {
+            return Err("The selected lecture is not part of this Rain Classroom course".into());
+        }
+        let script = format!(
+            "async function() {{ const response = await (await fetch('/api/v3/classroom-report/replay?lesson_id={}&canFakeLive=1&front_time=' + Date.now(), {{credentials: 'include'}})).json(); return {{code: Number(response.code ?? response.errcode ?? -1), msg: String(response.msg ?? response.errmsg ?? ''), data: response.data ?? null}}; }}",
+            selection.lesson_id
+        );
+        let response: ReplayResponse = self.evaluate(&script).await?;
+        if response.code != 0 {
+            return Err(login_error(&response.msg));
+        }
+        let response_data = response
+            .data
+            .ok_or_else(|| login_error("missing replay data"))?;
+        if response_data.show_playback != 1 {
+            return Err("Rain Classroom does not make this lecture recording available".into());
+        }
+        let lesson_duration = response_data.lesson_duration;
+        let entries: Vec<_> = response_data
+            .live
+            .into_iter()
+            .filter(|entry| entry.hidden_status == 0 && !entry.url.is_empty())
+            .collect();
+        if entries.is_empty() {
+            return Err("Rain Classroom returned no playable recording for this lecture".into());
+        }
+
+        let parts = destination
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(".rain-classroom-download");
+        if parts.exists() {
+            tokio::fs::remove_dir_all(&parts).await.map_err(io_error)?;
+        }
+        tokio::fs::create_dir_all(&parts).await.map_err(io_error)?;
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(60 * 60))
+            .build()
+            .map_err(provider_error)?;
+        for (index, entry) in entries.iter().enumerate() {
+            download(
+                &client,
+                &entry.url,
+                &parts.join(format!("part-{index:04}.mp4")),
+            )
+            .await?;
+        }
+
+        if entries.len() == 1 {
+            tokio::fs::rename(parts.join("part-0000.mp4"), destination)
+                .await
+                .map_err(io_error)?;
+        } else {
+            let manifest = (0..entries.len())
+                .map(|index| format!("file 'part-{index:04}.mp4'\n"))
+                .collect::<String>();
+            tokio::fs::write(parts.join("concat.txt"), manifest)
+                .await
+                .map_err(io_error)?;
+            let output = tokio::process::Command::new("ffmpeg")
+                .current_dir(&parts)
+                .args([
+                    "-v",
+                    "error",
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    "concat.txt",
+                    "-c",
+                    "copy",
+                    "-movflags",
+                    "+faststart",
+                    "recording.mp4",
+                ])
+                .output()
+                .await
+                .map_err(|error| {
+                    format!(
+                        "Could not start ffmpeg to assemble the Rain Classroom recording: {error}"
+                    )
+                })?;
+            if !output.status.success() {
+                return Err(format!(
+                    "Could not assemble the Rain Classroom recording: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            tokio::fs::rename(parts.join("recording.mp4"), destination)
+                .await
+                .map_err(io_error)?;
+        }
+        tokio::fs::remove_dir_all(&parts).await.map_err(io_error)?;
+        Ok(lesson_duration)
+    }
+
+    async fn evaluate<T: DeserializeOwned>(&self, script: &str) -> Result<T, String> {
+        let session = self.session.lock().await;
+        let session = session
+            .as_ref()
+            .ok_or("Open Rain Classroom and finish QR-code login before loading courses")?;
+        let value: serde_json::Value = session
+            .page
+            .evaluate_function(script)
+            .await
+            .map_err(provider_error)?
+            .into_value()
+            .map_err(provider_error)?;
+        serde_json::from_value(value.clone()).map_err(|error| {
+            let shape = match value {
+                serde_json::Value::Object(object) => {
+                    format!(
+                        "object fields [{}]",
+                        object.keys().cloned().collect::<Vec<_>>().join(", ")
+                    )
+                }
+                serde_json::Value::Array(_) => "array".into(),
+                serde_json::Value::Null => "null".into(),
+                serde_json::Value::Bool(_) => "boolean".into(),
+                serde_json::Value::Number(_) => "number".into(),
+                serde_json::Value::String(_) => "string".into(),
+            };
+            format!("Rain Classroom returned an unexpected response ({shape}): {error}")
+        })
+    }
+}
+
+async fn download(client: &reqwest::Client, url: &str, destination: &Path) -> Result<(), String> {
+    let url = url::Url::parse(url).map_err(provider_error)?;
+    if url.scheme() != "https" {
+        return Err("Rain Classroom returned a recording URL that is not HTTPS".into());
+    }
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|error| format!("Could not download the Rain Classroom recording: {error}"))?;
+    let mut output = tokio::fs::File::create(destination)
+        .await
+        .map_err(io_error)?;
+    let mut bytes = response.bytes_stream();
+    while let Some(chunk) = bytes.next().await {
+        output
+            .write_all(&chunk.map_err(provider_error)?)
+            .await
+            .map_err(io_error)?;
+    }
+    output.flush().await.map_err(io_error)
+}
+
+fn provider_error(error: impl std::fmt::Display) -> String {
+    format!("Rain Classroom could not be reached: {error}")
+}
+
+fn io_error(error: io::Error) -> String {
+    format!("Could not save the Rain Classroom recording: {error}")
+}
+
+fn login_error(message: &str) -> String {
+    if message.is_empty() {
+        "Rain Classroom rejected the request; finish QR-code login and try again".into()
+    } else {
+        format!(
+            "Rain Classroom rejected the request ({message}); finish QR-code login and try again"
+        )
+    }
+}
+
+#[derive(Deserialize)]
+struct CourseResponse {
+    errcode: i64,
+    #[serde(default)]
+    errmsg: String,
+    #[serde(default)]
+    data: Vec<CourseRecord>,
+}
+
+#[derive(Deserialize)]
+struct CourseRecord {
+    classroom_id: u64,
+    #[serde(default)]
+    course_name: Option<String>,
+    #[serde(default)]
+    classroom_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LectureResponse {
+    errcode: i64,
+    #[serde(default)]
+    errmsg: String,
+    data: LectureData,
+}
+
+#[derive(Default, Deserialize)]
+struct LectureData {
+    #[serde(default)]
+    activities: Vec<ActivityRecord>,
+}
+
+#[derive(Deserialize)]
+struct ActivityRecord {
+    #[serde(rename = "type")]
+    kind: u8,
+    #[serde(default)]
+    courseware_id: String,
+    #[serde(default)]
+    title: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ReplayResponse {
+    code: i64,
+    #[serde(default)]
+    msg: String,
+    data: Option<ReplayData>,
+}
+
+#[derive(Deserialize)]
+struct ReplayData {
+    #[serde(rename = "lessonDuration")]
+    lesson_duration: u64,
+    #[serde(rename = "showPlayback")]
+    show_playback: u8,
+    #[serde(default)]
+    live: Vec<ReplayEntry>,
+}
+
+#[derive(Deserialize)]
+struct ReplayEntry {
+    url: String,
+    #[serde(rename = "hiddenStatus", default)]
+    hidden_status: u8,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_replay_entries_are_private_implementation_details() {
+        let response: ReplayResponse = serde_json::from_value(serde_json::json!({
+            "code": 0,
+            "msg": "OK",
+            "data": {
+                "lessonDuration": 8427000,
+                "showPlayback": 1,
+                "live": [
+                    {"url": "https://media.example/first", "hiddenStatus": 0},
+                    {"url": "https://media.example/second", "hiddenStatus": 0}
+                ]
+            }
+        }))
+        .unwrap();
+        let data = response.data.unwrap();
+        assert_eq!(data.lesson_duration, 8_427_000);
+        assert_eq!(data.live.len(), 2);
+        let public = serde_json::to_value(Lecture {
+            lesson_id: "lesson".into(),
+            title: "并发编程".into(),
+        })
+        .unwrap();
+        assert!(public.get("segments").is_none());
+        assert!(public.get("live").is_none());
+    }
+}

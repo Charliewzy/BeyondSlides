@@ -262,6 +262,16 @@ def main():
             page.locator("#review-retry").click()
             page.wait_for_function("document.getElementById('review-status').textContent.includes('未发现')")
             assert page.locator(".review-card").count() == 0
+            created_job = page.evaluate("currentId")
+            entry = page.locator(f'[data-job-id="{created_job}"]')
+            entry.hover()
+            delete_button = entry.get_by_role("button", name="删除讲座：浏览器无时间戳导入检查")
+            delete_button.wait_for(state="visible")
+            page.once("dialog", lambda dialog: dialog.accept())
+            delete_button.click()
+            page.locator("#import-panel").wait_for(state="visible")
+            assert page.locator(f'[data-job-id="{created_job}"]').count() == 0
+            assert page.request.get(f"{url}/api/jobs/{created_job}").status == 404
             assert not errors, errors
             browser.close()
         print("Browser checks passed: reload, debug logs/download/escaping/follow, reader, export, mobile, source mode, untimed import, no JS errors")

@@ -162,10 +162,30 @@ async function refreshLibrary() {
   jobs = await api("/api/jobs");
   $("lectures").replaceChildren();
   for (const job of jobs) {
-    const button = document.createElement("button"); button.textContent = job.name;
-    button.classList.toggle("selected", currentId === job.id);
-    button.addEventListener("click", () => select(job.id).catch(e => notice(e.message)));
-    $("lectures").append(button);
+    const entry = document.createElement("div"); entry.className = "lecture-entry"; entry.dataset.jobId = job.id;
+    entry.classList.toggle("selected", currentId === job.id);
+    const open = document.createElement("button"); open.type = "button"; open.className = "lecture-open"; open.textContent = job.name;
+    open.addEventListener("click", () => select(job.id).catch(e => notice(e.message)));
+    const remove = document.createElement("button"); remove.type = "button"; remove.className = "lecture-delete"; remove.textContent = "×";
+    remove.title = "删除"; remove.setAttribute("aria-label", `删除讲座：${job.name}`);
+    remove.addEventListener("click", () => deleteLecture(job));
+    entry.append(open, remove); $("lectures").append(entry);
+  }
+}
+async function deleteLecture(job) {
+  if (!window.confirm(`确认删除“${job.name}”吗？该讲座的转写、分析结果和报告将从本机永久删除。`)) return;
+  const deletingCurrent = currentId === job.id;
+  if (deletingCurrent) clearTimeout(pollingTimer);
+  try {
+    await api(`/api/jobs/${job.id}`, { method: "DELETE" });
+    if (deletingCurrent) {
+      currentId = null; history.replaceState(null, "", "/");
+      $("workspace").hidden = true; $("import-panel").hidden = false;
+    }
+    await refreshLibrary(); notice("");
+  } catch (error) {
+    notice(error.message);
+    if (deletingCurrent) poll();
   }
 }
 async function select(id) {

@@ -135,7 +135,7 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
             "/example/report.html",
             get(|| async { Html(EXAMPLE_REPORT) }),
         )
-        .route("/api/jobs/{id}", get(job_status))
+        .route("/api/jobs/{id}", get(job_status).delete(delete_job))
         .route("/api/jobs/{id}/slide-review", get(review_pages))
         .route("/api/jobs/{id}/slide-review/{page}", get(review_image))
         .route(
@@ -227,6 +227,33 @@ impl From<io::Error> for AppError {
 mod tests {
     use super::*;
 
+    fn test_app(root: &FsPath) -> App {
+        App {
+            root: root.into(),
+            port: 0,
+            launching: Arc::default(),
+            cursors: Arc::default(),
+            preview_renders: Arc::new(tokio::sync::Semaphore::new(2)),
+            recognition_estimators: Arc::default(),
+            rain_classroom: Arc::new(rain_classroom::RainClassroom::new(root)),
+        }
+    }
+
+    fn save_test_job(root: &FsPath, id: &str) -> PathBuf {
+        let directory = root.join(id);
+        fs::create_dir_all(&directory).unwrap();
+        let job: Job = serde_json::from_value(json!({
+            "id": id, "name": "Deletion regression", "created_ms": 1,
+            "preview": {"slide_count": 1, "segment_count": 0, "duration_ms": null,
+                "transcript_sample": "", "slide_sample": "", "warnings": []},
+            "recording": null, "transcribe_recording": false,
+            "runs": []
+        }))
+        .unwrap();
+        save_job(&directory, &job).unwrap();
+        directory
+    }
+
     #[tokio::test]
     async fn live_asr_progress_produces_recognition_eta_without_changing_worker_files() {
         let root = tempfile::tempdir().unwrap();
@@ -246,15 +273,7 @@ mod tests {
         save_job(&directory, &job).unwrap();
         let lock = jobs::worker_lock(&directory).unwrap();
         lock.try_lock().unwrap();
-        let app = App {
-            root: root.path().into(),
-            port: 0,
-            launching: Arc::default(),
-            cursors: Arc::default(),
-            preview_renders: Arc::new(tokio::sync::Semaphore::new(2)),
-            recognition_estimators: Arc::default(),
-            rain_classroom: Arc::new(rain_classroom::RainClassroom::new(root.path())),
-        };
+        let app = test_app(root.path());
         let mut observed = json!({"phase": "recognizing", "attempt_started_ms": 10,
             "completed_regions": 840, "total_regions": 1330,
             "completed_speech_ms": 1804000, "total_speech_ms": 6277000});
@@ -288,6 +307,37 @@ mod tests {
             serde_json::to_value(status).unwrap()["transcription"]["recognition_eta_ms"].is_null()
         );
     }
+
+    #[tokio::test]
+    async fn deleting_a_lecture_removes_only_its_job_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let id = "0123456789abcdef0123456789abcdef";
+        let directory = save_test_job(root.path(), id);
+        let unrelated = root.path().join("keep-me");
+        fs::create_dir(&unrelated).unwrap();
+        fs::write(directory.join("saved-result.json"), b"{}\n").unwrap();
+
+        let _ = delete_job(State(test_app(root.path())), Path(id.into()))
+            .await
+            .unwrap();
+
+        assert!(!directory.exists());
+        assert!(unrelated.exists());
+    }
+
+    #[tokio::test]
+    async fn deleting_a_launching_lecture_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let id = "0123456789abcdef0123456789abcdef";
+        let directory = save_test_job(root.path(), id);
+        let app = test_app(root.path());
+        app.launching.lock().await.insert(id.into());
+
+        let error = delete_job(State(app), Path(id.into())).await.unwrap_err();
+
+        assert_eq!(error.0, StatusCode::CONFLICT);
+        assert!(directory.exists());
+    }
 }
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
@@ -308,6 +358,29 @@ async fn list_jobs(State(app): State<App>) -> Result<Json<Vec<Job>>, AppError> {
     }
     jobs.sort_by_key(|job| std::cmp::Reverse(job.created_ms));
     Ok(Json(jobs))
+}
+
+async fn delete_job(
+    State(app): State<App>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Holding the launch guard across deletion prevents a concurrent Start
+    // request from validating the job immediately before its files disappear.
+    let launching = app.launching.lock().await;
+    let directory = job_path(&app.root, &id)?;
+    read_job(&directory)?;
+    if launching.contains(&id) || is_worker_running(&directory)? {
+        return Err(AppError::conflict(
+            "Stop processing before deleting this lecture",
+        ));
+    }
+    fs::remove_dir_all(&directory)?;
+    app.recognition_estimators.lock().await.remove(&id);
+    app.cursors
+        .lock()
+        .await
+        .retain(|path, _| !path.starts_with(&directory));
+    Ok(Json(json!({"deleted": true})))
 }
 
 async fn connect_rain_classroom(

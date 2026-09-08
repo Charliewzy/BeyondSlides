@@ -109,10 +109,11 @@
           </div>
           <details><summary>高级设置</summary>
             <div class="provider-grid">
-              <label>最大并发数<input id="concurrency" type="number" min="1" max="32" value="2" required></label>
+              <label>起始并发数（自动调整时）<input id="initial-concurrency" type="number" min="1" max="32" value="2" required></label>
+              <label>并发上限<input id="concurrency" type="number" min="1" max="32" value="2" required></label>
               <label>请求间隔下限（ms）<input id="spacing" type="number" min="0" max="60000" value="0" required></label>
             </div>
-            <label class="check"><input id="adaptive" type="checkbox"> 自动调整并发（以上数值为上限）</label>
+            <label class="check"><input id="adaptive" type="checkbox"> 自动调整并发（从起始值增长，且不超过上限）</label>
             <label class="check"><input id="boundaries" type="checkbox"> 使用实验性的全局语义边界分段</label>
             <label id="extra-body-setting">服务商额外请求字段（JSON，可选）<textarea id="extra-body" rows="3" placeholder='例如 GLM 关闭思考：{"thinking":{"type":"disabled"}}'></textarea></label>
             <p class="muted">更改并发或间隔可直接续跑；更改模型或分段方式会先提示需要重跑的阶段。</p>

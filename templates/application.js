@@ -166,7 +166,9 @@ function setSettings(settings) {
   desiredCodexReasoningEffort = settings.codex_reasoning_effort || "";
   desiredCodexServiceTier = settings.codex_service_tier || "";
   $("extra-body").value = settings.extra_body ? JSON.stringify(settings.extra_body, null, 2) : "";
-  $("concurrency").value = settings.max_concurrency; $("spacing").value = settings.request_interval_ms;
+  $("concurrency").value = settings.max_concurrency;
+  $("initial-concurrency").value = settings.initial_concurrency ?? Math.min(2, settings.max_concurrency);
+  syncConcurrencyLimits(); $("spacing").value = settings.request_interval_ms;
   $("adaptive").checked = settings.adaptive; $("boundaries").checked = settings.boundary_passages;
   syncModelBackend();
 }
@@ -229,6 +231,12 @@ function populateCodexModels(models) {
   if (preferred && models.some(model => model.model === preferred)) select.value = preferred;
   select.disabled = models.length === 0;
   renderCodexModelControls();
+}
+function syncConcurrencyLimits() {
+  const ceiling = Math.max(1, Number($("concurrency").value) || 1);
+  const initial = $("initial-concurrency");
+  initial.max = String(ceiling);
+  if (Number(initial.value) > ceiling) initial.value = String(ceiling);
 }
 async function syncModelBackend() {
   const codex = $("model-backend").value === "codex";
@@ -683,7 +691,8 @@ $("start-form").addEventListener("submit", async (event) => {
         codex_reasoning_effort: codex ? ($("codex-reasoning-effort").value || null) : null,
         codex_service_tier: codexServiceTier || null,
         extra_body: codex ? null : ($("extra-body").value.trim() ? JSON.parse($("extra-body").value) : null),
-        max_concurrency: Number($("concurrency").value), request_interval_ms: Number($("spacing").value), adaptive: $("adaptive").checked, boundary_passages: $("boundaries").checked },
+        initial_concurrency: Number($("initial-concurrency").value), max_concurrency: Number($("concurrency").value),
+        request_interval_ms: Number($("spacing").value), adaptive: $("adaptive").checked, boundary_passages: $("boundaries").checked },
       api_key: codex ? "" : $("api-key").value,
       confirm_reprocessing: false,
     };
@@ -703,6 +712,7 @@ $("stop-button").addEventListener("click", async () => {
   catch (error) { notice(error.message); }
 });
 $("model-backend").addEventListener("change", syncModelBackend);
+$("concurrency").addEventListener("input", syncConcurrencyLimits);
 $("codex-model").addEventListener("change", () => {
   desiredCodexModel = $("codex-model").value;
   desiredCodexReasoningEffort = "";

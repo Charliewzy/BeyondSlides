@@ -53,6 +53,8 @@ pub(super) struct Settings {
     #[serde(default)]
     pub codex_service_tier: Option<String>,
     pub extra_body: Option<Value>,
+    #[serde(default)]
+    pub initial_concurrency: Option<usize>,
     pub max_concurrency: usize,
     pub request_interval_ms: u64,
     pub adaptive: bool,
@@ -84,9 +86,7 @@ impl Settings {
                     "Codex app-server does not accept provider extra request fields".into(),
                 );
             }
-            if !(1..=32).contains(&self.max_concurrency) || self.request_interval_ms > 60_000 {
-                return Err("Concurrency must be 1–32 and request spacing 0–60000 ms".into());
-            }
+            self.validate_execution()?;
             return Ok(());
         }
         if self.codex_reasoning_effort.is_some() || self.codex_service_tier.is_some() {
@@ -110,8 +110,21 @@ impl Settings {
                 return Err("Do not put the API key in saved request options".into());
             }
         }
-        if !(1..=32).contains(&self.max_concurrency) || self.request_interval_ms > 60_000 {
-            return Err("Concurrency must be 1–32 and request spacing 0–60000 ms".into());
+        self.validate_execution()?;
+        Ok(())
+    }
+
+    fn validate_execution(&self) -> Result<(), String> {
+        if !(1..=32).contains(&self.max_concurrency)
+            || self
+                .initial_concurrency
+                .is_some_and(|initial| !(1..=self.max_concurrency).contains(&initial))
+            || self.request_interval_ms > 60_000
+        {
+            return Err(
+                "Initial concurrency must be 1–the concurrency ceiling; the ceiling must be 1–32 and request spacing 0–60000 ms"
+                    .into(),
+            );
         }
         Ok(())
     }
@@ -403,6 +416,7 @@ mod tests {
             codex_reasoning_effort: None,
             codex_service_tier: None,
             extra_body: None,
+            initial_concurrency: Some(2),
             max_concurrency: 2,
             request_interval_ms: 0,
             adaptive: false,
@@ -440,6 +454,22 @@ mod tests {
         assert!(left.same_restoration(&right));
         right.codex_reasoning_effort = Some("high".into());
         assert!(!left.same_restoration(&right));
+    }
+
+    #[test]
+    fn starting_concurrency_is_operational_and_cannot_exceed_the_ceiling() {
+        let left = settings(ModelBackendKind::Codex);
+        let mut right = left.clone();
+        right.initial_concurrency = Some(1);
+        assert_eq!(right.validate(""), Ok(()));
+        assert!(left.same_analysis(&right));
+        right.initial_concurrency = Some(3);
+        assert!(
+            right
+                .validate("")
+                .unwrap_err()
+                .contains("Initial concurrency")
+        );
     }
 
     #[test]
@@ -528,6 +558,7 @@ mod tests {
                 codex_reasoning_effort: None,
                 codex_service_tier: None,
                 extra_body: None,
+                initial_concurrency: Some(2),
                 max_concurrency: 2,
                 request_interval_ms: 0,
                 adaptive: false,

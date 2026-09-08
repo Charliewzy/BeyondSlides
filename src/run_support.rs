@@ -72,6 +72,7 @@ pub(crate) enum ModelBackendKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(crate) struct ExecutionSettings {
     mode: SchedulingMode,
+    initial_concurrency: NonZeroUsize,
     max_concurrency: NonZeroUsize,
     request_interval_ms: u64,
 }
@@ -86,6 +87,7 @@ enum SchedulingMode {
 impl ExecutionSettings {
     fn parse(
         mode: Option<&str>,
+        initial_concurrency: Option<&str>,
         concurrency: Option<&str>,
         interval_ms: Option<&str>,
     ) -> Result<Self, io::Error> {
@@ -104,7 +106,10 @@ impl ExecutionSettings {
                 io::ErrorKind::InvalidInput,
                 format!(
                     "invalid {name}: expected an unsigned integer{}",
-                    if name == "BEYOND_SLIDES_MAX_CONCURRENCY" {
+                    if matches!(
+                        name,
+                        "BEYOND_SLIDES_INITIAL_CONCURRENCY" | "BEYOND_SLIDES_MAX_CONCURRENCY"
+                    ) {
                         " greater than zero"
                     } else {
                         ""
@@ -112,16 +117,28 @@ impl ExecutionSettings {
                 ),
             )
         };
+        let max_concurrency = concurrency
+            .unwrap_or(if mode == SchedulingMode::Adaptive {
+                "8"
+            } else {
+                "2"
+            })
+            .parse()
+            .map_err(|_| invalid("BEYOND_SLIDES_MAX_CONCURRENCY"))?;
+        let initial_concurrency = initial_concurrency
+            .unwrap_or("2")
+            .parse::<NonZeroUsize>()
+            .map_err(|_| invalid("BEYOND_SLIDES_INITIAL_CONCURRENCY"))?;
+        if initial_concurrency > max_concurrency {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "BEYOND_SLIDES_INITIAL_CONCURRENCY cannot exceed BEYOND_SLIDES_MAX_CONCURRENCY",
+            ));
+        }
         Ok(Self {
             mode,
-            max_concurrency: concurrency
-                .unwrap_or(if mode == SchedulingMode::Adaptive {
-                    "8"
-                } else {
-                    "2"
-                })
-                .parse()
-                .map_err(|_| invalid("BEYOND_SLIDES_MAX_CONCURRENCY"))?,
+            initial_concurrency,
+            max_concurrency,
             request_interval_ms: interval_ms
                 .unwrap_or("0")
                 .parse()
@@ -133,7 +150,11 @@ impl ExecutionSettings {
         let interval = Duration::from_millis(self.request_interval_ms);
         match self.mode {
             SchedulingMode::Fixed => RequestScheduler::fixed(self.max_concurrency, interval),
-            SchedulingMode::Adaptive => RequestScheduler::adaptive(self.max_concurrency, interval),
+            SchedulingMode::Adaptive => RequestScheduler::adaptive_starting_at(
+                self.initial_concurrency,
+                self.max_concurrency,
+                interval,
+            ),
         }
     }
 }
@@ -169,6 +190,7 @@ impl ProviderSettings {
         };
         let execution = ExecutionSettings::parse(
             optional_environment_variable("BEYOND_SLIDES_SCHEDULING")?.as_deref(),
+            optional_environment_variable("BEYOND_SLIDES_INITIAL_CONCURRENCY")?.as_deref(),
             optional_environment_variable("BEYOND_SLIDES_MAX_CONCURRENCY")?.as_deref(),
             optional_environment_variable("BEYOND_SLIDES_REQUEST_INTERVAL_MS")?.as_deref(),
         )?;
@@ -204,7 +226,7 @@ impl ProviderSettings {
 
     #[cfg(test)]
     pub(crate) fn new(base_url: &str, api_key: &str, model: &str) -> Self {
-        let execution = ExecutionSettings::parse(None, None, None).expect("valid defaults");
+        let execution = ExecutionSettings::parse(None, None, None, None).expect("valid defaults");
         Self {
             worker: crate::worker_control::WorkerControl::new(None)
                 .expect("disabled worker control"),
@@ -276,8 +298,9 @@ impl ProviderSettings {
 
     pub(crate) fn record_execution_settings(&self, directory: &Path) -> Result<(), io::Error> {
         eprintln!(
-            "Model scheduling: {:?}, concurrency ceiling {}, request spacing floor {} ms",
+            "Model scheduling: {:?}, initial concurrency {}, concurrency ceiling {}, request spacing floor {} ms",
             self.execution.mode,
+            self.execution.initial_concurrency,
             self.max_concurrency(),
             self.execution.request_interval_ms
         );
@@ -610,24 +633,27 @@ mod tests {
 
     #[test]
     fn execution_defaults_and_overrides_are_validated() {
-        let defaults = ExecutionSettings::parse(None, None, None).unwrap();
+        let defaults = ExecutionSettings::parse(None, None, None, None).unwrap();
         assert_eq!(defaults.mode, SchedulingMode::Adaptive);
+        assert_eq!(defaults.initial_concurrency.get(), 2);
         assert_eq!(defaults.max_concurrency.get(), 8);
         assert_eq!(defaults.scheduler().snapshot().effective_concurrency, 2);
         assert_eq!(defaults.request_interval_ms, 0);
-        let custom = ExecutionSettings::parse(None, Some("7"), Some("250")).unwrap();
+        let custom = ExecutionSettings::parse(None, Some("5"), Some("7"), Some("250")).unwrap();
+        assert_eq!(custom.initial_concurrency.get(), 5);
         assert_eq!(custom.max_concurrency.get(), 7);
         assert_eq!(custom.request_interval_ms, 250);
         for value in ["0", "-1", "", "2.5", "many"] {
-            assert!(ExecutionSettings::parse(None, Some(value), None).is_err());
+            assert!(ExecutionSettings::parse(None, None, Some(value), None).is_err());
         }
+        assert!(ExecutionSettings::parse(None, Some("8"), Some("7"), None).is_err());
         for value in ["-1", "", "0.5", "NaN"] {
-            assert!(ExecutionSettings::parse(None, None, Some(value)).is_err());
+            assert!(ExecutionSettings::parse(None, None, None, Some(value)).is_err());
         }
-        let fixed = ExecutionSettings::parse(Some("fixed"), None, None).unwrap();
+        let fixed = ExecutionSettings::parse(Some("fixed"), None, None, None).unwrap();
         assert_eq!(fixed.max_concurrency.get(), 2);
         assert!(!fixed.scheduler().snapshot().adaptive);
-        assert!(ExecutionSettings::parse(Some("maybe"), None, None).is_err());
+        assert!(ExecutionSettings::parse(Some("maybe"), None, None, None).is_err());
     }
 
     #[test]

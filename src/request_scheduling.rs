@@ -22,6 +22,7 @@ struct Inner {
 #[derive(Debug, Clone, Serialize)]
 pub struct RequestSchedulingSnapshot {
     pub adaptive: bool,
+    pub initial_concurrency: usize,
     pub max_concurrency: usize,
     pub effective_concurrency: usize,
     pub request_interval_ms: u64,
@@ -39,6 +40,7 @@ pub struct RequestSchedulingSnapshot {
 
 struct State {
     adaptive: bool,
+    initial: usize,
     ceiling: usize,
     limit: usize,
     floor: Duration,
@@ -70,26 +72,45 @@ pub(crate) enum RequestFeedback {
 
 impl RequestScheduler {
     pub fn fixed(ceiling: NonZeroUsize, minimum_interval: Duration) -> Self {
-        Self::new(ceiling, minimum_interval, false)
+        Self::new(ceiling, ceiling, minimum_interval, false)
     }
 
-    /// Begins at two in-flight requests (or the smaller ceiling), grows on
-    /// healthy queued demand, and reduces concurrency/rate on HTTP 429.
+    /// Begins at the configured initial concurrency (or the smaller ceiling),
+    /// grows on healthy queued demand, and reduces concurrency/rate on HTTP 429.
     pub fn adaptive(ceiling: NonZeroUsize, minimum_interval: Duration) -> Self {
-        Self::new(ceiling, minimum_interval, true)
+        Self::adaptive_starting_at(
+            NonZeroUsize::new(2).expect("two is non-zero"),
+            ceiling,
+            minimum_interval,
+        )
     }
 
-    fn new(ceiling: NonZeroUsize, floor: Duration, adaptive: bool) -> Self {
+    pub fn adaptive_starting_at(
+        initial_concurrency: NonZeroUsize,
+        ceiling: NonZeroUsize,
+        minimum_interval: Duration,
+    ) -> Self {
+        Self::new(ceiling, initial_concurrency, minimum_interval, true)
+    }
+
+    fn new(
+        ceiling: NonZeroUsize,
+        initial_concurrency: NonZeroUsize,
+        floor: Duration,
+        adaptive: bool,
+    ) -> Self {
         let now = Instant::now();
+        let initial = if adaptive {
+            initial_concurrency.get().min(ceiling.get())
+        } else {
+            ceiling.get()
+        };
         Self(Arc::new(Inner {
             state: Mutex::new(State {
                 adaptive,
+                initial,
                 ceiling: ceiling.get(),
-                limit: if adaptive {
-                    ceiling.get().min(2)
-                } else {
-                    ceiling.get()
-                },
+                limit: initial,
                 floor,
                 learned_interval: Duration::ZERO,
                 next_start: now,
@@ -125,6 +146,7 @@ impl RequestScheduler {
         let state = self.lock();
         RequestSchedulingSnapshot {
             adaptive: state.adaptive,
+            initial_concurrency: state.initial,
             max_concurrency: state.ceiling,
             effective_concurrency: state.limit,
             request_interval_ms: milliseconds(state.interval()),
@@ -319,6 +341,7 @@ mod tests {
     fn scheduler(adaptive: bool, ceiling: usize) -> RequestScheduler {
         RequestScheduler::new(
             NonZeroUsize::new(ceiling).unwrap(),
+            NonZeroUsize::new(2).unwrap(),
             Duration::ZERO,
             adaptive,
         )
@@ -496,5 +519,30 @@ mod tests {
         state.learned_interval = Duration::from_secs(6);
         state.relax_spacing();
         assert_eq!(state.interval(), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn adaptive_scheduler_uses_the_configured_initial_concurrency() {
+        let scheduler = RequestScheduler::adaptive_starting_at(
+            NonZeroUsize::new(5).unwrap(),
+            NonZeroUsize::new(8).unwrap(),
+            Duration::ZERO,
+        );
+        let snapshot = scheduler.snapshot();
+        assert_eq!(snapshot.initial_concurrency, 5);
+        assert_eq!(snapshot.effective_concurrency, 5);
+        assert_eq!(snapshot.max_concurrency, 8);
+    }
+
+    #[test]
+    fn adaptive_initial_concurrency_is_capped_by_the_ceiling() {
+        let scheduler = RequestScheduler::adaptive_starting_at(
+            NonZeroUsize::new(8).unwrap(),
+            NonZeroUsize::new(3).unwrap(),
+            Duration::ZERO,
+        );
+        let snapshot = scheduler.snapshot();
+        assert_eq!(snapshot.initial_concurrency, 3);
+        assert_eq!(snapshot.effective_concurrency, 3);
     }
 }

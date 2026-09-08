@@ -57,13 +57,16 @@ and the existing dense-retrieval model may download on first use.
    Preview PNGs live in a separate per-job `slide-review/` cache, not report
    assets or analysis checkpoints. Preview failures leave analysis available.
 3. Choose either an OpenAI-compatible endpoint (base URL, exact model name,
-   and API key) or a locally installed, authenticated Codex CLI (model name
-   only). Text is sent through that backend; original media is not attached to
-   model requests. Codex mode reuses `codex login` and never receives the API
-   key field.
+   and API key) or a locally installed, authenticated Codex CLI. Codex models,
+   reasoning efforts, and Fast availability are discovered from the signed-in
+   account. Text is sent through that backend; original media is not attached
+   to model requests. Codex mode reuses `codex login` and never receives the
+   API key field.
    Advanced settings accept provider-specific request JSON. For GLM, disabling
    thinking can use `{"thinking":{"type":"disabled"}}`; no provider-specific
-   option is imposed by default.
+   option is imposed by default. Adaptive scheduling separately exposes its
+   starting concurrency and upper limit; changing either remains operational
+   and does not invalidate validated checkpoints.
 4. Start, monitor, stop after current work, or resume. Input/output token totals
    update on completed provider responses; partial availability is labeled.
 5. Open the completed report with slides and optional recording playback, or

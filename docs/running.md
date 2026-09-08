@@ -22,20 +22,22 @@ comparative ranking:
 
 ```bash
 export BEYOND_SLIDES_SCHEDULING=adaptive
+export BEYOND_SLIDES_INITIAL_CONCURRENCY=2
 export BEYOND_SLIDES_MAX_CONCURRENCY=8
 export BEYOND_SLIDES_REQUEST_INTERVAL_MS=0
 ```
 
-These are the defaults. Adaptive mode starts with two simultaneous requests and
-can grow to the configured ceiling. The interval is a **floor**, not a promise
+These are the defaults. Adaptive mode starts with the configured initial
+concurrency and can grow to the configured ceiling. The interval is a **floor**, not a promise
 that requests will always start that quickly: HTTP 429 can lower concurrency,
 introduce spacing, and establish a shared cooldown. Healthy queued work lets
 the scheduler recover gradually. It does not probe above the ceiling, cancel
 already-running requests when the cap falls, or infer congestion from latency
 alone. The first window and metric canaries still run before later work.
 
-Concurrency must be positive; the interval must be a nonnegative integer in
-milliseconds. Initial calls, tool follow-ups, repairs, and retries share the
+Initial and maximum concurrency must be positive, and the initial value cannot
+exceed the ceiling; the interval must be a nonnegative integer in milliseconds.
+Initial calls, tool follow-ups, repairs, and retries share the
 same gate. The CLI shares learned state across its sequential stages, but not
 across processes or later invocations. Successful checkpoint reuse is unaffected
 by scheduling. Your shell's existing `BEYOND_SLIDES_MAX_CONCURRENCY=2` remains

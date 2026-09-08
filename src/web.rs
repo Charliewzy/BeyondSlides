@@ -934,6 +934,12 @@ async fn start(
             },
         )
         .env("BEYOND_SLIDES_WORKER_CONTROL", path.join("control"));
+    if let Some(initial_concurrency) = run.settings.initial_concurrency {
+        command.env(
+            "BEYOND_SLIDES_INITIAL_CONCURRENCY",
+            initial_concurrency.to_string(),
+        );
+    }
     if run.settings.backend == crate::run_support::ModelBackendKind::OpenAiCompatible {
         command
             .env("BEYOND_SLIDES_API_BASE_URL", &run.settings.base_url)

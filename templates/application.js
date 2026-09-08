@@ -445,9 +445,21 @@ async function loadRainLectures(prefix) {
     select.disabled = false; $("rain-status").textContent = lectures.length ? "请选择一堂课。" : "这门课程没有可导入的课堂录像。";
   } catch (error) { setRainAuthenticated(false); select.replaceChildren(new Option("加载失败", "")); $("rain-status").textContent = `${error.message}。请重新扫码登录。`; }
 }
-$("rain-slides-course").addEventListener("change", () => loadRainLectures("rain-slides"));
-$("rain-recording-course").addEventListener("change", () => loadRainLectures("rain-recording"));
-$("rain-slides-lecture").addEventListener("change", async () => {
+function otherRainSource(prefix) {
+  return prefix === "rain-slides" ? "rain-recording" : "rain-slides";
+}
+async function chooseRainCourse(prefix) {
+  const classroomId = $(`${prefix}-course`).value;
+  const otherPrefix = otherRainSource(prefix);
+  const otherCourse = $(`${otherPrefix}-course`);
+  if (classroomId && !otherCourse.value) {
+    otherCourse.value = classroomId;
+    await Promise.all([loadRainLectures(prefix), loadRainLectures(otherPrefix)]);
+  } else {
+    await loadRainLectures(prefix);
+  }
+}
+async function loadRainPresentationOptions() {
   const classroomId = $("rain-slides-course").value;
   const lessonId = $("rain-slides-lecture").value;
   const select = $("rain-presentation"); select.disabled = true;
@@ -462,12 +474,39 @@ $("rain-slides-lecture").addEventListener("change", async () => {
     select.disabled = false;
     $("rain-status").textContent = presentations.length ? "请选择一份课件。" : "这堂课没有可导入的课件。";
   } catch (error) { select.replaceChildren(new Option("加载失败", "")); $("rain-status").textContent = error.message; }
-});
-$("rain-recording-lecture").addEventListener("change", () => {
+}
+function useRainLectureAsName() {
   const title = $("rain-recording-lecture").selectedOptions[0]?.dataset.title;
   const name = document.querySelector('[name="name"]');
   if (title && !name.value.trim()) name.value = title;
-});
+}
+async function applyRainLectureSelection(prefix) {
+  if (prefix === "rain-slides") await loadRainPresentationOptions();
+  else useRainLectureAsName();
+}
+async function mirrorRainLecture(prefix) {
+  const classroomId = $(`${prefix}-course`).value;
+  const lessonId = $(`${prefix}-lecture`).value;
+  const otherPrefix = otherRainSource(prefix);
+  const otherCourse = $(`${otherPrefix}-course`);
+  const otherLecture = $(`${otherPrefix}-lecture`);
+  if (!classroomId || !lessonId || otherLecture.value) return;
+  if (otherCourse.value && otherCourse.value !== classroomId) return;
+  if (!otherCourse.value) otherCourse.value = classroomId;
+  if (otherLecture.disabled || !Array.from(otherLecture.options).some(option => option.value === lessonId)) {
+    await loadRainLectures(otherPrefix);
+  }
+  if (!Array.from(otherLecture.options).some(option => option.value === lessonId)) return;
+  otherLecture.value = lessonId;
+  await applyRainLectureSelection(otherPrefix);
+}
+async function chooseRainLecture(prefix) {
+  await Promise.all([applyRainLectureSelection(prefix), mirrorRainLecture(prefix)]);
+}
+$("rain-slides-course").addEventListener("change", () => chooseRainCourse("rain-slides"));
+$("rain-recording-course").addEventListener("change", () => chooseRainCourse("rain-recording"));
+$("rain-slides-lecture").addEventListener("change", () => chooseRainLecture("rain-slides"));
+$("rain-recording-lecture").addEventListener("change", () => chooseRainLecture("rain-recording"));
 $("import-form").addEventListener("submit", async (event) => {
   event.preventDefault(); notice(""); $("import-button").disabled = true;
   const slidesFromRain = $("slides-source-mode").value === "rain";

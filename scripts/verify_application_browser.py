@@ -179,30 +179,56 @@ def main():
             page.locator("#new-lecture").click()
             page.route("**/api/rain-classroom/connect", lambda route: route.fulfill(json={"opened": True}))
             page.route("**/api/rain-classroom/logout", lambda route: route.fulfill(json={"logged_out": True}))
-            page.route("**/api/rain-classroom/courses", lambda route: route.fulfill(json=[{
-                "classroom_id": 3195306, "course_name": "程序设计训练", "classroom_name": "Rust 语言",
+            page.route("**/api/rain-classroom/courses", lambda route: route.fulfill(json=[
+                {"classroom_id": 3195306, "course_name": "程序设计训练", "classroom_name": "Rust 语言"},
+                {"classroom_id": 42, "course_name": "只有课件的课程", "classroom_name": ""},
+            ]))
+            page.route("**/api/rain-classroom/courses/42/lectures", lambda route: route.fulfill(json=[{
+                "lesson_id": "slides-only", "title": "只有课件", "has_recording": False, "presentation_count": 1,
             }]))
-            page.route("**/api/rain-classroom/courses/3195306/lectures", lambda route: route.fulfill(json=[{
-                "lesson_id": "1765600343592779520", "title": "⑥并发编程",
-            }]))
+            page.route("**/api/rain-classroom/courses/3195306/lectures", lambda route: route.fulfill(json=[
+                {"lesson_id": "1765600343592779520", "title": "⑥并发编程", "has_recording": False, "presentation_count": 1},
+                {"lesson_id": "recording-only", "title": "录像补充", "has_recording": True, "presentation_count": 0},
+                {"lesson_id": "both-multiple", "title": "多课件讲次", "has_recording": True, "presentation_count": 2},
+            ]))
             page.route("**/api/rain-classroom/courses/3195306/lectures/1765600343592779520/presentations", lambda route: route.fulfill(json=[{
                 "presentation_id": "1765600451302821888", "title": "06-concurrency", "page_count": 80,
             }]))
+            page.route("**/api/rain-classroom/courses/3195306/lectures/both-multiple/presentations", lambda route: route.fulfill(json=[
+                {"presentation_id": "deck-a", "title": "主课件", "page_count": 60},
+                {"presentation_id": "deck-b", "title": "补充课件", "page_count": 12},
+            ]))
             page.locator("#slides-source-mode").select_option("rain")
             assert page.locator("#rain-classroom-import").is_visible()
             assert page.locator('[name="slides"]').is_disabled()
             assert not page.locator('[name="transcript"]').is_disabled()
             page.locator("#rain-authenticated").wait_for(state="visible")
             assert page.locator("#rain-connect").is_hidden()
+            page.locator("#rain-slides-course").select_option("42")
+            page.wait_for_function("document.getElementById('rain-recording-course').value === '42'")
+            page.wait_for_function("document.getElementById('rain-recording-lecture').options[0].textContent === '无可导入讲次'")
+            assert page.locator("#rain-slides-lecture").locator("option").count() == 2
             page.locator("#rain-slides-course").select_option("3195306")
             page.wait_for_function("document.getElementById('rain-recording-course').value === '3195306'")
             page.locator("#rain-slides-lecture").select_option("1765600343592779520")
             page.wait_for_function("document.getElementById('rain-recording-lecture').value === '1765600343592779520'")
-            page.locator("#rain-presentation").select_option("1765600451302821888")
+            assert page.locator("#rain-recording-unavailable").evaluate("element => !element.hidden")
+            assert page.locator("#rain-slides-unavailable").evaluate("element => element.hidden")
+            page.wait_for_function("document.getElementById('rain-presentation').value === '1765600451302821888'")
+            assert page.locator("#rain-presentation-label").is_hidden()
             assert "80 页" in page.locator("#rain-presentation").locator("option:checked").inner_text()
             page.locator("#lecture-source-mode").select_option("rain")
             assert page.locator('[name="transcript"]').is_disabled()
             assert page.locator('[name="recording"]').is_disabled()
+            page.locator("#rain-slides-lecture").select_option("both-multiple")
+            page.wait_for_function("document.getElementById('rain-recording-lecture').value === 'both-multiple'")
+            page.locator("#rain-presentation-label").wait_for(state="visible")
+            assert page.locator("#rain-presentation").locator("option").count() == 3
+            page.locator("#rain-recording-lecture").select_option("recording-only")
+            page.wait_for_function("document.getElementById('rain-slides-lecture').value === 'recording-only'")
+            page.locator("#rain-slides-unavailable").wait_for(state="visible")
+            assert page.locator("#rain-recording-unavailable").evaluate("element => element.hidden")
+            page.locator("#rain-slides-lecture").select_option("1765600343592779520")
             assert page.locator('[name="name"]').input_value() == "⑥并发编程"
             page.evaluate("renderRainDownloadProgress({resource: 'slides', phase: 'downloading', downloaded_bytes: 26214400, total_bytes: null, completed_items: 20, total_items: 80})")
             assert page.locator("#rain-download").is_visible()
@@ -220,8 +246,10 @@ def main():
             page.unroute("**/api/rain-classroom/connect")
             page.unroute("**/api/rain-classroom/logout")
             page.unroute("**/api/rain-classroom/courses")
+            page.unroute("**/api/rain-classroom/courses/42/lectures")
             page.unroute("**/api/rain-classroom/courses/3195306/lectures")
             page.unroute("**/api/rain-classroom/courses/3195306/lectures/1765600343592779520/presentations")
+            page.unroute("**/api/rain-classroom/courses/3195306/lectures/both-multiple/presentations")
             page.locator("#slides-source-mode").select_option("upload")
             page.locator("#lecture-source-mode").select_option("recording")
             assert page.locator('[name="transcript"]').is_disabled()

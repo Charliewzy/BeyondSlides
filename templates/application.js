@@ -11,6 +11,9 @@ let rainLoginTimer;
 let rainSessionChecked = false;
 let rainDownloadTimer;
 let activeRainImportId;
+let rainLectures = [];
+let rainSelectedLessonId = "";
+let rainLectureRequest = 0;
 
 function showReviewPage(page, source) {
   $("review-page-title").textContent = `第 ${page.page} 页`;
@@ -352,16 +355,21 @@ function setRainAuthenticated(authenticated) {
   $("rain-connect").hidden = authenticated;
 }
 function clearRainSelections() {
+  rainLectures = []; rainSelectedLessonId = ""; rainLectureRequest += 1;
   for (const prefix of ["rain-slides", "rain-recording"]) {
     $(`${prefix}-course`).disabled = true;
     $(`${prefix}-course`).replaceChildren(new Option("先加载课程", ""));
     $(`${prefix}-lecture`).disabled = true;
     $(`${prefix}-lecture`).replaceChildren(new Option("先选择课程", ""));
   }
+  $("rain-slides-unavailable").hidden = true;
+  $("rain-recording-unavailable").hidden = true;
+  $("rain-presentation-label").hidden = true;
   $("rain-presentation").disabled = true;
   $("rain-presentation").replaceChildren(new Option("先选择讲次", ""));
 }
 function showRainCourses(courses) {
+  rainLectures = []; rainSelectedLessonId = ""; rainLectureRequest += 1;
   for (const prefix of ["rain-slides", "rain-recording"]) {
     const select = $(`${prefix}-course`); select.replaceChildren(new Option("请选择课程", ""));
     for (const course of courses) {
@@ -372,9 +380,12 @@ function showRainCourses(courses) {
     $(`${prefix}-lecture`).disabled = true;
     $(`${prefix}-lecture`).replaceChildren(new Option("先选择课程", ""));
   }
+  $("rain-slides-unavailable").hidden = true;
+  $("rain-recording-unavailable").hidden = true;
+  $("rain-presentation-label").hidden = true;
   $("rain-presentation").disabled = true;
   $("rain-presentation").replaceChildren(new Option("先选择讲次", ""));
-  $("rain-status").textContent = courses.length ? "请选择课程。" : "当前账号没有可导入的课程。";
+  $("rain-status").textContent = courses.length ? "" : "当前账号没有可导入的课程。";
   setRainAuthenticated(true);
 }
 function refreshRainLoginView() {
@@ -426,82 +437,101 @@ $("rain-logout").addEventListener("click", async () => {
 });
 $("rain-login-close").addEventListener("click", () => $("rain-login-dialog").close());
 $("rain-login-dialog").addEventListener("close", () => clearTimeout(rainLoginTimer));
-async function loadRainLectures(prefix) {
-  const classroomId = $(`${prefix}-course`).value;
-  const select = $(`${prefix}-lecture`); select.disabled = true;
-  select.replaceChildren(new Option(classroomId ? "正在加载讲次…" : "先选择课程", ""));
-  if (prefix === "rain-slides") {
-    $("rain-presentation").disabled = true;
-    $("rain-presentation").replaceChildren(new Option("先选择讲次", ""));
+function supportsRainSource(prefix, lecture) {
+  return prefix === "rain-slides" ? lecture.presentation_count > 0 : lecture.has_recording;
+}
+function renderRainLectureSelect(prefix) {
+  const select = $(`${prefix}-lecture`);
+  const available = rainLectures.filter(lecture => supportsRainSource(prefix, lecture));
+  const selected = rainLectures.find(lecture => lecture.lesson_id === rainSelectedLessonId);
+  const placeholder = available.length ? "请选择讲次" : "无可导入讲次";
+  select.replaceChildren(new Option(placeholder, ""));
+  for (const lecture of available) {
+    const option = new Option(lecture.title, lecture.lesson_id); option.dataset.title = lecture.title; select.add(option);
   }
+  if (selected && !available.some(lecture => lecture.lesson_id === selected.lesson_id)) {
+    const option = new Option(selected.title, selected.lesson_id); option.dataset.title = selected.title; select.add(option);
+  }
+  select.value = rainSelectedLessonId;
+  select.disabled = !available.length && !selected;
+}
+function renderRainAvailability() {
+  const lecture = rainLectures.find(candidate => candidate.lesson_id === rainSelectedLessonId);
+  $("rain-slides-unavailable").hidden = !lecture || lecture.presentation_count > 0;
+  $("rain-recording-unavailable").hidden = !lecture || lecture.has_recording;
+}
+async function loadRainLectures(classroomId) {
+  const request = ++rainLectureRequest;
+  rainLectures = []; rainSelectedLessonId = "";
+  for (const prefix of ["rain-slides", "rain-recording"]) {
+    const select = $(`${prefix}-lecture`); select.disabled = true;
+    select.replaceChildren(new Option(classroomId ? "正在加载讲次…" : "先选择课程", ""));
+  }
+  renderRainAvailability();
+  $("rain-presentation-label").hidden = true;
+  $("rain-presentation").disabled = true;
+  $("rain-presentation").replaceChildren(new Option("先选择讲次", ""));
   if (!classroomId) return;
-  $("rain-status").textContent = "正在加载讲次…";
   try {
     const lectures = await api(`/api/rain-classroom/courses/${classroomId}/lectures`);
-    select.replaceChildren(new Option("请选择讲次", ""));
-    for (const lecture of lectures) {
-      const option = new Option(lecture.title, lecture.lesson_id); option.dataset.title = lecture.title; select.add(option);
+    if (request !== rainLectureRequest) return;
+    rainLectures = lectures;
+    renderRainLectureSelect("rain-slides"); renderRainLectureSelect("rain-recording");
+    $("rain-status").textContent = "";
+  } catch (error) {
+    if (request !== rainLectureRequest) return;
+    setRainAuthenticated(false);
+    for (const prefix of ["rain-slides", "rain-recording"]) {
+      const select = $(`${prefix}-lecture`); select.replaceChildren(new Option("加载失败", ""));
     }
-    select.disabled = false; $("rain-status").textContent = lectures.length ? "请选择一堂课。" : "这门课程没有可导入的课堂录像。";
-  } catch (error) { setRainAuthenticated(false); select.replaceChildren(new Option("加载失败", "")); $("rain-status").textContent = `${error.message}。请重新扫码登录。`; }
-}
-function otherRainSource(prefix) {
-  return prefix === "rain-slides" ? "rain-recording" : "rain-slides";
+    $("rain-status").textContent = `${error.message}。请重新扫码登录。`;
+  }
 }
 async function chooseRainCourse(prefix) {
   const classroomId = $(`${prefix}-course`).value;
-  const otherPrefix = otherRainSource(prefix);
-  const otherCourse = $(`${otherPrefix}-course`);
-  if (classroomId && !otherCourse.value) {
-    otherCourse.value = classroomId;
-    await Promise.all([loadRainLectures(prefix), loadRainLectures(otherPrefix)]);
-  } else {
-    await loadRainLectures(prefix);
-  }
+  $("rain-slides-course").value = classroomId;
+  $("rain-recording-course").value = classroomId;
+  await loadRainLectures(classroomId);
 }
 async function loadRainPresentationOptions() {
   const classroomId = $("rain-slides-course").value;
   const lessonId = $("rain-slides-lecture").value;
+  const expectedLessonId = lessonId;
+  const label = $("rain-presentation-label"); label.hidden = true;
   const select = $("rain-presentation"); select.disabled = true;
   select.replaceChildren(new Option(lessonId ? "正在加载课件…" : "先选择讲次", ""));
   if (!classroomId || !lessonId) return;
+  const lecture = rainLectures.find(candidate => candidate.lesson_id === lessonId);
+  if (!lecture?.presentation_count) return;
   try {
     const presentations = await api(`/api/rain-classroom/courses/${classroomId}/lectures/${lessonId}/presentations`);
+    if (rainSelectedLessonId !== expectedLessonId) return;
     select.replaceChildren(new Option("请选择课件", ""));
     for (const presentation of presentations) {
       select.add(new Option(`${presentation.title || "未命名课件"} · ${presentation.page_count} 页`, presentation.presentation_id));
     }
-    select.disabled = false;
-    $("rain-status").textContent = presentations.length ? "请选择一份课件。" : "这堂课没有可导入的课件。";
-  } catch (error) { select.replaceChildren(new Option("加载失败", "")); $("rain-status").textContent = error.message; }
-}
-function useRainLectureAsName() {
-  const title = $("rain-recording-lecture").selectedOptions[0]?.dataset.title;
-  const name = document.querySelector('[name="name"]');
-  if (title && !name.value.trim()) name.value = title;
-}
-async function applyRainLectureSelection(prefix) {
-  if (prefix === "rain-slides") await loadRainPresentationOptions();
-  else useRainLectureAsName();
-}
-async function mirrorRainLecture(prefix) {
-  const classroomId = $(`${prefix}-course`).value;
-  const lessonId = $(`${prefix}-lecture`).value;
-  const otherPrefix = otherRainSource(prefix);
-  const otherCourse = $(`${otherPrefix}-course`);
-  const otherLecture = $(`${otherPrefix}-lecture`);
-  if (!classroomId || !lessonId || otherLecture.value) return;
-  if (otherCourse.value && otherCourse.value !== classroomId) return;
-  if (!otherCourse.value) otherCourse.value = classroomId;
-  if (otherLecture.disabled || !Array.from(otherLecture.options).some(option => option.value === lessonId)) {
-    await loadRainLectures(otherPrefix);
+    if (presentations.length === 1) {
+      select.value = presentations[0].presentation_id;
+    } else if (presentations.length > 1) {
+      select.disabled = false; label.hidden = false;
+    } else {
+      $("rain-slides-unavailable").hidden = false;
+    }
+    $("rain-status").textContent = "";
+  } catch (error) {
+    if (rainSelectedLessonId !== expectedLessonId) return;
+    label.hidden = false; select.replaceChildren(new Option("加载失败", ""));
+    $("rain-status").textContent = error.message;
   }
-  if (!Array.from(otherLecture.options).some(option => option.value === lessonId)) return;
-  otherLecture.value = lessonId;
-  await applyRainLectureSelection(otherPrefix);
 }
 async function chooseRainLecture(prefix) {
-  await Promise.all([applyRainLectureSelection(prefix), mirrorRainLecture(prefix)]);
+  rainSelectedLessonId = $(`${prefix}-lecture`).value;
+  renderRainLectureSelect("rain-slides"); renderRainLectureSelect("rain-recording");
+  renderRainAvailability();
+  const lecture = rainLectures.find(candidate => candidate.lesson_id === rainSelectedLessonId);
+  const name = document.querySelector('[name="name"]');
+  if (lecture && !name.value.trim()) name.value = lecture.title;
+  await loadRainPresentationOptions();
 }
 $("rain-slides-course").addEventListener("change", () => chooseRainCourse("rain-slides"));
 $("rain-recording-course").addEventListener("change", () => chooseRainCourse("rain-recording"));

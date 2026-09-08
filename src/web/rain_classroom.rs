@@ -44,6 +44,8 @@ pub(super) struct Course {
 pub(super) struct Lecture {
     pub lesson_id: String,
     pub title: String,
+    pub has_recording: bool,
+    pub presentation_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -243,6 +245,23 @@ impl RainClassroom {
     }
 
     pub async fn lectures(&self, classroom_id: u64) -> Result<Vec<Lecture>, String> {
+        let mut lectures = self.lecture_catalog(classroom_id).await?;
+        let lesson_ids: Vec<_> = lectures
+            .iter()
+            .map(|lecture| lecture.lesson_id.clone())
+            .collect();
+        let availability = self.lecture_availability(&lesson_ids).await?;
+        for lecture in &mut lectures {
+            let Some(details) = availability.get(&lecture.lesson_id) else {
+                return Err("Rain Classroom omitted lecture availability information".into());
+            };
+            lecture.has_recording = details.has_recording;
+            lecture.presentation_count = details.presentation_count;
+        }
+        Ok(lectures)
+    }
+
+    async fn lecture_catalog(&self, classroom_id: u64) -> Result<Vec<Lecture>, String> {
         let script = format!(
             "async function() {{ const response = await (await fetch('/v2/api/web/logs/learn/{classroom_id}?actype=-1&page=0&offset=100&sort=-1', {{credentials: 'include'}})).json(); const valid = Array.isArray(response.data?.activities); return {{errcode: valid ? Number(response.errcode ?? response.code ?? 0) : -1, errmsg: String(response.errmsg ?? response.msg ?? ''), data: {{activities: valid ? response.data.activities : []}}}}; }}"
         );
@@ -261,10 +280,46 @@ impl RainClassroom {
                     .title
                     .filter(|title| !title.trim().is_empty())
                     .unwrap_or_else(|| "未命名讲次".into()),
+                has_recording: false,
+                presentation_count: 0,
             })
             .collect();
         lectures.reverse();
         Ok(lectures)
+    }
+
+    async fn lecture_availability(
+        &self,
+        lesson_ids: &[String],
+    ) -> Result<HashMap<String, LectureAvailability>, String> {
+        if lesson_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        for lesson_id in lesson_ids {
+            validate_identifier(lesson_id, "lecture")?;
+        }
+        let lesson_ids = serde_json::to_string(lesson_ids).map_err(provider_error)?;
+        let script = [
+            "async function() { const lessonIds = ",
+            &lesson_ids,
+            "; return await Promise.all(lessonIds.map(async lesson_id => { const response = await (await fetch('/api/v3/classroom-report/replay?lesson_id=' + encodeURIComponent(lesson_id) + '&canFakeLive=1&front_time=' + Date.now(), {credentials: 'include'})).json(); const data = response.data ?? null; const live = Array.isArray(data?.live) ? data.live : []; const presentations = Array.isArray(data?.presentations) ? data.presentations : []; return {lesson_id, code: Number(response.code ?? response.errcode ?? -1), message: String(response.msg ?? response.errmsg ?? ''), has_recording: Number(data?.showPlayback ?? 0) === 1 && live.some(entry => Number(entry.hiddenStatus ?? 0) === 0 && String(entry.url ?? '') !== ''), presentation_count: presentations.length}; })); }",
+        ]
+        .concat();
+        let records: Vec<LectureAvailabilityRecord> = self.evaluate(&script).await?;
+        let mut availability = HashMap::with_capacity(records.len());
+        for record in records {
+            if record.code != 0 {
+                return Err(login_error(&record.message));
+            }
+            availability.insert(
+                record.lesson_id,
+                LectureAvailability {
+                    has_recording: record.has_recording,
+                    presentation_count: record.presentation_count,
+                },
+            );
+        }
+        Ok(availability)
     }
 
     pub async fn presentations(
@@ -579,7 +634,7 @@ impl RainClassroom {
     async fn validate_lecture(&self, selection: &LectureSelection) -> Result<(), String> {
         validate_identifier(&selection.lesson_id, "lecture")?;
         if !self
-            .lectures(selection.classroom_id)
+            .lecture_catalog(selection.classroom_id)
             .await?
             .iter()
             .any(|lecture| lecture.lesson_id == selection.lesson_id)
@@ -809,6 +864,20 @@ struct ActivityRecord {
 }
 
 #[derive(Deserialize)]
+struct LectureAvailabilityRecord {
+    lesson_id: String,
+    code: i64,
+    message: String,
+    has_recording: bool,
+    presentation_count: usize,
+}
+
+struct LectureAvailability {
+    has_recording: bool,
+    presentation_count: usize,
+}
+
+#[derive(Deserialize)]
 struct ReplayResponse {
     code: i64,
     #[serde(default)]
@@ -990,6 +1059,8 @@ mod tests {
         let public = serde_json::to_value(Lecture {
             lesson_id: "lesson".into(),
             title: "并发编程".into(),
+            has_recording: true,
+            presentation_count: 1,
         })
         .unwrap();
         assert!(public.get("segments").is_none());

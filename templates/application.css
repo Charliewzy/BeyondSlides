@@ -61,6 +61,7 @@ input[type=file] { font-size: 12px; }
 .provider-import h3 { color: inherit; margin-top: 0; }
 .provider-import .actions { margin: 0 0 18px; }
 .provider-import .provider-grid label { margin-bottom: 0; }
+.source-unavailable { color: #b13f32; font-size: 12px; line-height: 1.6; margin: -10px 0 18px; }
 .session-status { align-self: center; color: #28765f; font-size: 13px; font-weight: 700; }
 .compact { padding: 5px 9px; font-size: 11px; }
 .import-progress { margin-top: 16px; }

@@ -169,8 +169,10 @@ fn model_files_are_valid(paths: &ModelPaths) -> Result<bool, io::Error> {
 }
 
 struct SpeechRegion {
-    start_sample: usize,
-    end_sample: usize,
+    input_start_sample: usize,
+    input_end_sample: usize,
+    owned_start_sample: usize,
+    owned_end_sample: usize,
 }
 
 struct RecognizedRegion {
@@ -210,7 +212,7 @@ pub(super) fn transcribe(
     }
     let total_speech_ms = regions
         .iter()
-        .map(|region| samples_to_ms(region.end_sample - region.start_sample))
+        .map(|region| samples_to_ms(region.input_end_sample - region.input_start_sample))
         .sum();
     report(RecognitionProgress {
         phase: "recognizing",
@@ -228,20 +230,17 @@ pub(super) fn transcribe(
         let stream = recognizer.create_stream();
         stream.accept_waveform(
             SAMPLE_RATE,
-            &wave.samples()[region.start_sample..region.end_sample],
+            &wave.samples()[region.input_start_sample..region.input_end_sample],
         );
         recognizer.decode(&stream);
         let result = stream
             .get_result()
             .ok_or("Sherpa returned no recognition result")?;
-        completed_speech_ms = completed_speech_ms
-            .saturating_add(samples_to_ms(region.end_sample - region.start_sample));
+        completed_speech_ms = completed_speech_ms.saturating_add(samples_to_ms(
+            region.input_end_sample - region.input_start_sample,
+        ));
         if !result.text.trim().is_empty() {
-            recognized_regions.push(convert_result(
-                samples_to_ms(region.start_sample),
-                samples_to_ms(region.end_sample),
-                result,
-            ));
+            recognized_regions.push(convert_result(region, result));
         }
         report(RecognitionProgress {
             phase: "recognizing",
@@ -308,24 +307,19 @@ fn detect_speech(
     detector.flush();
     drain_regions(&detector, &mut detected);
 
-    let mut padded: Vec<SpeechRegion> = Vec::with_capacity(detected.len());
-    for (start, end) in detected {
-        let start = start.saturating_sub(VAD_PADDING_SAMPLES);
-        let end = end
-            .saturating_add(VAD_PADDING_SAMPLES)
-            .min(wave.samples().len());
-        if let Some(previous) = padded.last_mut()
-            && start <= previous.end_sample
-        {
-            previous.end_sample = previous.end_sample.max(end);
-        } else {
-            padded.push(SpeechRegion {
-                start_sample: start,
-                end_sample: end,
-            });
-        }
-    }
-    Ok(padded)
+    Ok(expand_speech_regions(detected, wave.samples().len()))
+}
+
+fn expand_speech_regions(detected: Vec<(usize, usize)>, sample_count: usize) -> Vec<SpeechRegion> {
+    detected
+        .into_iter()
+        .map(|(start, end)| SpeechRegion {
+            input_start_sample: start.saturating_sub(VAD_PADDING_SAMPLES),
+            input_end_sample: end.saturating_add(VAD_PADDING_SAMPLES).min(sample_count),
+            owned_start_sample: start,
+            owned_end_sample: end,
+        })
+        .collect()
 }
 
 fn drain_regions(detector: &VoiceActivityDetector, regions: &mut Vec<(usize, usize)>) {
@@ -354,32 +348,30 @@ fn create_recognizer(model: &Path, tokens: &Path) -> Result<OfflineRecognizer, B
 }
 
 fn convert_result(
-    region_start_ms: u64,
-    region_end_ms: u64,
+    region: &SpeechRegion,
     result: sherpa_onnx::OfflineRecognizerResult,
 ) -> RecognizedRegion {
+    let input_start_ms = samples_to_ms(region.input_start_sample);
+    let input_end_ms = samples_to_ms(region.input_end_sample);
+    let owned_start_ms = samples_to_ms(region.owned_start_sample);
+    let owned_end_ms = samples_to_ms(region.owned_end_sample);
     let timestamps = result.timestamps.unwrap_or_default();
     let durations = result.durations.unwrap_or_default();
     let complete = !result.tokens.is_empty() && timestamps.len() == result.tokens.len();
-    let expected_timed_tokens = result
-        .tokens
-        .iter()
-        .filter(|text| !text.trim().is_empty())
-        .count();
-    let mut previous_end = region_start_ms;
+    let mut previous_end = input_start_ms;
     let tokens = if complete {
         result
             .tokens
             .iter()
             .enumerate()
             .filter_map(|(index, text)| {
-                if text.trim().is_empty() || previous_end >= region_end_ms {
+                if text.trim().is_empty() || previous_end >= input_end_ms {
                     return None;
                 }
-                let start = region_start_ms
+                let start = input_start_ms
                     .saturating_add((f64::from(timestamps[index]) * 1_000.0).round() as u64)
                     .max(previous_end)
-                    .min(region_end_ms - 1);
+                    .min(input_end_ms - 1);
                 let suggested_end = durations
                     .get(index)
                     .map(|duration| {
@@ -387,13 +379,22 @@ fn convert_result(
                     })
                     .or_else(|| {
                         timestamps.get(index + 1).map(|next| {
-                            region_start_ms
+                            input_start_ms
                                 .saturating_add((f64::from(*next) * 1_000.0).round() as u64)
                         })
                     })
-                    .unwrap_or(region_end_ms);
-                let end = suggested_end.max(start + 1).min(region_end_ms);
+                    .unwrap_or(input_end_ms);
+                let end = suggested_end.max(start + 1).min(input_end_ms);
                 previous_end = end;
+                let midpoint = start + (end - start) / 2;
+                if midpoint < owned_start_ms || midpoint >= owned_end_ms {
+                    return None;
+                }
+                let start = start.max(owned_start_ms);
+                let end = end.min(owned_end_ms);
+                if start >= end {
+                    return None;
+                }
                 Some(TimedTranscriptToken {
                     text: text.clone(),
                     start_ms: start,
@@ -408,18 +409,13 @@ fn convert_result(
         .iter()
         .map(|token| token.text.as_str())
         .collect::<String>();
-    let has_complete_token_timing = complete && tokens.len() == expected_timed_tokens;
-    let text = if has_complete_token_timing && !token_text.is_empty() {
-        token_text
-    } else {
-        result.text
-    };
+    let text = if complete { token_text } else { result.text };
     RecognizedRegion {
-        start_ms: region_start_ms,
-        end_ms: region_end_ms,
+        start_ms: owned_start_ms,
+        end_ms: owned_end_ms,
         text,
         tokens,
-        has_complete_token_timing,
+        has_complete_token_timing: complete,
     }
 }
 
@@ -578,6 +574,53 @@ mod tests {
         assert!(timing.tokens.is_empty());
     }
 
+    #[test]
+    fn expands_adjacent_vad_regions_without_merging_them() {
+        let second = SAMPLE_RATE as usize;
+        let regions = expand_speech_regions(
+            vec![(second, 31 * second), (31 * second, 61 * second)],
+            62 * second,
+        );
+
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0].input_start_sample, 0);
+        assert_eq!(regions[0].input_end_sample, 32 * second);
+        assert_eq!(regions[0].owned_end_sample, 31 * second);
+        assert_eq!(regions[1].input_start_sample, 30 * second);
+        assert_eq!(regions[1].input_end_sample, 62 * second);
+        assert_eq!(regions[1].owned_start_sample, 31 * second);
+    }
+
+    #[test]
+    fn assigns_tokens_from_overlapping_padding_to_their_owned_region() {
+        let second = SAMPLE_RATE as usize;
+        let left = SpeechRegion {
+            input_start_sample: 0,
+            input_end_sample: 31 * second,
+            owned_start_sample: 0,
+            owned_end_sample: 30 * second,
+        };
+        let right = SpeechRegion {
+            input_start_sample: 29 * second,
+            input_end_sample: 61 * second,
+            owned_start_sample: 30 * second,
+            owned_end_sample: 60 * second,
+        };
+
+        let left = convert_result(
+            &left,
+            recognition_result(&["左", "重复"], &[29.0, 30.0], &[0.4, 0.4]),
+        );
+        let right = convert_result(
+            &right,
+            recognition_result(&["重复", "右"], &[0.0, 1.2], &[0.4, 0.4]),
+        );
+
+        assert_eq!(left.text, "左");
+        assert_eq!(right.text, "右");
+        assert!(left.tokens[0].end_ms <= right.tokens[0].start_ms);
+    }
+
     /// Manual production smoke test. It is ignored in CI because model weights
     /// and a five-minute recording are intentionally not repository assets.
     #[test]
@@ -621,6 +664,19 @@ mod tests {
             text: text.into(),
             start_ms,
             end_ms,
+        }
+    }
+
+    fn recognition_result(
+        tokens: &[&str],
+        timestamps: &[f32],
+        durations: &[f32],
+    ) -> sherpa_onnx::OfflineRecognizerResult {
+        sherpa_onnx::OfflineRecognizerResult {
+            text: tokens.concat(),
+            tokens: tokens.iter().map(|token| (*token).into()).collect(),
+            timestamps: Some(timestamps.to_vec()),
+            durations: Some(durations.to_vec()),
         }
     }
 }

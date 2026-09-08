@@ -21,11 +21,15 @@ mono PCM. The worker downloads pinned model assets on first use, verifies fixed
 SHA-256 digests, caches them once per application data directory, and resumes
 partial downloads. A file lock serializes concurrent model installation.
 
-Detected speech regions retain one second of surrounding audio and overlapping
-regions are merged before recognition. SenseVoice token timing becomes the
-timed transcript when every recognized region supplies a complete valid timing
-sequence; otherwise downstream playback uses transcript-segment timing. Existing
-validated transcription checkpoints remain compatible and reusable.
+Detected speech regions retain one second of surrounding audio as recognition
+context, but padded regions are never merged. Each region owns only its original
+unexpanded interval, and a recognized token is retained only when its timestamp
+midpoint falls inside that interval. This keeps recognition inputs bounded while
+preventing adjacent padded inputs from duplicating timed tokens. SenseVoice token
+timing becomes the timed transcript when every recognized region supplies a
+complete valid timing sequence; otherwise downstream playback uses
+transcript-segment timing. Existing validated transcription checkpoints remain
+compatible and reusable.
 
 The sherpa native runtime is statically linked. This avoids requiring users to
 discover and ship an adjacent `libsherpa-onnx-c-api` shared library when running

@@ -377,14 +377,14 @@ impl ComparativeRankingTask {
             }
             actual.insert(decision.comparison_id, decision);
         }
-        if actual.len() != expected.len() {
-            let missing = expected
-                .keys()
-                .find(|comparison_id| !actual.contains_key(comparison_id))
-                .copied()
-                .expect("different comparison counts imply one missing ID");
-            return Err(ComparativeRankingValidationError::MissingComparison {
-                comparison_id: missing,
+        let missing = expected
+            .keys()
+            .filter(|comparison_id| !actual.contains_key(comparison_id))
+            .copied()
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(ComparativeRankingValidationError::MissingComparisons {
+                comparison_ids: missing,
             });
         }
         Ok(self
@@ -980,8 +980,8 @@ pub enum ComparativeRankingValidationError {
     DuplicateComparison {
         comparison_id: usize,
     },
-    MissingComparison {
-        comparison_id: usize,
+    MissingComparisons {
+        comparison_ids: Vec<usize>,
     },
     PassageOutsideComparison {
         comparison_id: usize,
@@ -1021,9 +1021,18 @@ impl fmt::Display for ComparativeRankingValidationError {
                     "comparison {comparison_id} was returned more than once"
                 )
             }
-            Self::MissingComparison { comparison_id } => {
-                write!(formatter, "comparison {comparison_id} is missing")
-            }
+            Self::MissingComparisons { comparison_ids } => match comparison_ids.as_slice() {
+                [comparison_id] => write!(formatter, "comparison {comparison_id} is missing"),
+                _ => write!(
+                    formatter,
+                    "comparisons {} are missing",
+                    comparison_ids
+                        .iter()
+                        .map(usize::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            },
             Self::PassageOutsideComparison {
                 comparison_id,
                 passage_id,
@@ -1241,6 +1250,24 @@ mod tests {
                 passage_id: 9,
             }
         );
+    }
+
+    #[test]
+    fn task_validation_reports_every_missing_comparison() {
+        let task = ranking_task(
+            ComparativeMetric::Importance,
+            vec![
+                planned(7, [0, 1, 2, 3]),
+                planned(8, [4, 5, 6, 7]),
+                planned(9, [8, 9, 10, 11]),
+            ],
+        );
+
+        let error = task
+            .validate_decisions(vec![decision(7, 0, 3)])
+            .expect_err("two omitted comparisons must be rejected together");
+
+        assert_eq!(error.to_string(), "comparisons 8, 9 are missing");
     }
 
     #[test]

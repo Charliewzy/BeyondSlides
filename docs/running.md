@@ -59,10 +59,13 @@ other users' traffic. See the [experiment](evaluation/adaptive-request-schedulin
 
 Transient provider failures retain bounded retries: two retries per restoration
 request, five per passage-preparation or comparison request. Invalid structured
-responses allow two repair attempts. These are separate budgets, not unlimited
-retries. A failed run retains its completed, validated checkpoints. Retry-After
-accepts seconds or HTTP dates; long valid advice is not clipped. Retry jitter
-helps stagger independent clients, and absent advice uses bounded backoff.
+responses first allow two in-conversation repair attempts. Restored annotation
+text-integrity failures and invalid importance or novelty comparison batches
+then allow up to five clean conversations. These are separate budgets, not
+unlimited retries. A failed run retains its completed, validated checkpoints.
+Retry-After accepts seconds or HTTP dates; long valid advice is not clipped.
+Retry jitter helps stagger independent clients, and absent advice uses bounded
+backoff.
 
 The progress message shows the effective HTTP cap/ceiling and current spacing
 after each completed work item. `request-scheduling.json` records a cumulative

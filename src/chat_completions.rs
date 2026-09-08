@@ -46,6 +46,7 @@ use crate::{
 const DEFAULT_MAX_TOOL_ROUNDS: usize = 4;
 const DEFAULT_MAX_FINAL_ANSWER_REPAIRS: usize = 2;
 const DEFAULT_MAX_FRESH_ANNOTATION_RETRIES: usize = 5;
+const DEFAULT_MAX_FRESH_COMPARISON_RETRIES: usize = 5;
 const DEFAULT_MAX_SEARCH_RESULTS: usize = 5;
 const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 4096;
 const MAX_PROVIDER_ERROR_CHARACTERS: usize = 2_000;
@@ -62,6 +63,7 @@ pub struct ChatCompletionsConfig {
     max_tool_rounds: usize,
     max_final_answer_repairs: usize,
     max_fresh_annotation_retries: usize,
+    max_fresh_comparison_retries: usize,
     max_search_results: usize,
     max_output_tokens: u32,
     max_provider_retries: usize,
@@ -107,6 +109,7 @@ impl ChatCompletionsConfig {
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
             max_final_answer_repairs: DEFAULT_MAX_FINAL_ANSWER_REPAIRS,
             max_fresh_annotation_retries: DEFAULT_MAX_FRESH_ANNOTATION_RETRIES,
+            max_fresh_comparison_retries: DEFAULT_MAX_FRESH_COMPARISON_RETRIES,
             max_search_results: DEFAULT_MAX_SEARCH_RESULTS,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             max_provider_retries: 0,
@@ -136,6 +139,16 @@ impl ChatCompletionsConfig {
         max_fresh_annotation_retries: usize,
     ) -> Self {
         self.max_fresh_annotation_retries = max_fresh_annotation_retries;
+        self
+    }
+
+    /// Limits clean retries after a comparative-ranking batch remains invalid
+    /// after its in-conversation repairs. Zero disables clean retries.
+    pub const fn with_max_fresh_comparison_retries(
+        mut self,
+        max_fresh_comparison_retries: usize,
+    ) -> Self {
+        self.max_fresh_comparison_retries = max_fresh_comparison_retries;
         self
     }
 
@@ -259,6 +272,7 @@ pub struct ChatCompletionsClient {
     max_tool_rounds: usize,
     max_final_answer_repairs: usize,
     max_fresh_annotation_retries: usize,
+    max_fresh_comparison_retries: usize,
     max_search_results: usize,
     max_provider_retries: usize,
     request_scheduler: RequestScheduler,
@@ -293,6 +307,7 @@ impl ChatCompletionsClient {
             max_tool_rounds: config.max_tool_rounds,
             max_final_answer_repairs: config.max_final_answer_repairs,
             max_fresh_annotation_retries: config.max_fresh_annotation_retries,
+            max_fresh_comparison_retries: config.max_fresh_comparison_retries,
             max_search_results: config.max_search_results,
             max_provider_retries: config.max_provider_retries,
             request_scheduler: config.request_scheduler,
@@ -435,21 +450,67 @@ impl ChatCompletionsClient {
         let message = task
             .message()
             .map_err(ChatCompletionsError::SerializeTask)?;
-        let request = ChatRequest::from_user(message.input).with_system(message.instructions);
-        let outcome = self
-            .run_conversation(
-                request,
-                ComparativeRankingWorkflow { task },
-                self.max_final_answer_repairs,
-            )
-            .await?;
+        let total_attempts = self.max_fresh_comparison_retries.saturating_add(1);
+        let mut fresh_retry = 0;
+        let mut previous_error: Option<String> = None;
+        loop {
+            let instructions = previous_error.as_ref().map_or_else(
+                || message.instructions.to_owned(),
+                |error| {
+                    fresh_comparative_retry_instructions(
+                        message.instructions,
+                        fresh_retry,
+                        self.max_fresh_comparison_retries,
+                        error,
+                    )
+                },
+            );
+            let request = ChatRequest::from_user(message.input.clone()).with_system(instructions);
+            let final_answer_repairs = if fresh_retry == 0 {
+                self.max_final_answer_repairs
+            } else {
+                0
+            };
+            let result = self
+                .run_conversation(
+                    request,
+                    ComparativeRankingWorkflow { task },
+                    final_answer_repairs,
+                )
+                .await;
 
-        Ok(ComparativeRankingBatchResult {
-            metric: task.metric(),
-            batch_index: task.batch_index(),
-            comparisons: outcome.output,
-            diagnostics: AnnotationDiagnostics::from(outcome.diagnostics),
-        })
+            match result {
+                Ok(outcome) => {
+                    return Ok(ComparativeRankingBatchResult {
+                        metric: task.metric(),
+                        batch_index: task.batch_index(),
+                        comparisons: outcome.output,
+                        diagnostics: AnnotationDiagnostics::from(outcome.diagnostics),
+                    });
+                }
+                Err(error) if is_comparative_ranking_failure(&error) => {
+                    if self.max_fresh_comparison_retries == 0 {
+                        return Err(error);
+                    }
+                    if fresh_retry == self.max_fresh_comparison_retries {
+                        return Err(ChatCompletionsError::FreshComparisonRetryLimit {
+                            limit: self.max_fresh_comparison_retries,
+                            source: Box::new(error),
+                        });
+                    }
+                    fresh_retry += 1;
+                    eprintln!(
+                        "{} comparison batch {} remained invalid; starting clean retry {fresh_retry}/{} (overall attempt {}/{total_attempts})",
+                        task.metric().name(),
+                        task.batch_index(),
+                        self.max_fresh_comparison_retries,
+                        fresh_retry + 1,
+                    );
+                    previous_error = Some(error.to_string());
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     /// Classifies semantic gaps without copying source text or exposing tools.
@@ -1304,6 +1365,10 @@ pub enum ChatCompletionsError {
         limit: usize,
         source: Box<ChatCompletionsError>,
     },
+    FreshComparisonRetryLimit {
+        limit: usize,
+        source: Box<ChatCompletionsError>,
+    },
     Tool(AnnotationToolError),
     SerializeTool(serde_json::Error),
     InvalidAnalysisJson(serde_json::Error),
@@ -1360,6 +1425,10 @@ impl fmt::Display for ChatCompletionsError {
             Self::FreshAnnotationRetryLimit { limit, source } => write!(
                 formatter,
                 "the model still changed restored transcript text after {limit} clean retries: {source}"
+            ),
+            Self::FreshComparisonRetryLimit { limit, source } => write!(
+                formatter,
+                "the model still returned an invalid comparison batch after {limit} clean retries: {source}"
             ),
             Self::Tool(error) => write!(formatter, "annotation tool failed: {error}"),
             Self::SerializeTool(error) => {
@@ -1428,7 +1497,8 @@ impl Error for ChatCompletionsError {
             Self::InvalidComparativeRanking(error) => Some(error),
             Self::InvalidBoundaries(error) => Some(error),
             Self::FinalAnswerRepairLimit { source, .. }
-            | Self::FreshAnnotationRetryLimit { source, .. } => Some(source.as_ref()),
+            | Self::FreshAnnotationRetryLimit { source, .. }
+            | Self::FreshComparisonRetryLimit { source, .. } => Some(source.as_ref()),
             Self::Provider(_)
             | Self::UnexpectedChoiceCount { .. }
             | Self::UnexpectedFinishReason { .. }
@@ -1770,6 +1840,19 @@ fn fresh_restored_annotation_retry_instructions(
     )
 }
 
+pub(crate) fn fresh_comparative_retry_instructions(
+    instructions: &str,
+    fresh_retry: usize,
+    max_fresh_retries: usize,
+    previous_error: &str,
+) -> String {
+    let overall_attempt = fresh_retry.saturating_add(1);
+    let total_attempts = max_fresh_retries.saturating_add(1);
+    format!(
+        "{instructions}\n\n全新重试 {fresh_retry}/{max_fresh_retries}（总体第 {overall_attempt}/{total_attempts} 次尝试）：先前尝试未能返回完整、有效的比较结果：{previous_error}。请从头重新读取所有 comparisons；必须为输入中的每个 comparison_id 恰好返回一项，并确保 most 与 least 是该组中不同的 A/B/C/D 标签。不要沿用或局部修补先前答案。"
+    )
+}
+
 pub(crate) fn is_passage_text_difference(error: &ChatCompletionsError) -> bool {
     match error {
         ChatCompletionsError::InvalidRestoredWindowAnalysis(
@@ -1779,6 +1862,17 @@ pub(crate) fn is_passage_text_difference(error: &ChatCompletionsError) -> bool {
         ) => true,
         ChatCompletionsError::FinalAnswerRepairLimit { source, .. } => {
             is_passage_text_difference(source)
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn is_comparative_ranking_failure(error: &ChatCompletionsError) -> bool {
+    match error {
+        ChatCompletionsError::InvalidComparativeRankingJson(_)
+        | ChatCompletionsError::InvalidComparativeRanking(_) => true,
+        ChatCompletionsError::FinalAnswerRepairLimit { source, .. } => {
+            is_comparative_ranking_failure(source)
         }
         _ => false,
     }

@@ -39,6 +39,7 @@ const CONTEXT_CHARACTERS: usize = 150;
 const MAX_TOOL_ROUNDS: usize = 4;
 const MAX_FINAL_ANSWER_REPAIRS: usize = 2;
 const MAX_FRESH_ANNOTATION_RETRIES: usize = 5;
+const MAX_FRESH_COMPARISON_RETRIES: usize = 5;
 const MAX_PROVIDER_RETRIES: usize = 5;
 const MAX_SEARCH_RESULTS: usize = 5;
 const MAX_OUTPUT_TOKENS: u32 = 16_384;
@@ -58,6 +59,10 @@ const COMPARISON_DIRECTORY: &str = "comparisons";
 
 const fn default_max_fresh_annotation_retries() -> usize {
     MAX_FRESH_ANNOTATION_RETRIES
+}
+
+const fn default_max_fresh_comparison_retries() -> usize {
+    MAX_FRESH_COMPARISON_RETRIES
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -573,6 +578,7 @@ fn analysis_client(
             .with_max_tool_rounds(MAX_TOOL_ROUNDS)?
             .with_max_final_answer_repairs(MAX_FINAL_ANSWER_REPAIRS)?
             .with_max_fresh_annotation_retries(MAX_FRESH_ANNOTATION_RETRIES)
+            .with_max_fresh_comparison_retries(MAX_FRESH_COMPARISON_RETRIES)
             .with_max_provider_retries(MAX_PROVIDER_RETRIES)
             .with_max_search_results(MAX_SEARCH_RESULTS)?
             .with_max_output_tokens(MAX_OUTPUT_TOKENS)
@@ -605,6 +611,8 @@ struct AnalysisRunManifest {
     max_final_answer_repairs: usize,
     #[serde(default = "default_max_fresh_annotation_retries")]
     max_fresh_annotation_retries: usize,
+    #[serde(default = "default_max_fresh_comparison_retries")]
+    max_fresh_comparison_retries: usize,
     max_provider_retries: usize,
     minimum_request_interval_seconds: u64,
     max_search_results: usize,
@@ -655,6 +663,7 @@ impl AnalysisRunManifest {
             max_tool_rounds: MAX_TOOL_ROUNDS,
             max_final_answer_repairs: MAX_FINAL_ANSWER_REPAIRS,
             max_fresh_annotation_retries: MAX_FRESH_ANNOTATION_RETRIES,
+            max_fresh_comparison_retries: MAX_FRESH_COMPARISON_RETRIES,
             max_provider_retries: MAX_PROVIDER_RETRIES,
             minimum_request_interval_seconds: provider.request_interval().as_secs(),
             max_search_results: MAX_SEARCH_RESULTS,
@@ -951,6 +960,7 @@ mod tests {
         runtime_change.max_provider_retries = 10;
         runtime_change.max_final_answer_repairs = 0;
         runtime_change.max_fresh_annotation_retries = 0;
+        runtime_change.max_fresh_comparison_retries = 0;
         runtime_change.max_concurrent_comparison_batches = 8;
         runtime_change.importance_comparison_prompt_sha256 = "new-label-prompt".into();
         runtime_change.novelty_comparison_prompt_sha256 = "new-evidence-prompt".into();
@@ -1035,6 +1045,10 @@ mod tests {
         value
             .as_object_mut()
             .expect("an analysis manifest is an object")
+            .remove("max_fresh_comparison_retries");
+        value
+            .as_object_mut()
+            .expect("an analysis manifest is an object")
             .remove("model_backend");
 
         let restored: AnalysisRunManifest = serde_json::from_value(value)?;
@@ -1042,6 +1056,10 @@ mod tests {
         assert_eq!(
             restored.max_fresh_annotation_retries,
             MAX_FRESH_ANNOTATION_RETRIES
+        );
+        assert_eq!(
+            restored.max_fresh_comparison_retries,
+            MAX_FRESH_COMPARISON_RETRIES
         );
         assert_eq!(restored.model_backend, "openai_compatible");
         Ok(())

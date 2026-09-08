@@ -32,6 +32,7 @@ use crate::{
     TranscriptWindowRestorationResult, TranscriptWindowTask, ValidatedSources,
     annotation::validate_window_analysis,
     chat_completions::{
+        fresh_comparative_retry_instructions, is_comparative_ranking_failure,
         is_passage_text_difference, parse_analysis, parse_restoration, parse_restored_analysis,
     },
     comparative_ranking::{ComparativeRankingTask, ProposedComparativeRanking},
@@ -43,6 +44,7 @@ use crate::{
 
 const DEFAULT_MAX_FINAL_ANSWER_REPAIRS: usize = 2;
 const DEFAULT_MAX_FRESH_ANNOTATION_RETRIES: usize = 5;
+const DEFAULT_MAX_FRESH_COMPARISON_RETRIES: usize = 5;
 const DEFAULT_TURN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const ENDPOINT: &str = "codex-app-server://stdio";
@@ -55,6 +57,7 @@ pub struct CodexAppServerConfig {
     service_tier: Option<String>,
     max_final_answer_repairs: usize,
     max_fresh_annotation_retries: usize,
+    max_fresh_comparison_retries: usize,
     turn_timeout: Duration,
     request_scheduler: RequestScheduler,
     model_trace: Option<ModelExchangeTrace>,
@@ -73,6 +76,7 @@ impl CodexAppServerConfig {
             service_tier: None,
             max_final_answer_repairs: DEFAULT_MAX_FINAL_ANSWER_REPAIRS,
             max_fresh_annotation_retries: DEFAULT_MAX_FRESH_ANNOTATION_RETRIES,
+            max_fresh_comparison_retries: DEFAULT_MAX_FRESH_COMPARISON_RETRIES,
             turn_timeout: DEFAULT_TURN_TIMEOUT,
             request_scheduler: RequestScheduler::fixed(std::num::NonZeroUsize::MAX, Duration::ZERO),
             model_trace: None,
@@ -115,6 +119,16 @@ impl CodexAppServerConfig {
 
     pub fn with_model_trace(mut self, trace: ModelExchangeTrace) -> Self {
         self.model_trace = Some(trace);
+        self
+    }
+
+    /// Limits clean retries after a comparative-ranking batch remains invalid
+    /// after its in-thread repairs. Zero disables clean retries.
+    pub const fn with_max_fresh_comparison_retries(
+        mut self,
+        max_fresh_comparison_retries: usize,
+    ) -> Self {
+        self.max_fresh_comparison_retries = max_fresh_comparison_retries;
         self
     }
 
@@ -547,33 +561,78 @@ impl LectureModelBackend for CodexAppServerClient {
             ComparativeMetric::Importance => ModelWorkflow::ImportanceComparison,
             ComparativeMetric::Novelty => ModelWorkflow::NoveltyComparison,
         };
-        let (comparisons, diagnostics) = self
-            .run_structured(
-                StructuredTask {
-                    instructions: message.instructions,
-                    input: message.input,
-                    schema: comparative_schema(),
-                    workflow,
-                    work_item_index: task.task_index(),
-                    max_repairs: self.config.max_final_answer_repairs,
+        let attempts = self.config.max_fresh_comparison_retries.saturating_add(1);
+        let mut previous_error: Option<String> = None;
+        for attempt in 0..attempts {
+            let instructions = previous_error.as_ref().map_or_else(
+                || message.instructions.to_owned(),
+                |error| {
+                    fresh_comparative_retry_instructions(
+                        message.instructions,
+                        attempt,
+                        self.config.max_fresh_comparison_retries,
+                        error,
+                    )
                 },
-                |content| {
-                    let (proposed, fence) = parse_json::<ProposedComparativeRanking>(content)
-                        .map_err(ChatCompletionsError::InvalidComparativeRankingJson)?;
-                    let decisions = task
-                        .validate(proposed)
-                        .map_err(ChatCompletionsError::InvalidComparativeRanking)?;
-                    Ok((decisions, fence))
-                },
-                |error| format!("上一份比较 JSON 无效：{error}。每组只能选择该组的 A/B/C/D，只返回完整 JSON。"),
-            )
-            .await?;
-        Ok(ComparativeRankingBatchResult {
-            metric: task.metric(),
-            batch_index: task.batch_index(),
-            comparisons,
-            diagnostics: diagnostics.annotation(),
-        })
+            );
+            let result = self
+                .run_structured(
+                    StructuredTask {
+                        instructions: &instructions,
+                        input: message.input.clone(),
+                        schema: comparative_schema(),
+                        workflow,
+                        work_item_index: task.task_index(),
+                        max_repairs: if attempt == 0 {
+                            self.config.max_final_answer_repairs
+                        } else {
+                            0
+                        },
+                    },
+                    |content| {
+                        let (proposed, fence) = parse_json::<ProposedComparativeRanking>(content)
+                            .map_err(ChatCompletionsError::InvalidComparativeRankingJson)?;
+                        let decisions = task
+                            .validate(proposed)
+                            .map_err(ChatCompletionsError::InvalidComparativeRanking)?;
+                        Ok((decisions, fence))
+                    },
+                    |error| format!("上一份比较 JSON 无效：{error}。每组只能选择该组的 A/B/C/D，只返回完整 JSON。"),
+                )
+                .await;
+            match result {
+                Ok((comparisons, diagnostics)) => {
+                    return Ok(ComparativeRankingBatchResult {
+                        metric: task.metric(),
+                        batch_index: task.batch_index(),
+                        comparisons,
+                        diagnostics: diagnostics.annotation(),
+                    });
+                }
+                Err(error) if is_comparative_ranking_failure(&error) => {
+                    if attempt == self.config.max_fresh_comparison_retries {
+                        if self.config.max_fresh_comparison_retries == 0 {
+                            return Err(error);
+                        }
+                        return Err(ChatCompletionsError::FreshComparisonRetryLimit {
+                            limit: self.config.max_fresh_comparison_retries,
+                            source: Box::new(error),
+                        });
+                    }
+                    eprintln!(
+                        "{} comparison batch {} remained invalid; starting clean retry {}/{} (overall attempt {}/{attempts})",
+                        task.metric().name(),
+                        task.batch_index(),
+                        attempt + 1,
+                        self.config.max_fresh_comparison_retries,
+                        attempt + 2,
+                    );
+                    previous_error = Some(error.to_string());
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("the bounded fresh-attempt loop always returns")
     }
 
     async fn classify_passage_boundaries(

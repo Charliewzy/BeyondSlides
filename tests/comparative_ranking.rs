@@ -123,6 +123,72 @@ async fn session_repairs_metric_canaries_and_keeps_their_inputs_separate()
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn session_retries_invalid_metric_batches_in_fresh_conversations()
+-> Result<(), Box<dyn Error>> {
+    let incomplete = final_response(json!({
+        "comparisons": [
+            {"comparison_id": 0, "most": "A", "least": "D"}
+        ]
+    }));
+    let complete = final_response(json!({
+        "comparisons": [
+            {"comparison_id": 0, "most": "A", "least": "D"},
+            {"comparison_id": 1, "most": "B", "least": "C"}
+        ]
+    }));
+    let api = mock_api(vec![
+        incomplete.clone(),
+        incomplete.clone(),
+        incomplete.clone(),
+        complete.clone(),
+        incomplete.clone(),
+        incomplete.clone(),
+        incomplete,
+        complete,
+    ])
+    .await;
+    let client = ChatCompletionsClient::new(ChatCompletionsConfig::new(
+        format!("{}/v1", api.uri()),
+        "test-key",
+        "test-model",
+    )?);
+    let analysis = analysis()?;
+    let scorer = FixedScorer(vec![
+        SlideScore {
+            slide_id: SlideId(0),
+            score: 0.8,
+        },
+        SlideScore {
+            slide_id: SlideId(1),
+            score: 0.4,
+        },
+    ]);
+    let config = ComparativeRankingConfig::new(1)?.with_rounds(2)?;
+
+    let result = ComparativeRankingSession::prepare(&client, &analysis, &scorer, config)?
+        .complete()
+        .await?;
+
+    assert_eq!(result.batch_results().len(), 2);
+    let requests = api
+        .received_requests()
+        .await
+        .expect("mock request recording is enabled");
+    assert_eq!(requests.len(), 8);
+    for fresh_request in [&requests[3], &requests[7]] {
+        let body: Value = fresh_request.body_json()?;
+        assert_eq!(body["messages"].as_array().unwrap().len(), 2);
+        assert!(
+            body["messages"][0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("全新重试 1/5（总体第 2/6 次尝试）")
+        );
+    }
+    Ok(())
+}
+
 fn analysis() -> Result<ValidatedRestoredAnalysis, Box<dyn Error>> {
     let raw_texts = ["甲", "乙", "丙", "丁"];
     let restored_texts = ["甲。", "乙。", "丙。", "丁。"];

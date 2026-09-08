@@ -27,6 +27,7 @@ genai = "0.6.5"
 httpdate = "1"
 jieba-rs = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
+rapidocr-core = { version = "0.2.2", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

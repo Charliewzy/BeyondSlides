@@ -68,7 +68,9 @@ animations, or original vector/code structure. Consequently, the existing
 `pdftotext` ingestion path will usually produce little or no useful text for a
 Rain Classroom-imported deck. Keeping the same downstream PDF seam is still
 reasonable for the current restructuring, but OCR or image-aware extraction is
-required later for meaningful written-source retrieval.
+required for meaningful written-source retrieval. That later implementation is
+now recorded by ADR 0010: native PP-OCRv5 supplies fallback text for sparse
+Rain Classroom pages while the raster PDF remains canonical.
 
 Slide-cover URLs are short-lived bearer-like capabilities and may expose course
 material to anyone who receives them before expiry. BeyondSlides should keep

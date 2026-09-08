@@ -31,6 +31,19 @@ pub enum ImportWarning {
 
 /// Extracts one normalized slide per PDF page using Poppler's `pdftotext`.
 pub fn import(path: &Path) -> Result<ImportedDeck, ImportError> {
+    import_with_page_text(path, None)
+}
+
+/// Extracts PDF text first, then uses one OCR result per page only where the
+/// PDF contains too little searchable text.
+pub fn import_with_ocr(path: &Path, ocr_pages: &[String]) -> Result<ImportedDeck, ImportError> {
+    import_with_page_text(path, Some(ocr_pages))
+}
+
+fn import_with_page_text(
+    path: &Path,
+    ocr_pages: Option<&[String]>,
+) -> Result<ImportedDeck, ImportError> {
     let output = Command::new("pdftotext")
         .args(["-raw", "-enc", "UTF-8"])
         .arg(path)
@@ -45,29 +58,40 @@ pub fn import(path: &Path) -> Result<ImportedDeck, ImportError> {
     }
 
     let extracted = String::from_utf8(output.stdout).map_err(ImportError::InvalidUtf8)?;
-    normalize_pages(&extracted)
+    normalize_pages(&extracted, ocr_pages)
 }
 
-fn normalize_pages(extracted: &str) -> Result<ImportedDeck, ImportError> {
+fn normalize_pages(
+    extracted: &str,
+    ocr_pages: Option<&[String]>,
+) -> Result<ImportedDeck, ImportError> {
     let mut pages: Vec<_> = extracted.split('\u{000c}').collect();
     if pages.last().is_some_and(|page| page.is_empty()) {
         pages.pop();
     }
 
-    let mut page_lines: Vec<Vec<String>> = pages
-        .iter()
-        .map(|page| {
-            page.lines()
-                .map(|line| {
-                    line.trim()
-                        .chars()
-                        .filter(|character| *character != '\u{2060}')
-                        .collect::<String>()
-                })
-                .filter(|line| !line.is_empty())
-                .collect()
-        })
-        .collect();
+    if let Some(ocr_pages) = ocr_pages
+        && ocr_pages.len() != pages.len()
+    {
+        return Err(ImportError::OcrPageCountMismatch {
+            pdf_pages: pages.len(),
+            ocr_pages: ocr_pages.len(),
+        });
+    }
+    let mut page_lines: Vec<Vec<String>> =
+        pages.iter().map(|page| normalized_lines(page)).collect();
+    if let Some(ocr_pages) = ocr_pages {
+        for (lines, ocr_text) in page_lines.iter_mut().zip(ocr_pages) {
+            let extracted_characters = non_whitespace_characters(&lines.join("\n"));
+            let ocr_lines = normalized_lines(ocr_text);
+            let ocr_characters = non_whitespace_characters(&ocr_lines.join("\n"));
+            if extracted_characters < SPARSE_TEXT_THRESHOLD
+                && ocr_characters >= SPARSE_TEXT_THRESHOLD
+            {
+                *lines = ocr_lines;
+            }
+        }
+    }
     let repeated_footer = repeated_footer(&page_lines);
 
     let mut slides = Vec::with_capacity(page_lines.len());
@@ -94,11 +118,29 @@ fn normalize_pages(extracted: &str) -> Result<ImportedDeck, ImportError> {
     })
 }
 
+fn normalized_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .map(|line| {
+            line.trim()
+                .chars()
+                .filter(|character| *character != '\u{2060}')
+                .collect::<String>()
+        })
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+fn non_whitespace_characters(text: &str) -> usize {
+    text.chars()
+        .filter(|character| !character.is_whitespace())
+        .count()
+}
+
 /// Checks extracted page text, including saved imports. `page` is the PDF's
 /// one-based page number, used only to locate warnings in the original document.
 pub fn page_text_warnings(page: u32, text: &str) -> Vec<ImportWarning> {
     let mut warnings = Vec::new();
-    let non_whitespace_characters = text.chars().filter(|c| !c.is_whitespace()).count();
+    let non_whitespace_characters = non_whitespace_characters(text);
     if non_whitespace_characters < SPARSE_TEXT_THRESHOLD {
         warnings.push(ImportWarning::SparseText {
             page,
@@ -149,6 +191,7 @@ pub enum ImportError {
     CouldNotStartExtractor(io::Error),
     ExtractionFailed { status: ExitStatus, stderr: String },
     InvalidUtf8(FromUtf8Error),
+    OcrPageCountMismatch { pdf_pages: usize, ocr_pages: usize },
     TooManyPages,
 }
 
@@ -162,6 +205,13 @@ impl fmt::Display for ImportError {
                 write!(formatter, "pdftotext failed with {status}: {stderr}")
             }
             Self::InvalidUtf8(_) => write!(formatter, "pdftotext returned invalid UTF-8"),
+            Self::OcrPageCountMismatch {
+                pdf_pages,
+                ocr_pages,
+            } => write!(
+                formatter,
+                "PDF contains {pdf_pages} pages but OCR returned {ocr_pages} pages"
+            ),
             Self::TooManyPages => write!(formatter, "PDF has more pages than can be assigned IDs"),
         }
     }
@@ -172,7 +222,43 @@ impl Error for ImportError {
         match self {
             Self::CouldNotStartExtractor(error) => Some(error),
             Self::InvalidUtf8(error) => Some(error),
-            Self::ExtractionFailed { .. } | Self::TooManyPages => None,
+            Self::ExtractionFailed { .. }
+            | Self::OcrPageCountMismatch { .. }
+            | Self::TooManyPages => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ocr_replaces_only_sparse_pages_before_footer_removal() {
+        let imported = normalize_pages(
+            "\u{000c}native searchable text\nfooter 2 / 3\n\u{000c}native third page\nfooter 3 / 3\n\u{000c}",
+            Some(&[
+                "OCR title\nfooter 1 / 3".into(),
+                "ignored OCR\nfooter 2 / 3".into(),
+                "ignored OCR\nfooter 3 / 3".into(),
+            ]),
+        )
+        .unwrap();
+
+        assert_eq!(imported.slide_deck.slides[0].text, "OCR title");
+        assert_eq!(imported.slide_deck.slides[1].text, "native searchable text");
+        assert_eq!(imported.slide_deck.slides[2].text, "native third page");
+        assert!(imported.warnings.is_empty());
+    }
+
+    #[test]
+    fn ocr_page_count_must_match_the_pdf() {
+        assert!(matches!(
+            normalize_pages("one\u{000c}two\u{000c}", Some(&["one".into()])),
+            Err(ImportError::OcrPageCountMismatch {
+                pdf_pages: 2,
+                ocr_pages: 1
+            })
+        ));
     }
 }

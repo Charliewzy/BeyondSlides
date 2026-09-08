@@ -4,6 +4,7 @@ mod logs;
 mod model_assets;
 mod rain_classroom;
 mod recognition_eta;
+mod slide_ocr;
 mod slide_review;
 mod speech_recognition;
 mod transcription;
@@ -609,6 +610,7 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
         ));
     }
     let uses_rain = rain_slides.is_some() || rain_recording.is_some();
+    let mut rain_slide_ocr = None;
     if uses_rain != rain_import_id.is_some() {
         return Err(AppError::bad(
             "Rain Classroom imports require a progress identifier",
@@ -625,7 +627,8 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
         ));
     }
     if let Some(import_id) = rain_import_id {
-        app.rain_classroom
+        let acquired = app
+            .rain_classroom
             .acquire_sources(
                 rain_slides.as_ref(),
                 rain_recording.as_ref(),
@@ -634,6 +637,7 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
             )
             .await
             .map_err(AppError::bad)?;
+        rain_slide_ocr = acquired.slide_ocr;
         if rain_recording.is_some() {
             recording = Some("recording.mp4".into());
         }
@@ -641,7 +645,14 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
     let root = app.root.clone();
     let job = tokio::task::spawn_blocking(move || {
         let id = format!("{:032x}", fastrand::u128(..));
-        let job = jobs::import_job(directory.path(), id.clone(), title, &extension, recording)?;
+        let job = jobs::import_job(
+            directory.path(),
+            id.clone(),
+            title,
+            &extension,
+            recording,
+            rain_slide_ocr.as_deref(),
+        )?;
         fs::rename(directory.path(), root.join(id)).map_err(|e| e.to_string())?;
         Ok::<_, String>(job)
     })

@@ -24,7 +24,7 @@ cargo run --release -- serve run/application 7842
 
 Open `http://127.0.0.1:7842`. The server binds only to loopback; this is not a
 multi-user hosted deployment. Poppler's `pdftotext` and `pdftoppm` must be on PATH,
-and the existing dense-retrieval model may download on first use.
+and the dense-retrieval and Rain Classroom OCR models may download on first use.
 
 1. Choose the written source: upload a slides PDF (up to 100 MiB), or select a
    Rain Classroom course, lecture, and presentation. Choose the lecture source
@@ -41,10 +41,13 @@ and the existing dense-retrieval model may download on first use.
    unchanged transcription pipeline sees them; replay segmentation is not part
    of the UI or job model.
    Selected courseware pages are downloaded in provider order and assembled
-   into the canonical `slides.pdf`. This is currently a raster PDF, so the
-   unchanged `pdftotext` importer emits sparse-text warnings until OCR is added.
+   into the canonical `slides.pdf`. Native PP-OCRv5 recognizes the original
+   page images on CPU, after which the unchanged `pdftotext` importer retains
+   extracted text where available and fills only sparse pages from OCR. The
+   model cache is shared across lectures; no Python, PaddlePaddle, GPU, or OCR
+   service is required.
    During import, recording progress uses downloaded bytes when sizes are
-   known; courseware progress uses completed page count.
+   known; courseware download and OCR progress use completed page count.
 2. Inspect the text preview and extraction warnings. Upload/preview does not
    contact the analysis provider.
    “建议检查的页面” lists flagged pages in a horizontal thumbnail strip, with

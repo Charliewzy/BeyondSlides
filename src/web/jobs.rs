@@ -242,8 +242,14 @@ pub(super) fn import_job(
     name: String,
     transcript_extension: &str,
     recording: Option<String>,
+    slide_ocr: Option<&[String]>,
 ) -> Result<Job, String> {
-    let imported = pdf::import(&directory.join("slides.pdf")).map_err(|e| e.to_string())?;
+    let slides_pdf = directory.join("slides.pdf");
+    let imported = match slide_ocr {
+        Some(slide_ocr) => pdf::import_with_ocr(&slides_pdf, slide_ocr),
+        None => pdf::import(&slides_pdf),
+    }
+    .map_err(|error| error.to_string())?;
     if imported.slide_deck.slides.is_empty() {
         return Err("The PDF contains no slides".into());
     }

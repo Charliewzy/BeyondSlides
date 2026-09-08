@@ -83,8 +83,10 @@ function renderRainDownloadProgress(observed) {
     $("rain-download-phase").textContent = `正在整理${resource}…`;
     $("rain-download-percent").textContent = "下载完成";
     progress.max = 1; progress.value = 1;
-  } else if (observed.phase === "downloading") {
-    $("rain-download-phase").textContent = `正在下载${resource}…`;
+  } else if (["downloading", "downloading_ocr_models", "recognizing_text"].includes(observed.phase)) {
+    $("rain-download-phase").textContent = observed.phase === "downloading_ocr_models"
+      ? "正在下载课件文字识别模型…"
+      : observed.phase === "recognizing_text" ? "正在识别课件文字…" : `正在下载${resource}…`;
     const completed = observed.total_items > 0 ? observed.completed_items : observed.downloaded_bytes;
     const total = observed.total_items > 0 ? observed.total_items : observed.total_bytes;
     if (total > 0) {
@@ -101,7 +103,9 @@ function renderRainDownloadProgress(observed) {
     progress.removeAttribute("value");
   }
   $("rain-download-bytes").textContent = observed.total_items > 0
-    ? `${observed.completed_items} / ${observed.total_items} 页 · 已下载 ${fileSize(observed.downloaded_bytes)}`
+    ? observed.phase === "recognizing_text"
+      ? `${observed.completed_items} / ${observed.total_items} 页`
+      : `${observed.completed_items} / ${observed.total_items} 页 · 已下载 ${fileSize(observed.downloaded_bytes)}`
     : observed.total_bytes > 0
     ? `${fileSize(observed.downloaded_bytes)} / ${fileSize(observed.total_bytes)}`
     : observed.downloaded_bytes > 0 ? `已下载 ${fileSize(observed.downloaded_bytes)}` : "正在获取资源信息…";

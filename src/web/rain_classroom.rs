@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io,
     path::{Path, PathBuf},
-    sync::Mutex as StdMutex,
+    sync::{Arc, Mutex as StdMutex},
     time::Duration,
 };
 
@@ -56,9 +56,10 @@ pub(super) struct Presentation {
 }
 
 pub(super) struct RainClassroom {
+    application_root: PathBuf,
     profile: PathBuf,
     session: Mutex<Option<BrowserSession>>,
-    downloads: StdMutex<HashMap<String, DownloadProgress>>,
+    downloads: Arc<StdMutex<HashMap<String, DownloadProgress>>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,18 +72,21 @@ pub(super) struct DownloadProgress {
     total_items: Option<usize>,
 }
 
-struct DownloadRegistration<'a> {
-    rain_classroom: &'a RainClassroom,
-    import_id: &'a str,
+pub(super) struct AcquiredSources {
+    pub slide_ocr: Option<Vec<String>>,
 }
 
-impl Drop for DownloadRegistration<'_> {
+struct DownloadRegistration {
+    downloads: Arc<StdMutex<HashMap<String, DownloadProgress>>>,
+    import_id: String,
+}
+
+impl Drop for DownloadRegistration {
     fn drop(&mut self) {
-        self.rain_classroom
-            .downloads
+        self.downloads
             .lock()
             .expect("Rain Classroom download progress lock is not poisoned")
-            .remove(self.import_id);
+            .remove(&self.import_id);
     }
 }
 
@@ -96,9 +100,10 @@ struct BrowserSession {
 impl RainClassroom {
     pub fn new(application_root: &Path) -> Self {
         Self {
+            application_root: application_root.to_owned(),
             profile: application_root.join(".rain-classroom-browser"),
             session: Mutex::new(None),
-            downloads: StdMutex::new(HashMap::new()),
+            downloads: Arc::default(),
         }
     }
 
@@ -350,21 +355,20 @@ impl RainClassroom {
         recording: Option<&LectureSelection>,
         destination: &Path,
         import_id: &str,
-    ) -> Result<Option<u64>, String> {
+    ) -> Result<AcquiredSources, String> {
         let _registration = self.register_download(import_id)?;
-        if let Some(selection) = slides {
-            self.acquire_slides(selection, &destination.join("slides.pdf"), import_id)
+        let slide_ocr = match slides {
+            Some(selection) => Some(
+                self.acquire_slides(selection, &destination.join("slides.pdf"), import_id)
+                    .await?,
+            ),
+            None => None,
+        };
+        if let Some(selection) = recording {
+            self.acquire_recording(selection, &destination.join("recording.mp4"), import_id)
                 .await?;
         }
-        let duration = if let Some(selection) = recording {
-            Some(
-                self.acquire_recording(selection, &destination.join("recording.mp4"), import_id)
-                    .await?,
-            )
-        } else {
-            None
-        };
-        Ok(duration)
+        Ok(AcquiredSources { slide_ocr })
     }
 
     /// Materializes all replay entries for one lecture as one recording. The
@@ -494,7 +498,7 @@ impl RainClassroom {
         selection: &PresentationSelection,
         destination: &Path,
         import_id: &str,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<String>, String> {
         self.update_download(import_id, |progress| {
             progress.resource = "slides";
             progress.phase = "preparing";
@@ -570,8 +574,46 @@ impl RainClassroom {
             destination,
         )
         .await?;
+        self.update_download(import_id, |progress| {
+            progress.phase = "downloading_ocr_models";
+            progress.downloaded_bytes = 0;
+            progress.total_bytes = None;
+            progress.completed_items = None;
+            progress.total_items = None;
+        });
+        let models =
+            super::slide_ocr::ensure_models(&self.application_root, |downloaded, total| {
+                self.update_download(import_id, |progress| {
+                    progress.downloaded_bytes = downloaded;
+                    progress.total_bytes = Some(total);
+                });
+            })
+            .await?;
+        self.update_download(import_id, |progress| {
+            progress.phase = "recognizing_text";
+            progress.downloaded_bytes = 0;
+            progress.total_bytes = None;
+            progress.completed_items = Some(0);
+            progress.total_items = Some(page_paths.len());
+        });
+        let downloads = Arc::clone(&self.downloads);
+        let progress_id = import_id.to_owned();
+        let slide_ocr = tokio::task::spawn_blocking(move || {
+            super::slide_ocr::recognize_pages(&page_paths, models, |completed, total| {
+                if let Some(progress) = downloads
+                    .lock()
+                    .expect("Rain Classroom download progress lock is not poisoned")
+                    .get_mut(&progress_id)
+                {
+                    progress.completed_items = Some(completed);
+                    progress.total_items = Some(total);
+                }
+            })
+        })
+        .await
+        .map_err(|error| format!("native slide OCR task failed: {error}"))??;
         tokio::fs::remove_dir_all(&parts).await.map_err(io_error)?;
-        Ok(())
+        Ok(slide_ocr)
     }
 
     async fn print_slide_pdf(
@@ -677,10 +719,7 @@ impl RainClassroom {
             .ok_or_else(|| login_error("missing courseware data"))
     }
 
-    fn register_download<'a>(
-        &'a self,
-        import_id: &'a str,
-    ) -> Result<DownloadRegistration<'a>, String> {
+    fn register_download(&self, import_id: &str) -> Result<DownloadRegistration, String> {
         if import_id.is_empty()
             || import_id.len() > 64
             || !import_id
@@ -708,8 +747,8 @@ impl RainClassroom {
             },
         );
         Ok(DownloadRegistration {
-            rain_classroom: self,
-            import_id,
+            downloads: Arc::clone(&self.downloads),
+            import_id: import_id.into(),
         })
     }
 

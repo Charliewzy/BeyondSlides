@@ -233,8 +233,11 @@ restoration, annotation, or source provenance.
 Transcript adapters normalize JSON, SRT, WebVTT, and UTF-8 plain text into
 zero-based transcript segments without inventing missing timestamps. The PDF
 adapter uses Poppler `pdftotext` in raw reading order, preserves one slide per
-page, removes only rigorously detected repeated page furniture, and reports
-sparse text or suspicious glyphs rather than silently invoking OCR.
+page, and removes only rigorously detected repeated page furniture. Rain
+Classroom page images additionally pass through native CPU PP-OCRv5; OCR text
+replaces `pdftotext` output only on sparse pages, without changing page order or
+slide IDs. Pages that remain sparse, and pages with suspicious glyphs, are
+reported for human review.
 
 Native SenseVoice recognition retains each fine-grained ASR text unit and its
 interval as a timed transcript token. Chinese tokens are commonly individual
@@ -652,7 +655,8 @@ tuned from labeled evidence rather than one aesthetically pleasing report.
 - Dense retrieval currently loads one fixed local Chinese embedding model.
 - The default slide-position prior assumes a complete recording beginning at
   the first slide.
-- PDF text warnings do not yet trigger OCR or multimodal ingestion.
+- Locally uploaded image-only PDFs do not yet trigger OCR; native PP-OCRv5 is
+  currently applied to the page images acquired from Rain Classroom.
 - Fine passage playback timing requires an optional SenseVoice timing sidecar;
   reports without it retain coarse, potentially overlapping segment intervals.
 - The two model stages share orchestration concepts but remain distinct

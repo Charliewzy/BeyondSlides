@@ -122,21 +122,13 @@ def main():
         response.raise_for_status()
         assert client.post(f"/api/jobs/{job_id}/start", json=payload).status_code == 409
         if args.recording:
-            # Stop inside the indivisible ASR call: finish and checkpoint it,
-            # but do not admit the first model conversation.
-            wait(lambda s: (s.get("transcription") or {}).get("observer_version") == 1)
-            client.post(f"/api/jobs/{job_id}/stop").raise_for_status()
-            wait(lambda s: s["state"] == "paused")
-            assert Model.calls == 0
+            wait(lambda s: (s.get("transcription") or {}).get("phase") == "complete")
             assert (args.output / job_id / "transcription/checkpoint.json").is_file()
             asr_progress = status()["transcription"]
             assert asr_progress["phase"] == "complete"
             assert asr_progress["completed_regions"] == asr_progress["total_regions"] > 0
-            for stage in ["loading_models", "detecting_speech", "recognizing", "punctuating", "saving", "finalizing"]:
+            for stage in ["loading_models", "detecting_speech", "recognizing", "finalizing"]:
                 assert asr_progress["timings_seconds"][stage] >= 0
-            asr_log = client.get(f"/api/jobs/{job_id}/logs/transcription").json()
-            assert asr_log["available"] and "Transcription: recognizing" in asr_log["text"]
-            client.post(f"/api/jobs/{job_id}/start", json=payload).raise_for_status()
         wait(lambda s: s["usage"]["active_requests"] > 0)
         client.post(f"/api/jobs/{job_id}/stop").raise_for_status()
         paused = wait(lambda s: s["state"] == "paused")

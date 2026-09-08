@@ -4,6 +4,7 @@ mod logs;
 mod rain_classroom;
 mod recognition_eta;
 mod slide_review;
+mod speech_recognition;
 mod transcription;
 mod usage;
 pub(crate) mod worker;
@@ -301,7 +302,7 @@ mod tests {
             "live speech progress must reach indicatif: {value}"
         );
         assert_eq!(fs::read(&path).unwrap(), before);
-        observed["phase"] = json!("punctuating");
+        observed["phase"] = json!("finalizing");
         write_json_atomically(&path, &observed, "test progress").unwrap();
         let status = job_status(State(app), Path(id.into())).await.unwrap().0;
         assert!(
@@ -885,7 +886,6 @@ async fn start(
         .append(true)
         .open(path.join("worker.log"))?;
     let mut command = tokio::process::Command::new(std::env::current_exe()?);
-    let asr_python = std::env::var_os("BEYOND_SLIDES_ASR_PYTHON");
     command
         .arg("application-worker")
         .arg(&directory)
@@ -896,9 +896,6 @@ async fn start(
         std::env::vars_os().filter(|(name, _)| name.to_string_lossy().starts_with("BEYOND_SLIDES_"))
     {
         command.env_remove(name);
-    }
-    if let Some(python) = asr_python {
-        command.env("BEYOND_SLIDES_ASR_PYTHON", python);
     }
     command
         .env(

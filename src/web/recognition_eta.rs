@@ -84,7 +84,7 @@ mod tests {
                 < 100
         );
         assert_eq!(estimator.current.as_ref().unwrap().bar.position(), 1000);
-        progress.phase = "punctuating".into();
+        progress.phase = "finalizing".into();
         assert_eq!(estimator.observe(Some(&progress), true), None);
         assert!(estimator.current.is_none());
     }

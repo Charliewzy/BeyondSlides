@@ -133,7 +133,7 @@
           <p class="muted">日志仅供排查问题，不是可执行的终端。已过滤本次请求的 API key，但可能包含讲座文本、文件路径或其他敏感信息；分享前请检查。旧版本原始日志不会在这里显示。</p>
           <div id="asr-timings" class="muted"></div>
           <div class="debug-toolbar">
-            <label>日志来源<select id="debug-kind"><option value="worker">处理流程（Rust）</option><option value="transcription">语音转写（Python）</option></select></label>
+            <label>日志来源<select id="debug-kind"><option value="worker">处理流程（含原生语音转写）</option><option value="transcription">旧版语音转写日志</option></select></label>
             <label class="check"><input id="debug-follow" type="checkbox" checked> 跟随最新输出</label>
             <a id="debug-download" class="button" download hidden>下载完整日志</a>
           </div>

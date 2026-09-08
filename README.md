@@ -54,17 +54,9 @@ cargo build --release --locked
 
 ### 2. 可选：启用本地录音转写
 
-**已有转写文件时可以跳过这一节。** 从录音 / 视频转写需要 Python 3.11、CPU PyTorch 和 FunASR。安装 [uv](https://docs.astral.sh/uv/getting-started/installation/) 后，在仓库根目录运行：
+**已有转写文件时可以跳过这一节。** 录音 / 视频转写由 Rust 内的 sherpa-onnx、INT8 SenseVoiceSmall 和 Silero VAD 在本机 CPU 上完成，不需要 Python、PyTorch 或 GPU。系统仍需安装 `ffmpeg`，用于从媒体文件提取 16 kHz 单声道音频。
 
-```sh
-uv venv --python 3.11 .venv
-uv pip install --python .venv/bin/python torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-uv pip install --python .venv/bin/python funasr==1.4.5
-```
-
-如果已有 `.venv`，无需重新创建。程序会优先使用仓库的 `.venv`；也可在启动服务器前设置 `BEYOND_SLIDES_ASR_PYTHON`，指定另一环境的 Python 可执行文件。
-
-转写使用 SenseVoiceSmall、语音活动检测及标点模型，首次使用可能下载权重。**不需要 GPU**。速度取决于 CPU、录音长度和模型加载情况；LLM 分析还受服务商速度、限流和思考模式影响，不保证固定完成时间。
+首次转写会自动下载并校验约 156 MiB 的压缩模型资源；解压后的模型缓存约 230 MiB，位于应用数据目录的 `models/` 下，之后的讲座会直接复用。速度取决于 CPU、录音长度和模型加载情况；LLM 分析还受服务商速度、限流和思考模式影响，不保证固定完成时间。
 
 从雨课堂导入还需要本机安装 Google Chrome 或 Chromium。BeyondSlides 会在后台使用独立的浏览器配置，并把扫码登录页面显示在应用自己的对话框中；登录状态有效时会自动复用，无需每次扫码。课件和录像选择会绑定到同一门课程、同一讲次，并分别提示该讲次是否缺少可导入的课件或录像；只有存在多份课件时才要求选择。若雨课堂在后台将一堂课存为多份回放，BeyondSlides 会自动合并为一份录像，不要求用户选择或理解这些内部片段。雨课堂目前只提供逐页图片，因此导入的课件会组装为图片型 PDF；现阶段 `pdftotext` 通常提取不到有用文字，后续需要 OCR。此功能使用雨课堂网页自身的私有接口，网站更新后可能需要同步适配。
 

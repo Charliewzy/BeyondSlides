@@ -1,22 +1,15 @@
-use std::{
-    collections::BTreeMap,
-    error::Error,
-    fs,
-    io::{self, Read},
-    path::{Path, PathBuf},
-    process::Stdio,
-    time::Instant,
+use std::{collections::BTreeMap, error::Error, fs, io, path::Path, time::Instant};
+
+use super::{
+    jobs::{Job, save_job},
+    speech_recognition,
 };
-
-use beyond_slides::{SlideDeck, TimedTranscript, Transcript, ValidatedSources};
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-
-use super::jobs::{Job, save_job};
 use crate::{
     run_support::{read_json, write_json_atomically},
     worker_control::{Stage, WorkerControl},
 };
+use beyond_slides::{SlideDeck, TimedTranscript, Transcript, ValidatedSources};
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]
 struct Transcription {
@@ -42,6 +35,8 @@ pub(super) struct Progress {
     pub total_regions: Option<usize>,
     pub completed_speech_ms: u64,
     pub total_speech_ms: Option<u64>,
+    pub downloaded_model_bytes: u64,
+    pub total_model_bytes: Option<u64>,
     pub timings_seconds: BTreeMap<String, f64>,
     pub reused: bool,
     /// Filled by the controller, never trusted from a worker checkpoint.
@@ -79,13 +74,14 @@ pub(super) async fn prepare(
     control.progress(Stage::Transcription, 0, None)?;
     let attempt = job.runs.last().ok_or("Missing run metadata")?.started_ms;
     let mut progress = Progress {
+        observer_version: 1,
         phase: "checking_recording".into(),
         attempt_started_ms: attempt,
         ..Progress::default()
     };
     publish_progress(run, &progress)?;
     let recording = directory.join(job.recording.as_ref().ok_or("Missing recording")?);
-    let recording_sha256 = file_hash(&recording)?;
+    let recording_sha256 = speech_recognition::file_hash(&recording)?;
     let asr_directory = directory.join("transcription");
     fs::create_dir_all(&asr_directory)?;
     let checkpoint_path = asr_directory.join("checkpoint.json");
@@ -119,45 +115,50 @@ pub(super) async fn prepare(
         progress
             .timings_seconds
             .insert("extracting_audio".into(), extraction_seconds);
-        progress.phase = "loading_models".into();
+        progress.phase = "downloading_models".into();
         publish_progress(run, &progress)?;
         control.check_stop()?;
-        let script = asr_directory.join("transcribe.py");
-        fs::write(
-            &script,
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/scripts/transcribe_recording.py"
-            )),
+        let data_root = directory
+            .parent()
+            .ok_or("lecture directory has no application data root")?;
+        let models = speech_recognition::ensure_models(data_root, |downloaded, total| {
+            progress.downloaded_model_bytes = downloaded;
+            progress.total_model_bytes = Some(total);
+            publish_progress(run, &progress)?;
+            control.check_stop()?;
+            Ok(())
+        })
+        .await?;
+        progress.phase = "loading_models".into();
+        publish_progress(run, &progress)?;
+        let output = speech_recognition::transcribe(
+            &audio,
+            &models,
+            |observed| {
+                progress.phase = observed.phase.into();
+                progress.completed_regions = observed.completed_regions;
+                progress.total_regions = Some(observed.total_regions);
+                progress.completed_speech_ms = observed.completed_speech_ms;
+                progress.total_speech_ms = Some(observed.total_speech_ms);
+                publish_progress(run, &progress)?;
+                Ok(())
+            },
+            || {
+                control.check_stop()?;
+                Ok(())
+            },
         )?;
-        // Preserve even a rejected attempt's output for diagnosis. Only the
-        // validated checkpoint below is eligible for reuse.
-        let result_path = asr_directory.join(format!("result-{attempt}.json"));
-        let python = python_executable();
-        let mut command = tokio::process::Command::new(&python);
-        command
-            .arg("-u")
-            .arg(&script)
-            .arg(&audio)
-            .arg(&result_path)
-            .arg(run.join("control/asr-progress.json"))
-            .arg("--attempt-started-ms")
-            .arg(attempt.to_string())
-            .arg("--extraction-seconds")
-            .arg(extraction_seconds.to_string())
-            .env_remove("BEYOND_SLIDES_API_KEY")
-            .env("CUDA_VISIBLE_DEVICES", "")
-            .stdin(Stdio::null());
-        let key = std::env::var("BEYOND_SLIDES_API_KEY").unwrap_or_default();
-        let status = super::logs::capture(&mut command, &asr_directory.join("asr-debug.log"), &key).await
-            .map_err(|e| format!("Could not run local ASR Python {}: {e}. See docs/local-application.md for setup.", python.display()))?;
-        if !status.success() {
-            return Err(format!("Local CPU transcription failed ({status}). See {}. Install FunASR and CPU PyTorch in the configured Python environment.", asr_directory.join("asr-debug.log").display()).into());
-        }
-        let mut result: Transcription = read_json(&result_path, "local ASR result")?;
-        if let Some(observed) = read_progress(run, attempt)? {
-            progress = observed;
-        }
+        let mut result = Transcription {
+            transcript: output.transcript,
+            timed_tokens: output.timed_tokens,
+            timing_warning: output.timing_warning,
+            metadata: output.metadata,
+        };
+        progress.timings_seconds =
+            serde_json::from_value(result.metadata["timings_seconds"].clone()).unwrap_or_default();
+        progress
+            .timings_seconds
+            .insert("extracting_audio".into(), extraction_seconds);
         result.metadata["timings_seconds"] = serde_json::to_value(&progress.timings_seconds)?;
         let checkpoint = Checkpoint {
             recording_sha256,
@@ -224,36 +225,6 @@ fn validate(directory: &Path, result: &Transcription) -> Result<(), Box<dyn Erro
     let slides: SlideDeck = read_json(&directory.join("slides.json"), "slides")?;
     ValidatedSources::new(result.transcript.clone(), slides)?;
     Ok(())
-}
-
-fn python_executable() -> PathBuf {
-    if let Some(path) = std::env::var_os("BEYOND_SLIDES_ASR_PYTHON") {
-        return path.into();
-    }
-    let local = Path::new(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
-        ".venv/Scripts/python.exe"
-    } else {
-        ".venv/bin/python"
-    });
-    if local.is_file() {
-        local
-    } else {
-        PathBuf::from("python3")
-    }
-}
-
-fn file_hash(path: &Path) -> Result<String, io::Error> {
-    let mut file = fs::File::open(path)?;
-    let mut hash = Sha256::new();
-    let mut bytes = [0; 64 * 1024];
-    loop {
-        let count = file.read(&mut bytes)?;
-        if count == 0 {
-            break;
-        }
-        hash.update(&bytes[..count]);
-    }
-    Ok(format!("{:x}", hash.finalize()))
 }
 
 #[cfg(test)]

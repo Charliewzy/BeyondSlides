@@ -156,7 +156,7 @@ function transcriptionTiming(data, observed, active) {
   if (observed.completed_speech_ms >= observed.total_speech_ms) return `${elapsed} · 语音识别已完成，等待后续步骤`;
   return observed.recognition_eta_ms == null
     ? `${elapsed} · 正在采样语音识别速度…`
-    : `${elapsed} · 预计语音识别剩余 ${duration(observed.recognition_eta_ms)}（不含后续标点与保存）`;
+    : `${elapsed} · 预计语音识别剩余 ${duration(observed.recognition_eta_ms)}（不含最终保存）`;
 }
 function setSettings(settings) {
   if (!settings) return;
@@ -319,19 +319,27 @@ function tokenUsage(known, missing, responses) {
   if (missing === responses) return "服务商未提供";
   return `${missing ? "≥ " : ""}${known.toLocaleString()}${missing ? `（${missing}次缺失）` : ""}`;
 }
-const asrPhases = { checking_recording: "检查录音", extracting_audio: "提取音频", loading_models: "加载模型", detecting_speech: "检测语音", recognizing: "识别语音", punctuating: "添加标点", saving: "保存转写", finalizing: "验证并保存", complete: "完成" };
+const asrPhases = { checking_recording: "检查录音", extracting_audio: "提取音频", downloading_models: "下载语音模型", loading_models: "加载模型", detecting_speech: "检测语音", recognizing: "识别语音", finalizing: "验证并保存", complete: "完成" };
 function transcriptionProgress(row, progress, count, observed, active) {
-  const measurable = observed.phase === "recognizing" && observed.total_speech_ms > 0 && observed.total_regions > 0;
-  const ratio = measurable ? Math.min(1, observed.completed_speech_ms / observed.total_speech_ms) : null;
+  const recognizing = observed.phase === "recognizing" && observed.total_speech_ms > 0 && observed.total_regions > 0;
+  const downloading = observed.phase === "downloading_models" && observed.total_model_bytes > 0;
+  const ratio = recognizing
+    ? Math.min(1, observed.completed_speech_ms / observed.total_speech_ms)
+    : downloading ? Math.min(1, observed.downloaded_model_bytes / observed.total_model_bytes) : null;
   const label = asrPhases[observed.phase] || "处理中";
   count.textContent = `${label}${ratio === null ? "" : ` · ${Math.floor(ratio * 100)}%`}${observed.reused ? "（复用已保存结果）" : ""}`;
   if (observed.phase === "complete") { progress.max = 1; progress.value = 1; }
-  else if (ratio !== null) { progress.max = observed.total_speech_ms; progress.value = observed.completed_speech_ms; }
+  else if (recognizing) { progress.max = observed.total_speech_ms; progress.value = observed.completed_speech_ms; }
+  else if (downloading) { progress.max = observed.total_model_bytes; progress.value = observed.downloaded_model_bytes; }
   else if (active) { progress.removeAttribute("value"); }
   else { progress.max = 1; progress.value = 0; }
-  if (observed.total_regions !== null) {
+  if (downloading) {
     const detail = document.createElement("small");
-    detail.textContent = `${observed.completed_regions} / ${observed.total_regions} 个语音区域 · ${duration(observed.completed_speech_ms)} / ${duration(observed.total_speech_ms)} 有声时长。百分比按有声时长计算，不按区域个数计算。`;
+    detail.textContent = `${fileSize(observed.downloaded_model_bytes)} / ${fileSize(observed.total_model_bytes)}；模型只需在首次使用时下载。`;
+    row.append(detail);
+  } else if (observed.total_regions !== null && observed.total_regions > 0) {
+    const detail = document.createElement("small");
+    detail.textContent = `${observed.completed_regions} / ${observed.total_regions} 个语音区域 · ${duration(observed.completed_speech_ms)} / ${duration(observed.total_speech_ms)} 待识别音频。百分比按区域音频时长计算，不按区域个数计算。`;
     row.append(detail);
   }
 }

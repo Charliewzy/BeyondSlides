@@ -1,5 +1,27 @@
 # Release-readiness review — 2026-09-06
 
+## Native ASR follow-up — 2026-09-08
+
+Recording transcription now runs through statically linked sherpa-onnx with
+INT8 SenseVoiceSmall and Silero VAD. Python, PyTorch, and FunASR are no longer
+runtime requirements; the existing FunASR TSV importer remains supported for
+user-supplied historical transcripts. First-run model assets are resumable,
+SHA-256 verified, protected by an installation lock, and cached outside lecture
+directories. The browser reports model-download bytes and speech-region
+recognition progress.
+
+The complete strict Rust suite and 20 remaining lightweight Python tests pass.
+A release-mode five-minute native ASR smoke test produced 45 punctuated
+transcript segments with valid non-overlapping token timing in 9.35 seconds. A
+separate clean-cache application-worker smoke test downloaded, verified, and
+extracted all 156 MiB of compressed model assets, then processed a 60-second
+recording through the persisted checkpoint seam. It produced 11 transcript
+segments and 294 timed tokens in about 32 seconds overall. A directly launched
+78 MiB release executable has no dynamic Sherpa or ONNX Runtime dependency.
+The resumable-download unit test also starts from a partial file and verifies
+atomic publication; abrupt process termination during a real remote transfer
+remains a useful future fault-injection test.
+
 ## Course-submission follow-up
 
 The three code findings below have now been addressed in separate commits:

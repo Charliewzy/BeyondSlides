@@ -97,38 +97,33 @@ private web interface and may require maintenance when the site changes.
 
 ## Local CPU transcription setup
 
-`ffmpeg`, `ffprobe`, Python, FunASR and CPU PyTorch are needed only for recording
-transcription (ffprobe also inspects optional uploaded recordings). On a fresh
-Linux checkout, one setup path is:
+`ffmpeg` and `ffprobe` are the only external media tools. The Rust worker uses
+the sherpa-onnx runtime with INT8 SenseVoiceSmall and Silero VAD directly; it
+does not require Python, PyTorch, FunASR, or a GPU.
 
-```sh
-uv venv --python 3.11 .venv  # only if this environment does not already exist
-uv pip install --python .venv/bin/python torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-uv pip install --python .venv/bin/python funasr==1.4.5
-```
+On first use, BeyondSlides downloads an approximately 156 MiB model archive and
+the VAD model into `<application-data>/models/`. Downloads resume after an
+interruption, and fixed SHA-256 digests are checked before any model is loaded.
+The extracted cache is approximately 230 MiB and is shared by every lecture in
+that application data directory. A file lock prevents two workers from
+installing the same model concurrently.
 
-The worker uses the checkout's `.venv` if available, otherwise `python3`. To use
-another environment, set `BEYOND_SLIDES_ASR_PYTHON` to its Python executable when
-launching the server. This is server configuration, not an uploaded command.
-
-Transcription uses SenseVoiceSmall + FSMN VAD + punctuation, always on CPU. The
-first use may download model weights; recording contents remain local. It runs
-one complete recording inference and saves an atomic validated checkpoint.
-The UI distinguishes audio extraction, model loading, speech detection,
+The UI distinguishes audio extraction, model download/loading, speech detection,
 recognition, and finalization. Recognition progress is the duration of completed
 detected speech regions divided by their total duration, with region counts
-shown alongside it. Silence is excluded; FunASR can process regions in length
-order, so this is work completed, not a chronological playback position or time
-remaining. Other substages remain indeterminate. If the library's observed
-batch structure is unsupported, recognition also remains indeterminate rather
-than inventing a percentage. A graceful stop during transcription waits for that call
-to finish and saves it before pausing. A hard interruption before the checkpoint
-requires retranscribing; completed transcription is reused across resumes and
-analysis-model changes. Fine-grained token timing is used when available,
-otherwise playback retains explicitly coarser transcript-segment timing.
+shown alongside it. Silence is excluded, so this is work completed rather than
+a chronological playback position. One second of context is retained around
+detected regions and overlapping padded regions are merged to avoid clipping
+quiet boundary syllables without duplicating speech. A graceful stop is checked
+between regions; a hard interruption before the atomic checkpoint requires
+retranscribing. Completed transcription is reused across resumes and
+analysis-model changes. Fine-grained SenseVoice token timing is used when
+complete; otherwise playback retains explicitly coarser transcript-segment
+timing.
 
-The **Debug logs and stage timings** panel exposes separate processing-worker
-and Python-transcription logs. It polls while expanded, displays the most recent
+The **Debug logs and stage timings** panel exposes the processing-worker log,
+including native transcription diagnostics, and retains access to legacy
+Python-transcription logs from old runs. It polls while expanded, displays the most recent
 128 KiB as plain text, and pauses the displayed output when you scroll upward
 or uncheck follow. Full sanitized logs can be downloaded. Model request/response
 traces are not exposed here; logs can still contain lecture content and local
@@ -137,15 +132,15 @@ paths, so inspect them before sharing.
 Configured API keys (including JSON-escaped and URL-encoded forms) are redacted
 across pipe-read boundaries before browser-visible logs are saved. A lightweight
 worker supervisor owns the log pipes independently of the controller, preserving
-processing and log capture across server restarts. Python runs unbuffered.
+processing and log capture across server restarts.
 Workers started by this version also use a separate Unix process group, so a
 terminal Ctrl+C sent to the controller does not interrupt their processing. Old
 raw `worker.log`/`asr.log` files are never served; new captures use
 `worker-debug.log` and `transcription/asr-debug.log`. This is credential filtering,
 not a guarantee that arbitrary secrets printed by third-party code are removed.
 
-Stage timings include model loading, speech detection, recognition, punctuation,
-and saving/finalization. Completed timing values appear in debug details; reused
+Stage timings include audio extraction, speech detection, recognition, and
+finalization. Completed timing values appear in debug details; reused
 transcription results label their original model timings as historical. Existing
 transcription checkpoints remain reusable without rerunning ASR just to obtain
 telemetry. Instrumentation observes existing inference calls without changing
@@ -155,8 +150,9 @@ The capture uses [Tokio subprocess pipes](https://docs.rs/tokio/latest/tokio/pro
 and [strip-ansi-escapes](https://docs.rs/strip-ansi-escapes/latest/strip_ansi_escapes/fn.strip.html)
 for readable terminal output, rather than treating terminal text as executable HTML.
 
-Implementation references: [FunASR CPU/SenseVoice usage](https://github.com/modelscope/FunASR)
-and [ZIP writer](https://docs.rs/zip/latest/zip/write/struct.ZipWriter.html).
+Implementation references: [sherpa-onnx Rust API](https://docs.rs/sherpa-onnx/),
+[SenseVoice](https://github.com/FunAudioLLM/SenseVoice), and
+[ZIP writer](https://docs.rs/zip/latest/zip/write/struct.ZipWriter.html).
 
 Keys are passed only to the local backend and worker environment, not saved in
 job metadata or browser storage. Re-enter the key when resuming. Private source
@@ -176,8 +172,8 @@ second. Completed durations remain visible; paused/offline time is excluded.
 Measurable stages show remaining time directly from indicatif's `ProgressBar::eta`
 and the corresponding elapsed-plus-remaining stage total. The estimator only
 sees newly completed work after the checkpoint baseline, never restored counts.
-It restarts on resume; no ETA appears until new work completes. Preparation and
-whole-call CPU transcription have no invented end-to-end ETA.
+It restarts on resume; no ETA appears until new work completes. Indeterminate
+preparation and model-loading substages have no invented end-to-end ETA.
 
 During speech recognition, the controller feeds observed completed/total speech
 duration into indicatif and returns a separate recognition-only ETA. This is a
@@ -187,7 +183,7 @@ a baseline; an estimate appears after further speech progress arrives. The
 controller's estimator is shared across browser polls and resets on controller
 restart, a new attempt, counter regression, changed total, reuse, inactivity, or
 leaving recognition. It never writes back to worker files. The UI labels this
-estimate “预计语音识别剩余” and explicitly excludes punctuation and saving;
+estimate “预计语音识别剩余” and explicitly excludes final checkpoint saving;
 it does not add it to cumulative stage time as an end-to-end forecast.
 
 Reused stages are labeled. A hard kill may lose up to the last timing heartbeat;

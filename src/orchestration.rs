@@ -21,10 +21,7 @@ pub struct LectureAnalysisConfig {
 }
 
 impl LectureAnalysisConfig {
-    /// Configures windowing and post-canary concurrency.
-    ///
-    /// The first transcript window always runs alone. `max_concurrent_windows`
-    /// limits only the remaining windows after that canary succeeds.
+    /// Configures restored-text windowing and bounded model concurrency.
     pub fn new(
         windowing: WindowingConfig,
         max_concurrent_windows: usize,
@@ -59,7 +56,7 @@ impl Error for LectureAnalysisConfigError {}
 /// The validated analysis and model diagnostics produced for one lecture.
 ///
 /// Slide positions and diagnostics remain in transcript-window order even
-/// though non-canary windows may complete out of order.
+/// though model requests may complete out of order.
 #[derive(Debug)]
 pub struct LectureAnalysisResult {
     analysis: ValidatedRestoredAnalysis,
@@ -98,12 +95,10 @@ impl LectureAnalysisResult {
     }
 }
 
-/// A prepared lecture analysis that pauses after its first model request.
+/// A prepared lecture analysis with validated checkpoint slots for every window.
 ///
 /// Preparation performs windowing, all-slide scoring, slide-position
 /// inference, and annotation-task validation without contacting the model.
-/// Call `analyze_canary` to validate the first transcript window in isolation,
-/// then call `complete_analysis` to process the remaining windows.
 pub struct LectureAnalysisSession<'a> {
     stop: StopSignal,
     client: &'a dyn LectureModelBackend,
@@ -206,49 +201,7 @@ impl<'a> LectureAnalysisSession<'a> {
         Ok(())
     }
 
-    /// Analyzes the first transcript window without launching later windows.
-    ///
-    /// Repeated calls return the already validated result without sending the
-    /// first window again. An empty transcript has no canary and returns `None`.
-    pub async fn analyze_canary(
-        &mut self,
-    ) -> Result<Option<&RestoredAnnotationResult>, LectureAnalysisError> {
-        let Some(canary_result) = self.window_results.first() else {
-            return Ok(None);
-        };
-        if canary_result.is_none() {
-            if self.stop.is_requested() {
-                return Err(LectureAnalysisError::Stopped);
-            }
-            let result = {
-                let windows = build_restored_windows(
-                    &self.sources,
-                    &self.restored_transcript,
-                    self.config.windowing,
-                )
-                .map_err(LectureAnalysisError::Windowing)?;
-                let tasks =
-                    build_restored_annotation_tasks(&self.sources, &windows, &self.slide_positions)
-                        .map_err(LectureAnalysisError::TaskConstruction)?;
-                let Some(canary) = tasks.first() else {
-                    return Ok(None);
-                };
-
-                self.client
-                    .annotate_restored_window(&self.sources, self.scorer, canary)
-                    .await
-                    .map_err(|source| LectureAnalysisError::WindowAnnotation {
-                        window_index: canary.window_index(),
-                        source,
-                    })?
-            };
-            self.window_results[0] = Some(result);
-        }
-
-        Ok(self.window_results[0].as_ref())
-    }
-
-    /// Completes a canary-validated lecture analysis with bounded concurrency.
+    /// Completes the lecture analysis with bounded concurrency.
     pub async fn complete_analysis(self) -> Result<LectureAnalysisResult, LectureAnalysisError> {
         self.complete_analysis_with_progress(|_| Ok(())).await
     }
@@ -283,8 +236,6 @@ impl<'a> LectureAnalysisSession<'a> {
         for (task, result) in tasks.iter().copied().zip(stored_results) {
             if let Some(result) = result {
                 window_results.push((task.window_index(), result));
-            } else if task.window_index() == 0 {
-                return Err(LectureAnalysisError::CanaryNotAnalyzed);
             } else {
                 pending_tasks.push(task);
             }
@@ -381,7 +332,6 @@ pub enum LectureAnalysisError {
         index: usize,
         source: RestoredAnnotationError,
     },
-    CanaryNotAnalyzed,
     Progress(LectureAnalysisProgressError),
     Assembly(RestoredAnalysisAssemblyError),
 }
@@ -433,9 +383,6 @@ impl fmt::Display for LectureAnalysisError {
                     "persisted result for restored transcript window index {index} is invalid: {source}"
                 )
             }
-            Self::CanaryNotAnalyzed => {
-                formatter.write_str("the canary must succeed before completing lecture analysis")
-            }
             Self::Progress(error) => {
                 write!(
                     formatter,
@@ -462,7 +409,7 @@ impl Error for LectureAnalysisError {
             Self::WindowAnnotation { source, .. } => Some(source),
             Self::UnknownWindowIndex { .. } | Self::WindowAlreadyCompleted { .. } => None,
             Self::InvalidRestoredWindow { source, .. } => Some(source),
-            Self::CanaryNotAnalyzed | Self::Stopped => None,
+            Self::Stopped => None,
             Self::Progress(error) => Some(error.as_ref()),
             Self::Assembly(error) => Some(error),
         }

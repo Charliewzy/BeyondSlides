@@ -45,11 +45,6 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
         [command, trace_path] if command == OsStr::new("summarize-trace") => {
             trace_summary_run::run(trace_path)
         }
-        [command, transcript_path, run_directory]
-            if command == OsStr::new("restore-canary") =>
-        {
-            restoration_run::run_canary(transcript_path, run_directory).await
-        }
         [command, transcript_path, run_directory] if command == OsStr::new("restore") => {
             restoration_run::run_complete(transcript_path, run_directory, None).await
         }
@@ -57,11 +52,6 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
             if command == OsStr::new("review-restoration") =>
         {
             restoration_review_run::run(transcript_path, run_directory, output_path)
-        }
-        [command, transcript_path, slides_path, output_path]
-            if command == OsStr::new("canary") =>
-        {
-            analysis_run::run_canary(transcript_path, slides_path, output_path).await
         }
         [command, transcript_path, slides_path, run_directory, options @ ..]
             if command == OsStr::new("analyze") =>
@@ -107,11 +97,9 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
             "usage: beyond-slides serve [<application-directory> <port>]\n\
              or:    beyond-slides <transcript.json> <slides.json> <annotations.json> <result.html>\n\
              or:    beyond-slides summarize-trace <model-trace.jsonl>\n\
-             or:    beyond-slides canary <transcript.json> <slides.json> <canary.json>\n\
              or:    beyond-slides analyze <transcript.json> <slides.json> <run-directory> [--slides-pdf <slides.pdf>] [--audio <recording> --timed-tokens <timing.json>]\n\
              or:    beyond-slides render-analysis <transcript.json> <slides.json> <analysis.json> <result.html> [--slides-pdf <slides.pdf>] [--audio <recording> --timed-tokens <timing.json>]\n\
              or:    beyond-slides evaluate-analysis <analysis.json> <model-trace.jsonl>\n\
-             or:    beyond-slides restore-canary <transcript.json> <run-directory>\n\
              or:    beyond-slides restore <transcript.json> <run-directory>\n\
              or:    beyond-slides review-restoration <transcript.json> <run-directory> <result.html>\n\
              model-backed commands require BEYOND_SLIDES_API_BASE_URL, \

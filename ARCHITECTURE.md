@@ -355,8 +355,8 @@ on each side. Every owned gap must be classified exactly once using its input
 ID as `continue`, `possible_break`, `preferred_break`, or `required_break`.
 The model sees neither importance scores nor slide evidence in this stage.
 The shared model conversation supplies bounded retries/repairs and full traces,
-under the `passage_boundaries` workflow. The CLI runs a canary first and shares
-adaptive admission with restoration and comparisons.
+under the `passage_boundaries` workflow. All pending batches share adaptive
+admission with restoration and comparisons.
 
 The global DP prefers 80–280-character passages with a 450-character maximum.
 `continue` gaps cannot be cut, and `required_break` gaps cannot be crossed.
@@ -404,10 +404,9 @@ validation, checkpointing, and aggregation. Novelty candidates reference the
 same deduplicated slide-text pool as before.
 
 Every response must return each requested comparison exactly once, select two
-different labels present in that group, and add no unknown comparisons. One batch for
-each metric runs as a canary before remaining batches run with bounded
-concurrency. Validated batches are checkpointed independently and can be
-resumed.
+different labels present in that group, and add no unknown comparisons. All
+missing batches run with bounded concurrency. Validated batches are checkpointed
+independently and can be resumed.
 
 For each metric, aggregation computes `(most - least) / comparisons`, ranks
 that balance across the lecture with average ranks for ties, and stores the
@@ -510,9 +509,7 @@ pipeline work is multiplexed over the single app-server process, while
 checkpoint identities record the selected backend so artifacts cannot silently
 cross transports.
 
-The first window of each windowed stage runs alone as a canary. Comparative
-ranking instead accepts one batch for importance and one for novelty before
-launching either metric's remaining batches with bounded concurrency. Request
+Every stage submits its missing work directly to bounded concurrency. Request
 attempts pass through a shared `RequestScheduler`. The CLI defaults to adaptive
 mode: start at two requests and grow gradually to a hard ceiling of eight when
 healthy demand is queued. `BEYOND_SLIDES_SCHEDULING` selects adaptive or fixed;

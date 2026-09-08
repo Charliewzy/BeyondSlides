@@ -77,7 +77,7 @@ around lines 1396–1449 without filtering configured credentials. The applicati
 debug-log sanitizer does not sanitize these private trace writes.
 
 **Reproduced:** an isolated loopback mock endpoint received a dummy API key from
-`restore-canary examples/tiny_course/transcript.json <new-directory>`.
+the subsequently removed `restore-canary` diagnostic command.
 
 - A 401 response containing the dummy key stored it verbatim in a
   `provider_error` trace event; the command exited with failure.
@@ -240,5 +240,6 @@ by normal temporary-directory cleanup. Verification scripts are checked in under
 Fix S1, S2 and the audio-deletion finding in separate regression-tested commits;
 then resolve licensing/demo distribution and add the reproducible Linux release
 check. Run a fresh-environment CPU recording import and a small explicitly
-authorized real-provider canary before promoting the local preview to a release
-candidate. Re-run this review's checks against that exact candidate commit.
+authorized real-provider smoke run before promoting the local preview to a
+release candidate. Re-run this review's checks against that exact candidate
+commit.

@@ -27,14 +27,13 @@ impl SlideScorer for FixedScorer {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn lecture_analysis_runs_a_canary_then_assembles_every_window() -> Result<(), Box<dyn Error>>
-{
+async fn lecture_analysis_processes_every_window_immediately() -> Result<(), Box<dyn Error>> {
     let api = mock_api(WindowAnalysisResponder {
-        reject_canary: false,
+        reject_first_window: false,
     })
     .await;
     let client = client(&api)?;
-    let mut session = LectureAnalysisSession::prepare(
+    let session = LectureAnalysisSession::prepare(
         &client,
         sources()?,
         restored_transcript(),
@@ -47,24 +46,6 @@ async fn lecture_analysis_runs_a_canary_then_assembles_every_window() -> Result<
             .expect("mock request recording is enabled")
             .is_empty()
     );
-
-    let canary = session
-        .analyze_canary()
-        .await?
-        .expect("the nonempty transcript has a canary");
-    assert_eq!(
-        canary.analysis.passages[0].source_start,
-        TranscriptSegmentId(0)
-    );
-    assert_eq!(canary.diagnostics.prompt_tokens, Some(10));
-    assert!(session.analyze_canary().await?.is_some());
-
-    let canary_requests = api
-        .received_requests()
-        .await
-        .expect("mock request recording is enabled");
-    assert_eq!(canary_requests.len(), 1);
-    assert_eq!(owned_text(&canary_requests[0]), "甲乙");
 
     let result = session.complete_analysis().await?;
 
@@ -92,50 +73,16 @@ async fn lecture_analysis_runs_a_canary_then_assembles_every_window() -> Result<
         .await
         .expect("mock request recording is enabled");
     assert_eq!(requests.len(), 3);
-    assert_eq!(owned_text(&requests[0]), "甲乙");
+    let mut submitted_windows = requests.iter().map(owned_text).collect::<Vec<_>>();
+    submitted_windows.sort_unstable();
+    assert_eq!(submitted_windows, vec!["丙丁", "戊己", "甲乙"]);
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn an_invalid_canary_prevents_later_window_requests() -> Result<(), Box<dyn Error>> {
+async fn an_invalid_window_fails_after_bounded_concurrent_work() -> Result<(), Box<dyn Error>> {
     let api = mock_api(WindowAnalysisResponder {
-        reject_canary: true,
-    })
-    .await;
-    let client = client(&api)?;
-    let mut session = LectureAnalysisSession::prepare(
-        &client,
-        sources()?,
-        restored_transcript(),
-        &FixedScorer,
-        config(2)?,
-    )?;
-
-    let error = session
-        .analyze_canary()
-        .await
-        .expect_err("the invalid first window must stop the lecture run");
-
-    assert!(matches!(
-        error,
-        LectureAnalysisError::WindowAnnotation {
-            window_index: 0,
-            ..
-        }
-    ));
-    let requests = api
-        .received_requests()
-        .await
-        .expect("mock request recording is enabled");
-    assert_eq!(requests.len(), 3);
-    assert!(requests.iter().all(|request| owned_text(request) == "甲乙"));
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn lecture_analysis_cannot_complete_before_the_canary() -> Result<(), Box<dyn Error>> {
-    let api = mock_api(WindowAnalysisResponder {
-        reject_canary: false,
+        reject_first_window: true,
     })
     .await;
     let client = client(&api)?;
@@ -150,33 +97,37 @@ async fn lecture_analysis_cannot_complete_before_the_canary() -> Result<(), Box<
     let error = session
         .complete_analysis()
         .await
-        .expect_err("a nonempty lecture requires a successful canary");
+        .expect_err("an invalid window must stop the lecture run");
 
-    assert!(matches!(error, LectureAnalysisError::CanaryNotAnalyzed));
+    assert!(matches!(
+        error,
+        LectureAnalysisError::WindowAnnotation {
+            window_index: 0,
+            ..
+        }
+    ));
     let requests = api
         .received_requests()
         .await
         .expect("mock request recording is enabled");
-    assert!(requests.is_empty());
+    assert!(requests.iter().any(|request| owned_text(request) != "甲乙"));
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn lecture_analysis_reports_new_windows_in_completion_order() -> Result<(), Box<dyn Error>> {
     let api = mock_api(WindowAnalysisResponder {
-        reject_canary: false,
+        reject_first_window: false,
     })
     .await;
     let client = client(&api)?;
-    let mut session = LectureAnalysisSession::prepare(
+    let session = LectureAnalysisSession::prepare(
         &client,
         sources()?,
         restored_transcript(),
         &FixedScorer,
         config(2)?,
     )?;
-    session.analyze_canary().await?;
-
     let mut progress = Vec::new();
     session
         .complete_analysis_with_progress(|event| {
@@ -193,6 +144,7 @@ async fn lecture_analysis_reports_new_windows_in_completion_order() -> Result<()
     assert_eq!(
         progress,
         vec![
+            (0, 1, 3, TranscriptSegmentId(0)),
             (2, 2, 3, TranscriptSegmentId(2)),
             (1, 3, 3, TranscriptSegmentId(1)),
         ]
@@ -201,26 +153,30 @@ async fn lecture_analysis_reports_new_windows_in_completion_order() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn restored_canary_is_validated_and_not_sent_again() -> Result<(), Box<dyn Error>> {
+async fn restored_checkpoint_is_validated_and_not_sent_again() -> Result<(), Box<dyn Error>> {
     let api = mock_api(WindowAnalysisResponder {
-        reject_canary: false,
+        reject_first_window: false,
     })
     .await;
     let client = client(&api)?;
-    let mut initial = LectureAnalysisSession::prepare(
+    let initial = LectureAnalysisSession::prepare(
         &client,
         sources()?,
         restored_transcript(),
         &FixedScorer,
         config(2)?,
     )?;
-    let canary = initial
-        .analyze_canary()
-        .await?
-        .expect("the nonempty transcript has a canary")
-        .clone();
+    let mut checkpoints = Vec::new();
+    initial
+        .complete_analysis_with_progress(|event| {
+            checkpoints.push((event.window_index, event.result.clone()));
+            Ok(())
+        })
+        .await?;
+    checkpoints.sort_unstable_by_key(|(window_index, _)| *window_index);
+    let checkpoint = checkpoints.remove(0).1;
 
-    let mut invalid = canary.clone();
+    let mut invalid = checkpoint.clone();
     invalid.analysis.passages[0].source_start = TranscriptSegmentId(1);
     let mut invalid_resume = LectureAnalysisSession::prepare(
         &client,
@@ -246,9 +202,8 @@ async fn restored_canary_is_validated_and_not_sent_again() -> Result<(), Box<dyn
     )?;
     assert_eq!(resumed.window_count(), 3);
     assert_eq!(resumed.completed_window_count(), 0);
-    resumed.restore_window_result(0, canary)?;
+    resumed.restore_window_result(0, checkpoint)?;
     assert_eq!(resumed.completed_window_count(), 1);
-    assert!(resumed.analyze_canary().await?.is_some());
     let result = resumed.complete_analysis().await?;
 
     assert_eq!(result.window_diagnostics().len(), 3);
@@ -256,9 +211,8 @@ async fn restored_canary_is_validated_and_not_sent_again() -> Result<(), Box<dyn
         .received_requests()
         .await
         .expect("mock request recording is enabled");
-    assert_eq!(requests.len(), 3);
-    assert_eq!(owned_text(&requests[0]), "甲乙");
-    let mut resumed_windows = requests[1..].iter().map(owned_text).collect::<Vec<_>>();
+    assert_eq!(requests.len(), 5);
+    let mut resumed_windows = requests[3..].iter().map(owned_text).collect::<Vec<_>>();
     resumed_windows.sort_unstable();
     assert_eq!(resumed_windows, vec!["丙丁", "戊己"]);
     Ok(())
@@ -268,7 +222,7 @@ async fn restored_canary_is_validated_and_not_sent_again() -> Result<(), Box<dyn
 async fn an_all_disfluency_restoration_completes_without_model_requests()
 -> Result<(), Box<dyn Error>> {
     let api = mock_api(WindowAnalysisResponder {
-        reject_canary: false,
+        reject_first_window: false,
     })
     .await;
     let client = client(&api)?;
@@ -278,11 +232,10 @@ async fn an_all_disfluency_restoration_completes_without_model_requests()
             source_end: TranscriptSegmentId(2),
         }],
     };
-    let mut session =
+    let session =
         LectureAnalysisSession::prepare(&client, sources()?, restored, &FixedScorer, config(2)?)?;
 
     assert_eq!(session.window_count(), 0);
-    assert!(session.analyze_canary().await?.is_none());
     let result = session.complete_analysis().await?;
 
     assert!(result.analysis().passages().is_empty());
@@ -299,7 +252,7 @@ async fn an_all_disfluency_restoration_completes_without_model_requests()
 #[test]
 fn lecture_analysis_requires_nonzero_concurrency() -> Result<(), Box<dyn Error>> {
     let error = LectureAnalysisConfig::new(windowing()?, 0)
-        .expect_err("zero workers cannot process post-canary windows");
+        .expect_err("zero workers cannot process analysis windows");
 
     assert_eq!(error, LectureAnalysisConfigError::ZeroConcurrency);
     Ok(())
@@ -385,7 +338,7 @@ async fn mock_api(responder: WindowAnalysisResponder) -> MockServer {
 }
 
 struct WindowAnalysisResponder {
-    reject_canary: bool,
+    reject_first_window: bool,
 }
 
 impl Respond for WindowAnalysisResponder {
@@ -407,7 +360,7 @@ impl Respond for WindowAnalysisResponder {
             "戊己" => 2,
             other => panic!("unexpected owned text {other:?}"),
         };
-        let related_slide = if self.reject_canary && window_index == 0 {
+        let related_slide = if self.reject_first_window && window_index == 0 {
             99
         } else {
             0
@@ -435,7 +388,7 @@ impl Respond for WindowAnalysisResponder {
                 "completion_tokens": 5
             }
         }));
-        if !self.reject_canary && window_index == 1 {
+        if !self.reject_first_window && window_index == 1 {
             response.set_delay(Duration::from_millis(50))
         } else {
             response

@@ -261,9 +261,8 @@ impl Error for ChatCompletionsConfigError {}
 
 /// A client for one explicitly configured OpenAI-compatible endpoint.
 ///
-/// Construction performs no network discovery. The first real transcript
-/// window is the canary for endpoint access, model availability, tool calling,
-/// and JSON output.
+/// Construction performs no network discovery. Model availability and output
+/// compatibility are validated by ordinary bounded workflow requests.
 pub struct ChatCompletionsClient {
     transport: Client,
     api_key: String,

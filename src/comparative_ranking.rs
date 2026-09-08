@@ -567,7 +567,7 @@ impl<'a> ComparativeRankingSession<'a> {
         self.complete_with_progress(|_| Ok(())).await
     }
 
-    /// Runs one canary for each metric before launching remaining tasks concurrently.
+    /// Runs all missing comparison batches with bounded concurrency.
     pub async fn complete_with_progress(
         self,
         mut report_progress: impl FnMut(
@@ -583,36 +583,6 @@ impl<'a> ComparativeRankingSession<'a> {
             mut results,
         } = self;
         let mut completed_batches = results.iter().flatten().count();
-        let canaries = [ComparativeMetric::Importance, ComparativeMetric::Novelty]
-            .into_iter()
-            .filter_map(|metric| tasks.iter().position(|task| task.metric == metric))
-            .collect::<Vec<_>>();
-
-        for task_index in canaries {
-            if results[task_index].is_some() {
-                continue;
-            }
-            if stop.is_requested() {
-                return Err(ComparativeRankingError::Stopped);
-            }
-            let result = client
-                .compare_passages(&tasks[task_index])
-                .await
-                .map_err(|source| ComparativeRankingError::Model {
-                    batch: batch_info(&tasks[task_index]),
-                    source,
-                })?;
-            completed_batches += 1;
-            report_progress(ComparativeRankingProgress {
-                batch: batch_info(&tasks[task_index]),
-                completed_batches,
-                total_batches: tasks.len(),
-                result: &result,
-            })
-            .map_err(ComparativeRankingError::Progress)?;
-            results[task_index] = Some(result);
-        }
-
         let pending = results
             .iter()
             .enumerate()

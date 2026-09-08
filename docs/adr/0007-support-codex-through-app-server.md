@@ -20,8 +20,8 @@ runs in an empty temporary working directory with a read-only sandbox,
 instructions forbidding tools, and a host-side failure if a tool item
 nevertheless appears. The process does not inherit `BEYOND_SLIDES_API_KEY`.
 No lecture files are placed in its working directory; only serialized task text
-is sent. The first real task remains the canary for model availability and
-structured-output behavior.
+is sent. Ordinary workflow requests validate model availability and structured
+output while the shared scheduler bounds concurrent exposure to failures.
 
 App-server is a versioned protocol. BeyondSlides validates the handshake and
 every response shape at runtime, keeps one ignored live integration test for

@@ -448,10 +448,6 @@ pub(crate) fn model_trace_path(run_directory: &Path) -> PathBuf {
     run_directory.join(MODEL_TRACE_FILE)
 }
 
-pub(crate) fn open_output_model_trace(output_path: &Path) -> Result<ModelExchangeTrace, io::Error> {
-    ModelExchangeTrace::open(output_path.with_extension("model-trace.jsonl"))
-}
-
 pub(crate) fn window_progress_bar(
     total_windows: usize,
     completed_windows: usize,
@@ -574,10 +570,6 @@ fn persist_temporary(temporary: NamedTempFile, path: &Path, kind: &str) -> Resul
         )
     })?;
     Ok(())
-}
-
-pub(crate) fn display_token_count(tokens: Option<u64>) -> String {
-    tokens.map_or_else(|| "unknown".into(), |tokens| tokens.to_string())
 }
 
 fn required_environment_variable(name: &str) -> Result<String, io::Error> {

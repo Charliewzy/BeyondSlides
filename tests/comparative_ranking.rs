@@ -18,19 +18,13 @@ impl SlideScorer for FixedScorer {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn session_repairs_metric_canaries_and_keeps_their_inputs_separate()
+async fn session_runs_metric_batches_concurrently_and_keeps_their_inputs_separate()
 -> Result<(), Box<dyn Error>> {
     let api = mock_api(vec![
         final_response(json!({
             "comparisons": [
-                {"comparison_id": 0, "most": "E", "least": "D"},
-                {"comparison_id": 1, "most": "A", "least": "C"}
-            ]
-        })),
-        final_response(json!({
-            "comparisons": [
                 {"comparison_id": 0, "most": "A", "least": "D"},
-                {"comparison_id": 1, "most": "B", "least": "C"}
+                {"comparison_id": 1, "most": "A", "least": "C"}
             ]
         })),
         final_response(json!({
@@ -69,14 +63,17 @@ async fn session_repairs_metric_canaries_and_keeps_their_inputs_separate()
         })
         .await?;
 
+    completed_metrics.sort_unstable();
     assert_eq!(
         completed_metrics,
-        vec![ComparativeMetric::Importance, ComparativeMetric::Novelty]
+        [ComparativeMetric::Importance, ComparativeMetric::Novelty]
     );
     assert_eq!(result.batch_results().len(), 2);
-    assert_eq!(
-        result.batch_results()[0].diagnostics.final_answer_repairs,
-        1
+    assert!(
+        result
+            .batch_results()
+            .iter()
+            .all(|result| result.diagnostics.final_answer_repairs == 0)
     );
     assert_eq!(result.rankings().importance.len(), 4);
     assert_eq!(result.rankings().novelty.len(), 4);
@@ -85,8 +82,15 @@ async fn session_repairs_metric_canaries_and_keeps_their_inputs_separate()
         .received_requests()
         .await
         .expect("mock request recording is enabled");
-    assert_eq!(requests.len(), 3);
-    let importance = user_input(&requests[0])?;
+    assert_eq!(requests.len(), 2);
+    let inputs = requests
+        .iter()
+        .map(user_input)
+        .collect::<Result<Vec<_>, _>>()?;
+    let importance = inputs
+        .iter()
+        .find(|input| input.get("slides").is_none())
+        .expect("importance input omits slide evidence");
     assert!(importance.get("slides").is_none());
     assert!(importance.get("passages").is_none());
     let candidate = &importance["comparisons"][0]["candidates"]["A"];
@@ -96,7 +100,10 @@ async fn session_repairs_metric_canaries_and_keeps_their_inputs_separate()
     assert!(candidate.get("novelty").is_none());
     assert!(candidate.get("importance").is_none());
 
-    let novelty = user_input(&requests[2])?;
+    let novelty = inputs
+        .iter()
+        .find(|input| input.get("slides").is_some())
+        .expect("novelty input contains slide evidence");
     assert!(
         !novelty["slides"]
             .as_array()

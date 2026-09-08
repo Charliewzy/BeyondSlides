@@ -14,10 +14,9 @@ async fn stopped_restoration_resumes_only_missing_windows() -> Result<(), Box<dy
     let api = mock_api().await;
     let client = client(&api)?;
     let stop = StopSignal::default();
-    let mut session = TranscriptRestorationSession::prepare(&client, transcript(), config(1)?)?
+    let session = TranscriptRestorationSession::prepare(&client, transcript(), config(1)?)?
         .with_stop_signal(stop.clone());
-    let canary = session.restore_canary().await?.unwrap().clone();
-    let mut saved = vec![(0, canary)];
+    let mut saved = Vec::new();
     let result = session
         .complete_restoration_with_progress(|event| {
             saved.push((event.window_index, event.result.clone()));
@@ -28,9 +27,9 @@ async fn stopped_restoration_resumes_only_missing_windows() -> Result<(), Box<dy
     assert!(matches!(result, Err(RestorationSessionError::Stopped)));
     assert_eq!(
         saved.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
-        [0, 1]
+        [0]
     );
-    assert_eq!(api.received_requests().await.unwrap().len(), 2);
+    assert_eq!(api.received_requests().await.unwrap().len(), 1);
 
     let mut resumed = TranscriptRestorationSession::prepare(&client, transcript(), config(1)?)?;
     for (index, result) in saved {
@@ -43,16 +42,16 @@ async fn stopped_restoration_resumes_only_missing_windows() -> Result<(), Box<dy
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_stop_before_the_canary_makes_no_provider_request() -> Result<(), Box<dyn Error>> {
+async fn a_stop_before_work_makes_no_provider_request() -> Result<(), Box<dyn Error>> {
     use beyond_slides::processing::StopSignal;
     let api = mock_api().await;
     let client = client(&api)?;
     let stop = StopSignal::default();
     stop.request_stop();
-    let mut session = TranscriptRestorationSession::prepare(&client, transcript(), config(2)?)?
+    let session = TranscriptRestorationSession::prepare(&client, transcript(), config(2)?)?
         .with_stop_signal(stop);
     assert!(matches!(
-        session.restore_canary().await,
+        session.complete_restoration().await,
         Err(RestorationSessionError::Stopped)
     ));
     assert!(api.received_requests().await.unwrap().is_empty());
@@ -60,20 +59,13 @@ async fn a_stop_before_the_canary_makes_no_provider_request() -> Result<(), Box<
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn restoration_runs_a_canary_then_assembles_remaining_windows() -> Result<(), Box<dyn Error>>
-{
+async fn restoration_processes_all_missing_windows_immediately() -> Result<(), Box<dyn Error>> {
     let api = mock_api().await;
     let client = client(&api)?;
-    let mut session = TranscriptRestorationSession::prepare(&client, transcript(), config(2)?)?;
+    let session = TranscriptRestorationSession::prepare(&client, transcript(), config(2)?)?;
 
     assert_eq!(session.window_count(), 3);
     assert_eq!(session.completed_window_count(), 0);
-    let canary = session
-        .restore_canary()
-        .await?
-        .expect("the nonempty transcript has a canary");
-    assert_eq!(canary.restoration.spans.len(), 1);
-    assert_eq!(session.completed_window_count(), 1);
 
     let result = session.complete_restoration().await?;
 
@@ -85,29 +77,6 @@ async fn restoration_runs_a_canary_then_assembles_remaining_windows() -> Result<
             .expect("mock request recording is enabled")
             .len(),
         3
-    );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn restoration_cannot_launch_remaining_windows_before_the_canary()
--> Result<(), Box<dyn Error>> {
-    let api = mock_api().await;
-    let client = client(&api)?;
-    let session = TranscriptRestorationSession::prepare(&client, transcript(), config(2)?)?;
-
-    let error = session
-        .complete_restoration()
-        .await
-        .expect_err("remaining windows require an accepted canary");
-
-    assert!(matches!(error, RestorationSessionError::CanaryNotRestored));
-    assert_eq!(
-        api.received_requests()
-            .await
-            .expect("mock request recording is enabled")
-            .len(),
-        0
     );
     Ok(())
 }

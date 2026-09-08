@@ -33,7 +33,8 @@ that requests will always start that quickly: HTTP 429 can lower concurrency,
 introduce spacing, and establish a shared cooldown. Healthy queued work lets
 the scheduler recover gradually. It does not probe above the ceiling, cancel
 already-running requests when the cap falls, or infer congestion from latency
-alone. The first window and metric canaries still run before later work.
+alone. Pending work enters this scheduler directly; no request runs alone as a
+mandatory preflight.
 
 Initial and maximum concurrency must be positive, and the initial value cannot
 exceed the ceiling; the interval must be a nonnegative integer in milliseconds.
@@ -134,8 +135,7 @@ their fields are empty or `null`, not transferred from old passages. A `null`
 connection strength displays as “未评估”, not as a measured zero.
 
 `windows` remains the default. Select it explicitly to return to the original
-mode. `analyze-canary` is for that legacy mode; boundary-mode `analyze` already
-runs its first boundary batch alone before admitting later batches.
+mode.
 
 Boundary checkpoints are stored under `boundaries/<identity-hash>/`. Changing
 the boundary prompt or task inputs selects a different directory; scheduling
@@ -162,7 +162,7 @@ artifact because there was no copied-text projection stage. A pre-existing
 Run the same command against the same directory. Completed restoration windows,
 passage-preparation windows, and comparison batches are validated and reused.
 
-Mutating `analyze`, `restore`, and `restore-canary` runs hold an exclusive OS
+Mutating `analyze` and `restore` runs hold an exclusive OS
 lock in `.run.lock` until exit. A second writer is rejected before checkpoint
 mutation. The lock file remains after exit; do not delete it to bypass an active
 run. The OS releases the lock if the process exits or crashes. Analysis also

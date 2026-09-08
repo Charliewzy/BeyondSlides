@@ -121,26 +121,6 @@ pub(crate) async fn prepare(
     progress.enable_steady_tick(Duration::from_millis(100));
 
     let execution = async {
-        if let Some(task) = tasks.first()
-            && results[0].is_none()
-        {
-            provider.worker.check_stop()?;
-            progress.set_message("running boundary canary");
-            let result = client.classify_passage_boundaries(task).await?;
-            write_json_atomically(
-                &directory.join("batch-0001.json"),
-                &result,
-                "boundary checkpoint",
-            )?;
-            results[0] = Some(result);
-            progress.inc(1);
-            provider.worker.progress(
-                crate::worker_control::Stage::Passages,
-                progress.position() as usize,
-                Some(tasks.len()),
-            )?;
-            provider.record_scheduling(run_directory)?;
-        }
         let pending = tasks
             .iter()
             .filter(|t| results[t.batch_index()].is_none())

@@ -21,10 +21,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::run_support::{
-    ProviderSettings, checkpoint_path, display_token_count, initialize_run_directory,
-    initialize_run_directory_with, model_trace_path, open_output_model_trace, open_run_model_trace,
-    ranking_progress_bar, read_json, read_json_with_hash, sha256, window_progress_bar,
-    write_json_atomically, write_text_atomically,
+    ProviderSettings, checkpoint_path, initialize_run_directory, initialize_run_directory_with,
+    model_trace_path, open_run_model_trace, ranking_progress_bar, read_json, read_json_with_hash,
+    sha256, window_progress_bar, write_json_atomically, write_text_atomically,
 };
 use crate::{
     boundary_run,
@@ -90,79 +89,6 @@ impl PassagePreparationMode {
             Err(error) => Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
         }
     }
-}
-
-pub async fn run_canary(
-    transcript_path: &OsStr,
-    slides_path: &OsStr,
-    output_path: &OsStr,
-) -> Result<(), Box<dyn Error>> {
-    if PassagePreparationMode::from_environment()? == PassagePreparationMode::Boundaries {
-        return Err("analyze-canary is the legacy window-preparation canary; use analyze for boundary preparation, which runs its first boundary batch alone".into());
-    }
-    let transcript_path = PathBuf::from(transcript_path);
-    let slides_path = PathBuf::from(slides_path);
-    let output_path = PathBuf::from(output_path);
-    let provider = ProviderSettings::from_annotation_environment()?;
-    provider.worker.check_stop()?;
-    let restoration_directory = output_path.with_extension("restoration");
-    restoration_run::run_complete(
-        transcript_path.as_os_str(),
-        restoration_directory.as_os_str(),
-        Some(provider.scheduler()),
-    )
-    .await?;
-    let transcript: Transcript = read_json(&transcript_path, "transcript")?;
-    let slide_deck: SlideDeck = read_json(&slides_path, "slides")?;
-    let restored_transcript: RestoredTranscript = read_json(
-        &restoration_directory.join(restoration_run::RESTORED_TRANSCRIPT_FILE),
-        "restored transcript",
-    )?;
-    let sources = ValidatedSources::new(transcript, slide_deck)?;
-
-    provider.worker.check_stop()?;
-    provider
-        .worker
-        .progress(crate::worker_control::Stage::Retrieval, 0, None)?;
-    eprintln!(
-        "Indexing {} slides for hybrid retrieval...",
-        sources.slide_deck().slides.len()
-    );
-    let lexical = LexicalSlideScorer::new(&sources);
-    let dense = DenseSlideScorer::try_new(&sources)?;
-    let hybrid = HybridSlideScorer::new(&lexical, &dense);
-    provider
-        .worker
-        .progress(crate::worker_control::Stage::Retrieval, 1, Some(1))?;
-    let client = analysis_client(&provider, open_output_model_trace(&output_path)?)?;
-
-    eprintln!("Preparing the lecture and scoring every transcript window...");
-    let mut session = LectureAnalysisSession::prepare(
-        client.as_ref(),
-        sources,
-        restored_transcript,
-        &hybrid,
-        lecture_config(&provider)?,
-    )?;
-    eprintln!("Sending transcript window 1 as the passage-preparation canary...");
-    let canary = session.analyze_canary().await?.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "cannot run a canary for an empty transcript",
-        )
-    })?;
-
-    write_json_atomically(&output_path, canary, "canary analysis")?;
-    println!(
-        "Wrote {} preliminary canary passages to {} (importance and novelty are assigned only by a complete run; {} tool rounds, {} final-answer repairs, prompt tokens: {}, completion tokens: {})",
-        canary.analysis.passages.len(),
-        output_path.display(),
-        canary.diagnostics.tool_rounds,
-        canary.diagnostics.final_answer_repairs,
-        display_token_count(canary.diagnostics.prompt_tokens),
-        display_token_count(canary.diagnostics.completion_tokens),
-    );
-    Ok(())
 }
 
 pub async fn run_complete(
@@ -296,7 +222,7 @@ pub async fn run_complete(
         ranking_session.batch_count(),
         ranking_session.completed_batch_count(),
     )?;
-    ranking_progress.set_message("running metric canaries, then remaining batches");
+    ranking_progress.set_message("ranking importance and novelty batches");
     let ranking_result = ranking_session
         .complete_with_progress(|event| {
             let path = comparison_checkpoint_path(
@@ -410,26 +336,6 @@ async fn prepare_window_passages(
 
     let passage_progress =
         window_progress_bar(session.window_count(), session.completed_window_count())?;
-    if session.window_count() > 0 {
-        if session.completed_window_count() == 0 {
-            passage_progress.set_message("running passage-partition canary");
-        }
-        let canary = session.analyze_canary().await;
-        provider.record_scheduling(run_directory)?;
-        let canary = canary?.expect("a nonempty transcript has a canary");
-        write_json_atomically(
-            &checkpoint_path(run_directory, 1),
-            canary,
-            "window checkpoint",
-        )?;
-        passage_progress.set_position(session.completed_window_count() as u64);
-        provider.worker.progress(
-            crate::worker_control::Stage::Passages,
-            session.completed_window_count(),
-            Some(session.window_count()),
-        )?;
-    }
-
     passage_progress.set_message("preparing lecture passages");
     let result = session
         .complete_analysis_with_progress(|event| {

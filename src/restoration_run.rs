@@ -1,22 +1,21 @@
 use std::{
     error::Error,
     ffi::OsStr,
-    io,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
 use beyond_slides::{
-    LectureModelBackend, ModelExchangeTrace, RestorationProgressError, RestoredTranscriptSpan,
-    TranscriptRestorationConfig, TranscriptRestorationSession, WindowingConfig,
+    LectureModelBackend, ModelExchangeTrace, RestorationProgressError, TranscriptRestorationConfig,
+    TranscriptRestorationSession, WindowingConfig,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::run_support::{
-    ProviderSettings, checkpoint_path, display_token_count, initialize_run_directory_with,
-    open_run_model_trace, read_json, read_json_with_hash, sha256, window_progress_bar,
-    write_json_atomically, write_text_atomically,
+    ProviderSettings, checkpoint_path, initialize_run_directory_with, open_run_model_trace,
+    read_json, read_json_with_hash, sha256, window_progress_bar, write_json_atomically,
+    write_text_atomically,
 };
 
 const RESTORATION_RUN_FORMAT_VERSION: u32 = 1;
@@ -29,65 +28,6 @@ const MAX_OUTPUT_TOKENS: u32 = 8_192;
 pub(crate) const RESTORED_TRANSCRIPT_FILE: &str = "restored-transcript.json";
 const RESTORED_TEXT_FILE: &str = "restored-transcript.txt";
 const DIAGNOSTICS_FILE: &str = "diagnostics.json";
-const CANARY_TEXT_FILE: &str = "canary.txt";
-
-pub async fn run_canary(
-    transcript_path: &OsStr,
-    run_directory: &OsStr,
-) -> Result<(), Box<dyn Error>> {
-    let started = Instant::now();
-    let transcript_path = PathBuf::from(transcript_path);
-    let run_directory = PathBuf::from(run_directory);
-    let provider = ProviderSettings::from_restoration_environment()?;
-    let _run_lock = crate::run_support::lock_run_directory(&run_directory)?;
-    let (transcript, transcript_hash) = read_json_with_hash(&transcript_path, "transcript")?;
-    let manifest = RestorationRunManifest::new(&provider, transcript_hash);
-    initialize_run_directory_with(
-        &run_directory,
-        &manifest,
-        "restoration",
-        RestorationRunManifest::compatible,
-    )?;
-    provider.record_execution_settings(&run_directory)?;
-    let client = restoration_client(&provider, open_run_model_trace(&run_directory)?)?;
-    let mut session = TranscriptRestorationSession::prepare(
-        client.as_ref(),
-        transcript,
-        restoration_config(&provider)?,
-    )?;
-    restore_checkpoints(&mut session, &run_directory)?;
-
-    eprintln!("Sending transcript window 1 as the restoration canary...");
-    let canary = session.restore_canary().await?.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "cannot run a restoration canary for an empty transcript",
-        )
-    })?;
-    write_json_atomically(
-        &checkpoint_path(&run_directory, 1),
-        canary,
-        "restoration window checkpoint",
-    )?;
-    let text = restored_span_text(&canary.restoration.spans);
-    write_text_atomically(
-        &run_directory.join(CANARY_TEXT_FILE),
-        &text,
-        "restoration canary text",
-    )?;
-
-    println!(
-        "Restored canary window to {} in {:.1?} ({} spans, {} provider retries, {} final-answer repairs, prompt tokens: {}, completion tokens: {})",
-        run_directory.display(),
-        started.elapsed(),
-        canary.restoration.spans.len(),
-        canary.diagnostics.provider_retries,
-        canary.diagnostics.final_answer_repairs,
-        display_token_count(canary.diagnostics.prompt_tokens),
-        display_token_count(canary.diagnostics.completion_tokens),
-    );
-    Ok(())
-}
 
 pub async fn run_complete(
     transcript_path: &OsStr,
@@ -127,26 +67,6 @@ pub async fn run_complete(
     )?;
 
     let progress = window_progress_bar(session.window_count(), session.completed_window_count())?;
-    if session.window_count() > 0 {
-        if session.completed_window_count() == 0 {
-            progress.set_message("running canary");
-        }
-        let canary = session.restore_canary().await;
-        provider.record_scheduling(&run_directory)?;
-        let canary = canary?.expect("a nonempty transcript has a restoration canary");
-        write_json_atomically(
-            &checkpoint_path(&run_directory, 1),
-            canary,
-            "restoration window checkpoint",
-        )?;
-        progress.set_position(session.completed_window_count() as u64);
-        provider.worker.progress(
-            crate::worker_control::Stage::Restoration,
-            session.completed_window_count(),
-            Some(session.window_count()),
-        )?;
-    }
-
     progress.set_message("restoring transcript windows");
     let result = session
         .complete_restoration_with_progress(|event| {
@@ -251,16 +171,6 @@ fn restore_checkpoints(
         );
     }
     Ok(())
-}
-
-fn restored_span_text(spans: &[RestoredTranscriptSpan]) -> String {
-    spans
-        .iter()
-        .filter_map(|span| match span {
-            RestoredTranscriptSpan::Text { text, .. } => Some(text.as_str()),
-            RestoredTranscriptSpan::OmittedDisfluency { .. } => None,
-        })
-        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

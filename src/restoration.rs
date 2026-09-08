@@ -124,8 +124,7 @@ pub struct TranscriptRestorationConfig {
 }
 
 impl TranscriptRestorationConfig {
-    /// The first transcript window always runs alone as a canary. Concurrency
-    /// applies only to the remaining windows after that response is accepted.
+    /// Configures transcript windowing and bounded model concurrency.
     pub fn new(
         windowing: WindowingConfig,
         max_concurrent_windows: usize,
@@ -185,7 +184,7 @@ pub struct RestorationProgress<'a> {
     pub result: &'a TranscriptWindowRestorationResult,
 }
 
-/// A prepared restoration that pauses after its first model request.
+/// A prepared restoration with validated checkpoint slots for every window.
 pub struct TranscriptRestorationSession<'a> {
     stop: StopSignal,
     client: &'a dyn LectureModelBackend,
@@ -256,42 +255,13 @@ impl<'a> TranscriptRestorationSession<'a> {
         Ok(())
     }
 
-    /// Restores the first window without launching later windows.
-    pub async fn restore_canary(
-        &mut self,
-    ) -> Result<Option<&TranscriptWindowRestorationResult>, RestorationSessionError> {
-        let Some(canary_result) = self.window_results.first() else {
-            return Ok(None);
-        };
-        if canary_result.is_none() {
-            if self.stop.is_requested() {
-                return Err(RestorationSessionError::Stopped);
-            }
-            let result = {
-                let windows = build_windows(&self.sources, self.config.windowing);
-                let tasks = build_restoration_tasks(&windows);
-                let Some(canary) = tasks.first() else {
-                    return Ok(None);
-                };
-                self.client.restore_window(canary).await.map_err(|source| {
-                    RestorationSessionError::WindowRestoration {
-                        index: canary.window_index,
-                        source,
-                    }
-                })?
-            };
-            self.window_results[0] = Some(result);
-        }
-        Ok(self.window_results[0].as_ref())
-    }
-
     pub async fn complete_restoration(
         self,
     ) -> Result<CompleteTranscriptRestoration, RestorationSessionError> {
         self.complete_restoration_with_progress(|_| Ok(())).await
     }
 
-    /// Restores all remaining windows with bounded concurrency.
+    /// Restores all missing windows with bounded concurrency.
     /// Persisted results count toward progress but are not reported again.
     pub async fn complete_restoration_with_progress(
         self,
@@ -313,8 +283,6 @@ impl<'a> TranscriptRestorationSession<'a> {
         for (task, result) in tasks.iter().copied().zip(stored_results) {
             if let Some(result) = result {
                 window_results.push((task.window_index, result));
-            } else if task.window_index == 0 {
-                return Err(RestorationSessionError::CanaryNotRestored);
             } else {
                 pending_tasks.push(task);
             }
@@ -388,7 +356,6 @@ pub enum RestorationSessionError {
         index: usize,
         source: ChatCompletionsError,
     },
-    CanaryNotRestored,
     Progress(RestorationProgressError),
     Assembly(RestorationError),
 }
@@ -416,9 +383,6 @@ impl fmt::Display for RestorationSessionError {
                 formatter,
                 "could not restore transcript window index {index}: {source}"
             ),
-            Self::CanaryNotRestored => formatter.write_str(
-                "the first transcript window must be restored before concurrent restoration begins",
-            ),
             Self::Progress(error) => write!(formatter, "restoration progress failed: {error}"),
             Self::Assembly(error) => {
                 write!(formatter, "could not assemble restored transcript: {error}")
@@ -436,8 +400,7 @@ impl Error for RestorationSessionError {
             Self::Progress(error) => Some(error.as_ref()),
             Self::UnknownWindowIndex { .. }
             | Self::WindowAlreadyCompleted { .. }
-            | Self::Stopped
-            | Self::CanaryNotRestored => None,
+            | Self::Stopped => None,
         }
     }
 }

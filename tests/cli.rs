@@ -13,7 +13,7 @@ fn model_runs_reject_a_directory_locked_by_another_process() {
         .open(directory.path().join(".run.lock"))
         .unwrap();
     lock.try_lock().unwrap();
-    for command in ["restore", "restore-canary", "analyze"] {
+    for command in ["restore", "analyze"] {
         let mut process = Command::new(beyond_slides_binary());
         process
             .arg(command)
@@ -41,6 +41,18 @@ fn model_runs_reject_a_directory_locked_by_another_process() {
         assert!(!directory.path().join("manifest.json").exists());
         assert!(!directory.path().join("restoration").exists());
     }
+}
+
+#[test]
+fn usage_does_not_advertise_removed_canary_commands() {
+    let output = Command::new(beyond_slides_binary())
+        .output()
+        .expect("the BeyondSlides binary should run");
+    let error = String::from_utf8_lossy(&output.stderr);
+
+    assert!(!output.status.success());
+    assert!(!error.contains("restore-canary"));
+    assert!(!error.contains("beyond-slides canary"));
 }
 
 #[test]

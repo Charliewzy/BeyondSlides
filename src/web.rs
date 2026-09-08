@@ -123,6 +123,10 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
             get(rain_classroom_lectures),
         )
         .route(
+            "/api/rain-classroom/courses/{classroom_id}/lectures/{lesson_id}/presentations",
+            get(rain_classroom_presentations),
+        )
+        .route(
             "/api/rain-classroom/imports/{import_id}",
             get(rain_classroom_download_progress),
         )
@@ -341,6 +345,21 @@ async fn rain_classroom_lectures(
     ))
 }
 
+async fn rain_classroom_presentations(
+    State(app): State<App>,
+    Path((classroom_id, lesson_id)): Path<(u64, String)>,
+) -> Result<Json<Vec<rain_classroom::Presentation>>, AppError> {
+    Ok(Json(
+        app.rain_classroom
+            .presentations(&rain_classroom::LectureSelection {
+                classroom_id,
+                lesson_id,
+            })
+            .await
+            .map_err(AppError::bad)?,
+    ))
+}
+
 async fn rain_classroom_download_progress(
     State(app): State<App>,
     Path(import_id): Path<String>,
@@ -407,7 +426,8 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
     let mut title = "Untitled lecture".to_owned();
     let mut extension = String::new();
     let mut recording = None;
-    let mut rain_selection = None;
+    let mut rain_slides = None;
+    let mut rain_recording = None;
     let mut rain_import_id = None;
     while let Some(mut field) = multipart.next_field().await.map_err(AppError::bad)? {
         let name = field.name().unwrap_or("").to_owned();
@@ -431,7 +451,7 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
             }
             continue;
         }
-        if name == "rain_classroom" {
+        if matches!(name.as_str(), "rain_slides" | "rain_recording") {
             let mut bytes = Vec::new();
             while let Some(chunk) = field.chunk().await.map_err(AppError::bad)? {
                 if bytes.len() + chunk.len() > 512 {
@@ -439,10 +459,17 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
                 }
                 bytes.extend_from_slice(&chunk);
             }
-            rain_selection = Some(
-                serde_json::from_slice::<rain_classroom::LectureSelection>(&bytes)
-                    .map_err(AppError::bad)?,
-            );
+            if name == "rain_slides" {
+                rain_slides = Some(
+                    serde_json::from_slice::<rain_classroom::PresentationSelection>(&bytes)
+                        .map_err(AppError::bad)?,
+                );
+            } else {
+                rain_recording = Some(
+                    serde_json::from_slice::<rain_classroom::LectureSelection>(&bytes)
+                        .map_err(AppError::bad)?,
+                );
+            }
             continue;
         }
         if name == "rain_import_id" {
@@ -492,33 +519,40 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
         }
         output.flush().await?;
     }
-    if rain_selection.is_some() && (fields.contains("transcript") || recording.is_some()) {
+    if rain_recording.is_some() && (fields.contains("transcript") || recording.is_some()) {
         return Err(AppError::bad(
             "Choose either a Rain Classroom lecture or local transcript/recording files",
         ));
     }
-    if rain_selection.is_some() != rain_import_id.is_some() {
+    let uses_rain = rain_slides.is_some() || rain_recording.is_some();
+    if uses_rain != rain_import_id.is_some() {
         return Err(AppError::bad(
             "Rain Classroom imports require a progress identifier",
         ));
     }
-    if !fields.contains("slides")
-        || (!fields.contains("transcript") && recording.is_none() && rain_selection.is_none())
-    {
+    if fields.contains("slides") == rain_slides.is_some() {
+        return Err(AppError::bad(
+            "Choose exactly one slide source: a PDF upload or Rain Classroom courseware",
+        ));
+    }
+    if !fields.contains("transcript") && recording.is_none() && rain_recording.is_none() {
         return Err(AppError::bad(
             "Upload slides and provide a transcript, a recording, or a Rain Classroom lecture",
         ));
     }
-    if let (Some(selection), Some(import_id)) = (rain_selection, rain_import_id) {
+    if let Some(import_id) = rain_import_id {
         app.rain_classroom
-            .acquire_recording(
-                &selection,
-                &directory.path().join("recording.mp4"),
+            .acquire_sources(
+                rain_slides.as_ref(),
+                rain_recording.as_ref(),
+                directory.path(),
                 &import_id,
             )
             .await
             .map_err(AppError::bad)?;
-        recording = Some("recording.mp4".into());
+        if rain_recording.is_some() {
+            recording = Some("recording.mp4".into());
+        }
     }
     let root = app.root.clone();
     let job = tokio::task::spawn_blocking(move || {

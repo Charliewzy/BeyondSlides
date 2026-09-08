@@ -184,29 +184,42 @@ def main():
             page.route("**/api/rain-classroom/courses/3195306/lectures", lambda route: route.fulfill(json=[{
                 "lesson_id": "1765600343592779520", "title": "⑥并发编程",
             }]))
-            page.locator("#source-mode").select_option("rain")
+            page.route("**/api/rain-classroom/courses/3195306/lectures/1765600343592779520/presentations", lambda route: route.fulfill(json=[{
+                "presentation_id": "1765600451302821888", "title": "06-concurrency", "page_count": 80,
+            }]))
+            page.locator("#slides-source-mode").select_option("rain")
             assert page.locator("#rain-classroom-import").is_visible()
-            assert page.locator('[name="transcript"]').is_disabled()
-            assert page.locator('[name="recording"]').is_disabled()
+            assert page.locator('[name="slides"]').is_disabled()
+            assert not page.locator('[name="transcript"]').is_disabled()
             page.locator("#rain-authenticated").wait_for(state="visible")
             assert page.locator("#rain-connect").is_hidden()
-            page.locator("#rain-course").select_option("3195306")
-            page.locator("#rain-lecture").select_option("1765600343592779520")
+            page.locator("#rain-slides-course").select_option("3195306")
+            page.locator("#rain-slides-lecture").select_option("1765600343592779520")
+            page.locator("#rain-presentation").select_option("1765600451302821888")
+            assert "80 页" in page.locator("#rain-presentation").locator("option:checked").inner_text()
+            page.locator("#lecture-source-mode").select_option("rain")
+            assert page.locator('[name="transcript"]').is_disabled()
+            assert page.locator('[name="recording"]').is_disabled()
+            page.locator("#rain-recording-course").select_option("3195306")
+            page.locator("#rain-recording-lecture").select_option("1765600343592779520")
             assert page.locator('[name="name"]').input_value() == "⑥并发编程"
-            page.evaluate("renderRainDownloadProgress({phase: 'downloading', downloaded_bytes: 26214400, total_bytes: 104857600})")
+            page.evaluate("renderRainDownloadProgress({resource: 'slides', phase: 'downloading', downloaded_bytes: 26214400, total_bytes: null, completed_items: 20, total_items: 80})")
             assert page.locator("#rain-download").is_visible()
+            assert "课件" in page.locator("#rain-download-phase").inner_text()
             assert page.locator("#rain-download-percent").inner_text() == "25%"
-            assert page.locator("#rain-download-bytes").inner_text() == "25.0 MiB / 100.0 MiB"
+            assert page.locator("#rain-download-bytes").inner_text() == "20 / 80 页 · 已下载 25.0 MiB"
             assert page.locator("#rain-download-bar").evaluate("progress => progress.value / progress.max") == 0.25
             page.evaluate("stopRainDownloadProgress()")
             assert page.locator("#rain-download").is_hidden()
             page.unroute("**/api/rain-classroom/connect")
             page.unroute("**/api/rain-classroom/courses")
             page.unroute("**/api/rain-classroom/courses/3195306/lectures")
-            page.locator("#source-mode").select_option("recording")
+            page.unroute("**/api/rain-classroom/courses/3195306/lectures/1765600343592779520/presentations")
+            page.locator("#slides-source-mode").select_option("upload")
+            page.locator("#lecture-source-mode").select_option("recording")
             assert page.locator('[name="transcript"]').is_disabled()
             assert page.locator('[name="recording"]').evaluate("input => input.required")
-            page.locator("#source-mode").select_option("transcript")
+            page.locator("#lecture-source-mode").select_option("transcript")
             page.locator('[name="name"]').fill("浏览器无时间戳导入检查")
             page.locator('[name="slides"]').set_input_files("tests/fixtures/pdf_import.pdf")
             page.locator('[name="transcript"]').set_input_files({

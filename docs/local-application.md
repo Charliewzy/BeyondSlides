@@ -1,10 +1,11 @@
 # Local application implementation
 
-The local-first application supports PDF + existing transcript or recording
-import, one-lecture recording import from Rain Classroom, CPU transcription,
-resumable analysis, live progress/token usage, the interactive reader, and
-shareable ZIP export. Transcripts can be timed subtitles or untimed plain text;
-missing timestamps are never fabricated.
+The local-first application independently selects a written source and a
+lecture source. It supports PDF or Rain Classroom slide import, existing
+transcript or recording import, Rain Classroom recording import, CPU
+transcription, resumable analysis, live progress/token usage, the interactive
+reader, and shareable ZIP export. Transcripts can be timed subtitles or untimed
+plain text; missing timestamps are never fabricated.
 
 The sidebar's **查看示例报告** button opens a bundled real-lecture report in a
 new tab, without importing a lecture, creating a job, or configuring a model.
@@ -25,20 +26,25 @@ Open `http://127.0.0.1:7842`. The server binds only to loopback; this is not a
 multi-user hosted deployment. Poppler's `pdftotext` and `pdftoppm` must be on PATH,
 and the existing dense-retrieval model may download on first use.
 
-1. Import a slides PDF (up to 100 MiB) and normalized transcript JSON, FunASR
-   timestamped TSV, SRT, WebVTT, or UTF-8 plain text (up to 16 MiB).
+1. Choose the written source: upload a slides PDF (up to 100 MiB), or select a
+   Rain Classroom course, lecture, and presentation. Choose the lecture source
+   independently: normalized transcript JSON, FunASR timestamped TSV, SRT,
+   WebVTT, or UTF-8 plain text (up to 16 MiB), a local recording, or a Rain
+   Classroom recording.
    Optionally attach a browser-playable recording.
    Alternatively choose local CPU transcription and upload a recording instead
    of a transcript. Recordings are inspected with `ffprobe`; transcription
    requires an audio track. The whole upload is limited to 4 GiB.
-   As a third option, open the in-app Rain Classroom QR dialog and select one
-   course and one lecture. A dedicated headless Chrome/Chromium profile renders
-   the login view; no separate provider window is shown. The slide PDF is still
-   uploaded manually. Provider-declared replay entries are downloaded and
-   assembled into one `recording.mp4` before the unchanged transcription
-   pipeline sees them; replay segmentation is not part of the UI or job model.
-   During the import, the page reports downloaded bytes and uses the media
-   server's content lengths for a percentage bar when they are available.
+   A dedicated headless Chrome/Chromium profile renders the Rain Classroom
+   login view; no separate provider window is shown. Provider-declared replay
+   entries are downloaded and assembled into one `recording.mp4` before the
+   unchanged transcription pipeline sees them; replay segmentation is not part
+   of the UI or job model.
+   Selected courseware pages are downloaded in provider order and assembled
+   into the canonical `slides.pdf`. This is currently a raster PDF, so the
+   unchanged `pdftotext` importer emits sparse-text warnings until OCR is added.
+   During import, recording progress uses downloaded bytes when sizes are
+   known; courseware progress uses completed page count.
 2. Inspect the text preview and extraction warnings. Upload/preview does not
    contact the analysis provider.
    “建议检查的页面” lists flagged pages in a horizontal thumbnail strip, with
@@ -74,13 +80,13 @@ subtitle sequence labels are normalized into contiguous source IDs.
 
 Rain Classroom authentication stays in a dedicated Chrome/Chromium profile at
 `.rain-classroom-browser` inside the application data directory. Course and
-lecture discovery run in that authenticated page context. Selecting the Rain
+lecture discovery run in that authenticated page context. Selecting either Rain
 source silently checks the saved session: a valid session populates courses and
 shows “已登录雨课堂”; an expired session offers the in-app QR dialog. Graceful
 controller shutdown closes Chromium so it can flush this profile. The browser
-submits only the selected classroom and lecture identifiers to the local
-backend; the backend obtains fresh, short-lived replay URLs and never accepts
-signed media URLs from the UI. This adapter targets Rain Classroom's current
+submits only the selected classroom, lecture, and presentation identifiers to
+the local backend; the backend obtains fresh, short-lived asset URLs and never
+accepts signed URLs from the UI. This adapter targets Rain Classroom's current
 private web interface and may require maintenance when the site changes.
 
 ## Local CPU transcription setup

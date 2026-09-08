@@ -41,6 +41,14 @@ input, textarea, select { width: 100%; border: 1px solid #dcd8e6; border-radius:
 input:focus, textarea:focus { outline: 2px solid #b6a5e5; outline-offset: 2px; }
 input[type=file] { font-size: 12px; }
 .upload-grid, .provider-grid, .preview-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+.source-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; margin: 22px 0; }
+.source-card { min-width: 0; border: 1px solid var(--line); border-radius: 12px; padding: 20px; background: #fdfcff; }
+.source-card h2 { display: flex; align-items: center; gap: 9px; }
+.source-card h2 span { display: inline-grid; place-items: center; width: 25px; height: 25px; border-radius: 50%; color: white; background: var(--accent); font-size: 12px; }
+.source-card > .muted { margin-top: -6px; }
+.source-card .upload { margin-bottom: 0; }
+.provider-selection { padding-top: 4px; }
+.provider-selection label:last-child { margin-bottom: 0; }
 .upload { background: #faf9fd; border: 1px dashed #d4cbe8; border-radius: 10px; padding: 22px; }
 .upload small { font-weight: 400; }
 .provider-import { background: #faf9fd; border: 1px solid #d4cbe8; border-radius: 10px; padding: 18px 20px; margin-bottom: 20px; }
@@ -74,5 +82,5 @@ progress { width: 100%; height: 8px; accent-color: var(--accent); display: block
 .debug-toolbar label { margin: 0; }
 #debug-output { height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 ui-monospace, monospace; color: #e5e2ee; background: #252333; padding: 14px; border-radius: 8px; }
 #debug-panel { border-top: 1px solid var(--line); padding-top: 16px; }
-@media(max-width: 900px) { body { grid-template-columns: 200px minmax(0,1fr); } main { padding: 25px; } .upload-grid, .provider-grid, .preview-grid { grid-template-columns: 1fr; gap: 0; } header > .muted { display: none; } }
+@media(max-width: 900px) { body { grid-template-columns: 200px minmax(0,1fr); } main { padding: 25px; } .upload-grid, .provider-grid, .preview-grid, .source-grid { grid-template-columns: 1fr; gap: 14px; } header > .muted { display: none; } }
 @media(max-width: 620px) { body { display: block; } .library { height: auto; position: static; padding: 18px; } .library .muted, .local-badge { display: none; } .library > button { margin-top: 15px; } nav { max-height: 140px; margin-top: 10px; } main { padding: 22px 16px; } header { margin-bottom: 24px; } .card { padding: 20px; } .usage-grid { grid-template-columns: 1fr 1fr; } }

@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
+use chromiumoxide::cdp::browser_protocol::page::{CaptureScreenshotFormat, PrintToPdfParams};
 use chromiumoxide::{Browser, Page, browser::BrowserConfig, page::ScreenshotParams};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -24,6 +24,15 @@ pub(super) struct LectureSelection {
     pub lesson_id: String,
 }
 
+/// One Rain Classroom presentation selected as the written source.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PresentationSelection {
+    pub classroom_id: u64,
+    pub lesson_id: String,
+    pub presentation_id: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct Course {
     pub classroom_id: u64,
@@ -37,6 +46,13 @@ pub(super) struct Lecture {
     pub title: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct Presentation {
+    pub presentation_id: String,
+    pub title: String,
+    pub page_count: usize,
+}
+
 pub(super) struct RainClassroom {
     profile: PathBuf,
     session: Mutex<Option<BrowserSession>>,
@@ -45,9 +61,12 @@ pub(super) struct RainClassroom {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct DownloadProgress {
+    resource: &'static str,
     phase: &'static str,
     downloaded_bytes: u64,
     total_bytes: Option<u64>,
+    completed_items: Option<usize>,
+    total_items: Option<usize>,
 }
 
 struct DownloadRegistration<'a> {
@@ -223,44 +242,69 @@ impl RainClassroom {
         Ok(lectures)
     }
 
+    pub async fn presentations(
+        &self,
+        selection: &LectureSelection,
+    ) -> Result<Vec<Presentation>, String> {
+        self.validate_lecture(selection).await?;
+        let replay = self.replay(&selection.lesson_id).await?;
+        let mut presentations = Vec::with_capacity(replay.presentations.len());
+        for presentation_id in replay.presentations {
+            let detail = self
+                .presentation_detail(&selection.lesson_id, &presentation_id)
+                .await?;
+            presentations.push(Presentation {
+                presentation_id,
+                title: detail.presentation.title,
+                page_count: detail.slides.len(),
+            });
+        }
+        Ok(presentations)
+    }
+
+    /// Materializes the selected provider sources behind the canonical files
+    /// consumed by the rest of BeyondSlides.
+    pub async fn acquire_sources(
+        &self,
+        slides: Option<&PresentationSelection>,
+        recording: Option<&LectureSelection>,
+        destination: &Path,
+        import_id: &str,
+    ) -> Result<Option<u64>, String> {
+        let _registration = self.register_download(import_id)?;
+        if let Some(selection) = slides {
+            self.acquire_slides(selection, &destination.join("slides.pdf"), import_id)
+                .await?;
+        }
+        let duration = if let Some(selection) = recording {
+            Some(
+                self.acquire_recording(selection, &destination.join("recording.mp4"), import_id)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        Ok(duration)
+    }
+
     /// Materializes all replay entries for one lecture as one recording. The
     /// provider's segmentation never crosses this interface.
-    pub async fn acquire_recording(
+    async fn acquire_recording(
         &self,
         selection: &LectureSelection,
         destination: &Path,
         import_id: &str,
     ) -> Result<u64, String> {
-        let registration = self.register_download(import_id)?;
-        if selection.lesson_id.is_empty()
-            || !selection
-                .lesson_id
-                .bytes()
-                .all(|byte| byte.is_ascii_digit())
-        {
-            return Err("Invalid Rain Classroom lecture identifier".into());
-        }
-        // Checking the classroom prevents a stale or edited form from importing
-        // a lesson that was not offered by the selected course.
-        if !self
-            .lectures(selection.classroom_id)
-            .await?
-            .iter()
-            .any(|lecture| lecture.lesson_id == selection.lesson_id)
-        {
-            return Err("The selected lecture is not part of this Rain Classroom course".into());
-        }
-        let script = format!(
-            "async function() {{ const response = await (await fetch('/api/v3/classroom-report/replay?lesson_id={}&canFakeLive=1&front_time=' + Date.now(), {{credentials: 'include'}})).json(); return {{code: Number(response.code ?? response.errcode ?? -1), msg: String(response.msg ?? response.errmsg ?? ''), data: response.data ?? null}}; }}",
-            selection.lesson_id
-        );
-        let response: ReplayResponse = self.evaluate(&script).await?;
-        if response.code != 0 {
-            return Err(login_error(&response.msg));
-        }
-        let response_data = response
-            .data
-            .ok_or_else(|| login_error("missing replay data"))?;
+        self.update_download(import_id, |progress| {
+            progress.resource = "recording";
+            progress.phase = "preparing";
+            progress.downloaded_bytes = 0;
+            progress.total_bytes = None;
+            progress.completed_items = None;
+            progress.total_items = None;
+        });
+        self.validate_lecture(selection).await?;
+        let response_data = self.replay(&selection.lesson_id).await?;
         if response_data.show_playback != 1 {
             return Err("Rain Classroom does not make this lecture recording available".into());
         }
@@ -290,13 +334,14 @@ impl RainClassroom {
         let mut responses = Vec::with_capacity(entries.len());
         let mut total_bytes = Some(0_u64);
         for (index, entry) in entries.iter().enumerate() {
-            let response = request_download(&client, &entry.url).await?;
+            let response = request_download(&client, &entry.url, "recording").await?;
             total_bytes = total_bytes
                 .zip(response.content_length())
                 .and_then(|(total, length)| total.checked_add(length));
             responses.push((index, response));
         }
         self.update_download(import_id, |progress| {
+            progress.resource = "recording";
             progress.phase = "downloading";
             progress.total_bytes = total_bytes;
         });
@@ -361,8 +406,195 @@ impl RainClassroom {
                 .map_err(io_error)?;
         }
         tokio::fs::remove_dir_all(&parts).await.map_err(io_error)?;
-        drop(registration);
         Ok(lesson_duration)
+    }
+
+    async fn acquire_slides(
+        &self,
+        selection: &PresentationSelection,
+        destination: &Path,
+        import_id: &str,
+    ) -> Result<(), String> {
+        self.update_download(import_id, |progress| {
+            progress.resource = "slides";
+            progress.phase = "preparing";
+            progress.downloaded_bytes = 0;
+            progress.total_bytes = None;
+            progress.completed_items = None;
+            progress.total_items = None;
+        });
+        let lecture = LectureSelection {
+            classroom_id: selection.classroom_id,
+            lesson_id: selection.lesson_id.clone(),
+        };
+        self.validate_lecture(&lecture).await?;
+        let replay = self.replay(&selection.lesson_id).await?;
+        if !replay
+            .presentations
+            .iter()
+            .any(|id| id == &selection.presentation_id)
+        {
+            return Err(
+                "The selected courseware is not part of this Rain Classroom lecture".into(),
+            );
+        }
+        let detail = self
+            .presentation_detail(&selection.lesson_id, &selection.presentation_id)
+            .await?;
+        if detail.slides.is_empty() {
+            return Err("Rain Classroom returned an empty courseware presentation".into());
+        }
+        self.update_download(import_id, |progress| {
+            progress.phase = "downloading";
+            progress.completed_items = Some(0);
+            progress.total_items = Some(detail.slides.len());
+        });
+
+        let parts = destination
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(".rain-classroom-slides");
+        if parts.exists() {
+            tokio::fs::remove_dir_all(&parts).await.map_err(io_error)?;
+        }
+        tokio::fs::create_dir_all(&parts).await.map_err(io_error)?;
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(5 * 60))
+            .build()
+            .map_err(provider_error)?;
+        let mut slides = detail.slides;
+        slides.sort_by_key(|slide| slide.index);
+        let mut page_paths = Vec::with_capacity(slides.len());
+        for (position, slide) in slides.into_iter().enumerate() {
+            let response = request_download(&client, &slide.cover, "courseware page").await?;
+            let page_path = parts.join(format!("slide-{position:04}.jpg"));
+            download(response, &page_path, |bytes| {
+                self.update_download(import_id, |progress| {
+                    progress.downloaded_bytes = progress.downloaded_bytes.saturating_add(bytes);
+                });
+            })
+            .await?;
+            self.update_download(import_id, |progress| {
+                progress.completed_items = Some(position + 1);
+            });
+            page_paths.push(page_path);
+        }
+        self.update_download(import_id, |progress| {
+            progress.phase = "assembling";
+        });
+        self.print_slide_pdf(
+            &page_paths,
+            detail.presentation.width,
+            detail.presentation.height,
+            destination,
+        )
+        .await?;
+        tokio::fs::remove_dir_all(&parts).await.map_err(io_error)?;
+        Ok(())
+    }
+
+    async fn print_slide_pdf(
+        &self,
+        pages: &[PathBuf],
+        width: u32,
+        height: u32,
+        destination: &Path,
+    ) -> Result<(), String> {
+        let image_tags = pages
+            .iter()
+            .map(|path| {
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or("Could not address a downloaded Rain Classroom slide")?;
+                Ok(format!("<img src=\"{name}\">"))
+            })
+            .collect::<Result<String, String>>()?;
+        let html = format!(
+            "<!doctype html><style>@page{{size:{width}px {height}px;margin:0}}*{{box-sizing:border-box}}html,body{{margin:0}}img{{display:block;width:{width}px;height:{height}px;object-fit:contain;break-after:page}}img:last-child{{break-after:auto}}</style>{image_tags}"
+        );
+        let html_path = pages
+            .first()
+            .and_then(|page| page.parent())
+            .ok_or("Rain Classroom returned no slide pages")?
+            .join("slides.html");
+        tokio::fs::write(&html_path, html).await.map_err(io_error)?;
+        let html_url = url::Url::from_file_path(&html_path)
+            .map_err(|_| "Could not address the local Rain Classroom slide document")?;
+        let session = self.session.lock().await;
+        let session = session
+            .as_ref()
+            .ok_or("Open Rain Classroom and finish QR-code login before importing courseware")?;
+        let page = session
+            .browser
+            .new_page(html_url.as_str())
+            .await
+            .map_err(provider_error)?;
+        page.evaluate_function(
+            "async function() { await Promise.all(Array.from(document.images, image => image.complete ? (image.naturalWidth > 0 ? Promise.resolve() : Promise.reject(new Error('slide image failed to load'))) : new Promise((resolve, reject) => { image.addEventListener('load', resolve, {once: true}); image.addEventListener('error', reject, {once: true}); }))); return document.images.length; }",
+        )
+        .await
+        .map_err(provider_error)?;
+        let options = PrintToPdfParams::builder()
+            .print_background(true)
+            .prefer_css_page_size(true)
+            .margin_top(0.0)
+            .margin_bottom(0.0)
+            .margin_left(0.0)
+            .margin_right(0.0)
+            .build();
+        page.save_pdf(options, destination)
+            .await
+            .map_err(provider_error)?;
+        page.close().await.map_err(provider_error)?;
+        Ok(())
+    }
+
+    async fn validate_lecture(&self, selection: &LectureSelection) -> Result<(), String> {
+        validate_identifier(&selection.lesson_id, "lecture")?;
+        if !self
+            .lectures(selection.classroom_id)
+            .await?
+            .iter()
+            .any(|lecture| lecture.lesson_id == selection.lesson_id)
+        {
+            return Err("The selected lecture is not part of this Rain Classroom course".into());
+        }
+        Ok(())
+    }
+
+    async fn replay(&self, lesson_id: &str) -> Result<ReplayData, String> {
+        validate_identifier(lesson_id, "lecture")?;
+        let script = format!(
+            "async function() {{ const response = await (await fetch('/api/v3/classroom-report/replay?lesson_id={lesson_id}&canFakeLive=1&front_time=' + Date.now(), {{credentials: 'include'}})).json(); return {{code: Number(response.code ?? response.errcode ?? -1), msg: String(response.msg ?? response.errmsg ?? ''), data: response.data ?? null}}; }}"
+        );
+        let response: ReplayResponse = self.evaluate(&script).await?;
+        if response.code != 0 {
+            return Err(login_error(&response.msg));
+        }
+        response
+            .data
+            .ok_or_else(|| login_error("missing replay data"))
+    }
+
+    async fn presentation_detail(
+        &self,
+        lesson_id: &str,
+        presentation_id: &str,
+    ) -> Result<PresentationData, String> {
+        validate_identifier(lesson_id, "lecture")?;
+        validate_identifier(presentation_id, "presentation")?;
+        let script = format!(
+            "async function() {{ const response = await (await fetch('/api/v3/lesson-summary/student/presentation?lesson_id={lesson_id}&presentation_id={presentation_id}', {{credentials: 'include'}})).json(); return {{code: Number(response.code ?? response.errcode ?? -1), msg: String(response.msg ?? response.errmsg ?? ''), data: response.data ?? null}}; }}"
+        );
+        let response: PresentationResponse = self.evaluate(&script).await?;
+        if response.code != 0 {
+            return Err(login_error(&response.msg));
+        }
+        response
+            .data
+            .ok_or_else(|| login_error("missing courseware data"))
     }
 
     fn register_download<'a>(
@@ -387,9 +619,12 @@ impl RainClassroom {
         downloads.insert(
             import_id.into(),
             DownloadProgress {
+                resource: "preparing",
                 phase: "preparing",
                 downloaded_bytes: 0,
                 total_bytes: None,
+                completed_items: None,
+                total_items: None,
             },
         );
         Ok(DownloadRegistration {
@@ -443,17 +678,32 @@ impl RainClassroom {
 async fn request_download(
     client: &reqwest::Client,
     url: &str,
+    resource: &str,
 ) -> Result<reqwest::Response, String> {
     let url = url::Url::parse(url).map_err(provider_error)?;
     if url.scheme() != "https" {
-        return Err("Rain Classroom returned a recording URL that is not HTTPS".into());
+        return Err(format!(
+            "Rain Classroom returned a {resource} URL that is not HTTPS"
+        ));
     }
     client
         .get(url)
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
-        .map_err(|error| format!("Could not download the Rain Classroom recording: {error}"))
+        .map_err(|error| {
+            format!(
+                "Could not download the Rain Classroom {resource}: {}",
+                error.without_url()
+            )
+        })
+}
+
+fn validate_identifier(identifier: &str, kind: &str) -> Result<(), String> {
+    if identifier.is_empty() || !identifier.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(format!("Invalid Rain Classroom {kind} identifier"));
+    }
+    Ok(())
 }
 
 async fn download(
@@ -466,7 +716,7 @@ async fn download(
         .map_err(io_error)?;
     let mut bytes = response.bytes_stream();
     while let Some(chunk) = bytes.next().await {
-        let chunk = chunk.map_err(provider_error)?;
+        let chunk = chunk.map_err(|error| provider_error(error.without_url()))?;
         output.write_all(&chunk).await.map_err(io_error)?;
         report_bytes(chunk.len() as u64);
     }
@@ -478,7 +728,7 @@ fn provider_error(error: impl std::fmt::Display) -> String {
 }
 
 fn io_error(error: io::Error) -> String {
-    format!("Could not save the Rain Classroom recording: {error}")
+    format!("Could not save Rain Classroom content: {error}")
 }
 
 fn login_error(message: &str) -> String {
@@ -549,6 +799,8 @@ struct ReplayData {
     show_playback: u8,
     #[serde(default)]
     live: Vec<ReplayEntry>,
+    #[serde(default)]
+    presentations: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -556,6 +808,45 @@ struct ReplayEntry {
     url: String,
     #[serde(rename = "hiddenStatus", default)]
     hidden_status: u8,
+}
+
+#[derive(Deserialize)]
+struct PresentationResponse {
+    code: i64,
+    #[serde(default)]
+    msg: String,
+    data: Option<PresentationData>,
+}
+
+#[derive(Deserialize)]
+struct PresentationData {
+    presentation: PresentationRecord,
+    #[serde(default)]
+    slides: Vec<SlideRecord>,
+}
+
+#[derive(Deserialize)]
+struct PresentationRecord {
+    #[serde(default = "default_slide_width")]
+    width: u32,
+    #[serde(default = "default_slide_height")]
+    height: u32,
+    #[serde(default)]
+    title: String,
+}
+
+#[derive(Deserialize)]
+struct SlideRecord {
+    index: u32,
+    cover: String,
+}
+
+fn default_slide_width() -> u32 {
+    1280
+}
+
+fn default_slide_height() -> u32 {
+    720
 }
 
 #[cfg(test)]
@@ -578,13 +869,17 @@ mod tests {
             )
             .unwrap(),
             serde_json::json!({
+                "resource": "preparing",
                 "phase": "preparing",
                 "downloaded_bytes": 0,
-                "total_bytes": null
+                "total_bytes": null,
+                "completed_items": null,
+                "total_items": null
             })
         );
 
         rain_classroom.update_download("browser-import-1", |progress| {
+            progress.resource = "recording";
             progress.phase = "downloading";
             progress.downloaded_bytes = 125;
             progress.total_bytes = Some(500);
@@ -593,6 +888,7 @@ mod tests {
             .download_progress("browser-import-1")
             .unwrap();
         assert_eq!(progress.phase, "downloading");
+        assert_eq!(progress.resource, "recording");
         assert_eq!(progress.downloaded_bytes, 125);
         assert_eq!(progress.total_bytes, Some(500));
 
@@ -622,6 +918,7 @@ mod tests {
             "data": {
                 "lessonDuration": 8427000,
                 "showPlayback": 1,
+                "presentations": ["1765600451302821888"],
                 "live": [
                     {"url": "https://media.example/first", "hiddenStatus": 0},
                     {"url": "https://media.example/second", "hiddenStatus": 0}
@@ -632,6 +929,7 @@ mod tests {
         let data = response.data.unwrap();
         assert_eq!(data.lesson_duration, 8_427_000);
         assert_eq!(data.live.len(), 2);
+        assert_eq!(data.presentations, ["1765600451302821888"]);
         let public = serde_json::to_value(Lecture {
             lesson_id: "lesson".into(),
             title: "并发编程".into(),
@@ -639,5 +937,34 @@ mod tests {
         .unwrap();
         assert!(public.get("segments").is_none());
         assert!(public.get("live").is_none());
+    }
+
+    #[test]
+    fn presentation_details_keep_signed_page_urls_private() {
+        let response: PresentationResponse = serde_json::from_value(serde_json::json!({
+            "code": 0,
+            "msg": "OK",
+            "data": {
+                "presentation": {"title": "04-adv-types", "width": 841, "height": 473},
+                "slides": [
+                    {"index": 2, "cover": "https://media.example/second.jpg?signature=secret"},
+                    {"index": 1, "cover": "https://media.example/first.jpg?signature=secret"}
+                ]
+            }
+        }))
+        .unwrap();
+        let data = response.data.unwrap();
+        assert_eq!(data.presentation.width, 841);
+        assert_eq!(data.presentation.height, 473);
+        assert_eq!(data.slides.len(), 2);
+
+        let public = serde_json::to_value(Presentation {
+            presentation_id: "1765600451302821888".into(),
+            title: data.presentation.title,
+            page_count: data.slides.len(),
+        })
+        .unwrap();
+        assert!(public.get("slides").is_none());
+        assert!(public.to_string().find("signature").is_none());
     }
 }

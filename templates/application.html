@@ -24,30 +24,44 @@
       <p class="intro">先导入讲义与转写，确认内容，再开始分析。</p>
       <form id="import-form" class="card">
         <label>讲座名称<input name="name" maxlength="100" placeholder="例如：泛型、特型与生命周期"></label>
-        <label>转写来源<select id="source-mode"><option value="transcript">上传已有转写</option><option value="recording">从录音 / 视频本地转写（CPU）</option><option value="rain">从雨课堂导入录像并转写</option></select></label>
+        <div class="source-grid">
+          <section class="source-card">
+            <h2><span>1</span> 书面材料</h2>
+            <p class="muted">提供分析所依据的幻灯片。</p>
+            <label>来源<select id="slides-source-mode"><option value="upload">上传 PDF</option><option value="rain">从雨课堂导入课件</option></select></label>
+            <label class="upload" id="slides-upload-label">幻灯片 PDF<input name="slides" type="file" accept=".pdf" required><small>提取每页文字，保留原始幻灯片展示。</small></label>
+            <div id="rain-slides-selection" class="provider-selection" hidden>
+              <label>课程<select id="rain-slides-course" disabled><option value="">先加载课程</option></select></label>
+              <label>讲次<select id="rain-slides-lecture" disabled><option value="">先选择课程</option></select></label>
+              <label>课件<select id="rain-presentation" disabled><option value="">先选择讲次</option></select></label>
+            </div>
+          </section>
+          <section class="source-card">
+            <h2><span>2</span> 课堂内容</h2>
+            <p class="muted">提供老师实际讲述的内容。</p>
+            <label>来源<select id="lecture-source-mode"><option value="transcript">上传已有转写</option><option value="recording">上传录音 / 视频并本地转写</option><option value="rain">从雨课堂导入录像并转写</option></select></label>
+            <label class="upload" id="transcript-upload-label">现有转写<input name="transcript" type="file" accept=".json,.tsv,.srt,.vtt,.txt" required><small>支持 JSON、TSV、SRT、VTT、TXT。</small></label>
+            <label id="recording-upload-label"><span id="recording-label">录音 / 视频（可选，用于回放）</span><input name="recording" type="file" accept=".mp4,.webm,.mp3,.m4a,.wav,.flac,.ogg"></label>
+            <div id="rain-recording-selection" class="provider-selection" hidden>
+              <label>课程<select id="rain-recording-course" disabled><option value="">先加载课程</option></select></label>
+              <label>讲次<select id="rain-recording-lecture" disabled><option value="">先选择课程</option></select></label>
+            </div>
+          </section>
+        </div>
         <section id="rain-classroom-import" class="provider-import" hidden>
-          <h3>雨课堂录像</h3>
-          <p class="muted">在 BeyondSlides 中扫码登录后，选择一门课程和一堂课；录像会作为一份完整录音导入。</p>
+          <h3>雨课堂连接</h3>
+          <p class="muted">扫码登录一次后，可分别选择雨课堂课件和课堂录像；两者不必来自同一讲次。</p>
           <div class="actions">
             <span id="rain-authenticated" class="session-status" hidden>● 已登录雨课堂</span>
             <button type="button" id="rain-connect">扫码登录雨课堂</button>
           </div>
-          <div class="provider-grid">
-            <label>课程<select id="rain-course" disabled><option value="">先加载课程</option></select></label>
-            <label>讲次<select id="rain-lecture" disabled><option value="">先选择课程</option></select></label>
-          </div>
           <p id="rain-status" class="muted" role="status"></p>
           <div id="rain-download" class="import-progress" hidden>
-            <div class="stage-label"><span id="rain-download-phase">正在准备录像下载…</span><span id="rain-download-percent"></span></div>
-            <progress id="rain-download-bar" aria-label="雨课堂录像下载进度"></progress>
+            <div class="stage-label"><span id="rain-download-phase">正在准备雨课堂导入…</span><span id="rain-download-percent"></span></div>
+            <progress id="rain-download-bar" aria-label="雨课堂导入进度"></progress>
             <small id="rain-download-bytes"></small>
           </div>
         </section>
-        <div class="upload-grid">
-          <label class="upload">① 幻灯片 PDF<input name="slides" type="file" accept=".pdf" required><small>提取每页文字，保留原始幻灯片展示。</small></label>
-          <label class="upload" id="transcript-upload-label">② 现有转写<input name="transcript" type="file" accept=".json,.tsv,.srt,.vtt,.txt" required><small>支持 JSON、TSV、SRT、VTT、TXT。无时间戳的文本可以分析，但不能按段落回放。</small></label>
-        </div>
-        <label id="recording-upload-label"><span id="recording-label">录音 / 视频（可选，用于回放）</span><input name="recording" type="file" accept=".mp4,.webm,.mp3,.m4a,.wav,.flac,.ogg"></label>
         <p class="muted">导入预览不会向分析模型发送内容。录音转写使用本机 CPU，首次运行可能需要下载 SenseVoice 等模型；分析会在转写后开始。</p>
         <button class="primary" id="import-button">导入并预览</button><span id="import-status" role="status"></span>
       </form>

@@ -15,3 +15,9 @@ This keeps model-facing passage selection natural without trusting generated
 text as lecture evidence. The threshold tolerates small copying mistakes but
 does not authorize paraphrase; 5% is an initial product policy and may change
 after real-course evaluation.
+
+If ordinary in-conversation repairs repeatedly exceed the threshold, the
+restored-annotation workflow may make bounded, numbered retries in clean
+conversations. These retries receive the same authoritative input plus a short
+copy-integrity reminder, but never the rejected answer. Retry policy improves
+availability without weakening the acceptance threshold.

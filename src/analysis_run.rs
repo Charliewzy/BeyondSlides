@@ -38,6 +38,7 @@ const MAX_OWNED_DURATION_SECONDS: u64 = 60;
 const CONTEXT_CHARACTERS: usize = 150;
 const MAX_TOOL_ROUNDS: usize = 4;
 const MAX_FINAL_ANSWER_REPAIRS: usize = 2;
+const MAX_FRESH_ANNOTATION_RETRIES: usize = 5;
 const MAX_PROVIDER_RETRIES: usize = 5;
 const MAX_SEARCH_RESULTS: usize = 5;
 const MAX_OUTPUT_TOKENS: u32 = 16_384;
@@ -54,6 +55,10 @@ const REPORT_FILE: &str = "report.html";
 const QUALITY_FILE: &str = "annotation-quality.json";
 const RESTORATION_DIRECTORY: &str = "restoration";
 const COMPARISON_DIRECTORY: &str = "comparisons";
+
+const fn default_max_fresh_annotation_retries() -> usize {
+    MAX_FRESH_ANNOTATION_RETRIES
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PassagePreparationMode {
@@ -568,6 +573,7 @@ fn analysis_client(
         .with_model_trace(model_trace)
         .with_max_tool_rounds(MAX_TOOL_ROUNDS)?
         .with_max_final_answer_repairs(MAX_FINAL_ANSWER_REPAIRS)?
+        .with_max_fresh_annotation_retries(MAX_FRESH_ANNOTATION_RETRIES)
         .with_max_provider_retries(MAX_PROVIDER_RETRIES)
         .with_max_search_results(MAX_SEARCH_RESULTS)?
         .with_max_output_tokens(MAX_OUTPUT_TOKENS)?;
@@ -596,6 +602,8 @@ struct AnalysisRunManifest {
     max_concurrent_windows: usize,
     max_tool_rounds: usize,
     max_final_answer_repairs: usize,
+    #[serde(default = "default_max_fresh_annotation_retries")]
+    max_fresh_annotation_retries: usize,
     max_provider_retries: usize,
     minimum_request_interval_seconds: u64,
     max_search_results: usize,
@@ -644,6 +652,7 @@ impl AnalysisRunManifest {
             max_concurrent_windows: provider.max_concurrency(),
             max_tool_rounds: MAX_TOOL_ROUNDS,
             max_final_answer_repairs: MAX_FINAL_ANSWER_REPAIRS,
+            max_fresh_annotation_retries: MAX_FRESH_ANNOTATION_RETRIES,
             max_provider_retries: MAX_PROVIDER_RETRIES,
             minimum_request_interval_seconds: provider.request_interval().as_secs(),
             max_search_results: MAX_SEARCH_RESULTS,
@@ -936,6 +945,7 @@ mod tests {
         runtime_change.minimum_request_interval_seconds = 60;
         runtime_change.max_provider_retries = 10;
         runtime_change.max_final_answer_repairs = 0;
+        runtime_change.max_fresh_annotation_retries = 0;
         runtime_change.max_concurrent_comparison_batches = 8;
         runtime_change.importance_comparison_prompt_sha256 = "new-label-prompt".into();
         runtime_change.novelty_comparison_prompt_sha256 = "new-evidence-prompt".into();
@@ -995,6 +1005,34 @@ mod tests {
                 "{field} must invalidate preparation"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_manifest_defaults_the_clean_annotation_retry_policy() -> Result<(), Box<dyn Error>> {
+        let provider = ProviderSettings::new(
+            "https://example.test/v1",
+            "secret-not-persisted",
+            "test-model",
+        );
+        let manifest = AnalysisRunManifest::new(
+            &provider,
+            "transcript".into(),
+            "slides".into(),
+            "restored".into(),
+        );
+        let mut value = serde_json::to_value(manifest)?;
+        value
+            .as_object_mut()
+            .expect("an analysis manifest is an object")
+            .remove("max_fresh_annotation_retries");
+
+        let restored: AnalysisRunManifest = serde_json::from_value(value)?;
+
+        assert_eq!(
+            restored.max_fresh_annotation_retries,
+            MAX_FRESH_ANNOTATION_RETRIES
+        );
         Ok(())
     }
 

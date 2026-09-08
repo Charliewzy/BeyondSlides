@@ -213,6 +213,161 @@ async fn restored_annotation_repairs_text_beyond_the_five_percent_limit()
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn restored_annotation_retries_projection_failures_in_clean_numbered_conversations()
+-> Result<(), Box<dyn Error>> {
+    let sources = sources()?;
+    let source_text: String = (0..284)
+        .map(|index| char::from_u32(0x4e00 + index % 200).unwrap())
+        .collect();
+    let restored = RestoredTranscript {
+        spans: vec![RestoredTranscriptSpan::Text {
+            source_start: TranscriptSegmentId(0),
+            source_end: TranscriptSegmentId(0),
+            text: source_text.clone(),
+        }],
+    };
+    let task = restored_task(&sources, &restored)?;
+    let proposed_text: String = source_text
+        .chars()
+        .take(134)
+        .chain(source_text.chars().skip(150))
+        .collect();
+    assert_eq!(source_text.chars().count(), 284);
+    assert_eq!(proposed_text.chars().count(), 268);
+    let invalid = restored_analysis_json(&proposed_text);
+    let valid = restored_analysis_json(&source_text);
+    let api = mock_api(vec![
+        final_response("initial", invalid.clone()),
+        final_response("repair-1", invalid.clone()),
+        final_response("repair-2", invalid.clone()),
+        final_response("fresh-1", invalid),
+        final_response("fresh-2", valid),
+    ])
+    .await;
+    let client = beyond_slides::ChatCompletionsClient::new(
+        ChatCompletionsConfig::new(base_url(&api), "test-key", "test-model")?
+            .with_max_fresh_annotation_retries(5),
+    );
+    let scorer = FixedScorer(scores([0.0; 6]));
+
+    let result = client
+        .annotate_restored_window(&sources, &scorer, &task)
+        .await?;
+
+    assert!(result.projection.is_exact());
+    let requests = api
+        .received_requests()
+        .await
+        .expect("mock request recording is enabled");
+    assert_eq!(requests.len(), 5);
+    let first_fresh: Value = requests[3].body_json()?;
+    let second_fresh: Value = requests[4].body_json()?;
+    assert_eq!(first_fresh["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(second_fresh["messages"].as_array().unwrap().len(), 2);
+    assert!(
+        first_fresh["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("全新重试 1/5（总体第 2/6 次尝试）")
+    );
+    assert!(
+        second_fresh["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("全新重试 2/5（总体第 3/6 次尝试）")
+    );
+    assert_eq!(
+        first_fresh["messages"][1],
+        requests[0].body_json::<Value>()?["messages"][1]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restored_annotation_stops_after_the_fresh_retry_limit() -> Result<(), Box<dyn Error>> {
+    let sources = sources()?;
+    let restored = restored_transcript();
+    let task = restored_task(&sources, &restored)?;
+    let invalid = restored_analysis_json("这段回答遗漏了原文中的一大段内容。");
+    let api = mock_api(vec![
+        final_response("initial", invalid.clone()),
+        final_response("repair", invalid.clone()),
+        final_response("fresh-1", invalid.clone()),
+        final_response("fresh-2", invalid),
+    ])
+    .await;
+    let client = beyond_slides::ChatCompletionsClient::new(
+        ChatCompletionsConfig::new(base_url(&api), "test-key", "test-model")?
+            .with_max_final_answer_repairs(1)?
+            .with_max_fresh_annotation_retries(2),
+    );
+    let scorer = FixedScorer(scores([0.0; 6]));
+
+    let error = client
+        .annotate_restored_window(&sources, &scorer, &task)
+        .await
+        .expect_err("projection failures must stop after the fresh retry limit");
+
+    assert!(matches!(
+        error,
+        ChatCompletionsError::FreshAnnotationRetryLimit { limit: 2, .. }
+    ));
+    assert_eq!(
+        api.received_requests()
+            .await
+            .expect("mock request recording is enabled")
+            .len(),
+        4
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restored_annotation_does_not_fresh_retry_unrelated_validation_failures()
+-> Result<(), Box<dyn Error>> {
+    let sources = sources()?;
+    let restored = restored_transcript();
+    let task = restored_task(&sources, &restored)?;
+    let invalid = json!({
+        "passages": [{
+            "text": restored.text(),
+            "connection_strength": 3,
+            "related_slides": [99]
+        }]
+    })
+    .to_string();
+    let api = mock_api(vec![
+        final_response("initial", invalid.clone()),
+        final_response("repair", invalid),
+    ])
+    .await;
+    let client = beyond_slides::ChatCompletionsClient::new(
+        ChatCompletionsConfig::new(base_url(&api), "test-key", "test-model")?
+            .with_max_final_answer_repairs(1)?
+            .with_max_fresh_annotation_retries(5),
+    );
+    let scorer = FixedScorer(scores([0.0; 6]));
+
+    let error = client
+        .annotate_restored_window(&sources, &scorer, &task)
+        .await
+        .expect_err("unknown slide IDs must not trigger clean retries");
+
+    assert!(matches!(
+        error,
+        ChatCompletionsError::FinalAnswerRepairLimit { .. }
+    ));
+    assert_eq!(
+        api.received_requests()
+            .await
+            .expect("mock request recording is enabled")
+            .len(),
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn restoration_uses_json_mode_without_annotation_tools() -> Result<(), Box<dyn Error>> {
     let api = mock_api(vec![final_response("chat-1", restoration_json())]).await;
     let config = ChatCompletionsConfig::new(base_url(&api), "test-key", "test-model")?

@@ -230,18 +230,16 @@ restoration, annotation, or source provenance.
 
 ### 5.1 Ingestion and normalization
 
-The FunASR TSV adapter converts each nonblank timestamped row into one
-zero-based transcript segment. It preserves ASR evidence instead of inventing
-grammatical boundaries. The PDF adapter uses Poppler `pdftotext` in raw reading
-order, preserves one slide per page, removes only rigorously detected repeated
-page furniture, and reports sparse text or suspicious glyphs rather than
-silently invoking OCR.
+Transcript adapters normalize JSON, SRT, WebVTT, and UTF-8 plain text into
+zero-based transcript segments without inventing missing timestamps. The PDF
+adapter uses Poppler `pdftotext` in raw reading order, preserves one slide per
+page, removes only rigorously detected repeated page furniture, and reports
+sparse text or suspicious glyphs rather than silently invoking OCR.
 
-For recordings transcribed with SenseVoice, the optional timing exporter
-retains each fine-grained ASR text unit and its interval as a timed transcript
-token. Chinese tokens are commonly individual characters; consumers must not
-assume that tokens are linguistic words. This sidecar supplements rather than
-replaces the coarser normalized transcript.
+Native SenseVoice recognition retains each fine-grained ASR text unit and its
+interval as a timed transcript token. Chinese tokens are commonly individual
+characters; consumers must not assume that tokens are linguistic words. This
+timing supplements rather than replaces the coarser normalized transcript.
 
 The original video is not required by the product. When available, FFmpeg,
 Poppler, and MSSIM can build a visual slide/time reference for evaluating

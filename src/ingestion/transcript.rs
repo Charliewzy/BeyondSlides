@@ -6,7 +6,6 @@ use crate::{SlideDeck, Transcript, TranscriptSegment, TranscriptSegmentId, Valid
 #[derive(Clone, Copy, Debug)]
 pub enum TranscriptFormat {
     Json,
-    Tsv,
     SubRip,
     WebVtt,
     PlainText,
@@ -19,7 +18,6 @@ pub fn import(
     let input = input.trim_start_matches('\u{feff}').replace("\r\n", "\n");
     let transcript = match format {
         TranscriptFormat::Json => serde_json::from_str(&input)?,
-        TranscriptFormat::Tsv => super::funasr::import_tsv(&input)?,
         TranscriptFormat::SubRip => {
             let subtitles = subtp::srt::SubRip::parse(&format!("{}\n", input.trim_end()))?;
             let rows = subtitles.subtitles.into_iter().map(|cue| {

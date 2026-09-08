@@ -4,13 +4,12 @@
 
 Recording transcription now runs through statically linked sherpa-onnx with
 INT8 SenseVoiceSmall and Silero VAD. Python, PyTorch, and FunASR are no longer
-runtime requirements; the existing FunASR TSV importer remains supported for
-user-supplied historical transcripts. First-run model assets are resumable,
-SHA-256 verified, protected by an installation lock, and cached outside lecture
-directories. The browser reports model-download bytes and speech-region
-recognition progress.
+runtime requirements, and the former FunASR TSV compatibility path has been
+removed. First-run model assets are resumable, SHA-256 verified, protected by
+an installation lock, and cached outside lecture directories. The browser
+reports model-download bytes and speech-region recognition progress.
 
-The complete strict Rust suite and 20 remaining lightweight Python tests pass.
+The complete strict Rust suite and 18 remaining lightweight Python tests pass.
 A release-mode five-minute native ASR smoke test produced 45 punctuated
 transcript segments with valid non-overlapping token timing in 9.35 seconds. A
 separate clean-cache application-worker smoke test downloaded, verified, and

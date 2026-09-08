@@ -269,11 +269,10 @@ pub(super) fn import_job(
             segments: Vec::new(),
         },
         "json" => import(&input, TranscriptFormat::Json).map_err(|e| e.to_string())?,
-        "tsv" => import(&input, TranscriptFormat::Tsv).map_err(|e| e.to_string())?,
         "srt" => import(&input, TranscriptFormat::SubRip).map_err(|e| e.to_string())?,
         "vtt" => import(&input, TranscriptFormat::WebVtt).map_err(|e| e.to_string())?,
         "txt" => import(&input, TranscriptFormat::PlainText).map_err(|e| e.to_string())?,
-        _ => return Err("Supported transcript formats: JSON, TSV, SRT, VTT and plain text".into()),
+        _ => return Err("Supported transcript formats: JSON, SRT, VTT and plain text".into()),
     };
     if !transcribe_recording && transcript.segments.is_empty() {
         return Err("The transcript contains no segments".into());

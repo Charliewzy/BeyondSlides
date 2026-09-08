@@ -28,8 +28,8 @@ and the existing dense-retrieval model may download on first use.
 
 1. Choose the written source: upload a slides PDF (up to 100 MiB), or select a
    Rain Classroom course, lecture, and presentation. Choose the lecture source
-   independently: normalized transcript JSON, FunASR timestamped TSV, SRT,
-   WebVTT, or UTF-8 plain text (up to 16 MiB), a local recording, or a Rain
+   independently: normalized transcript JSON, SRT, WebVTT, or UTF-8 plain text
+   (up to 16 MiB), a local recording, or a Rain
    Classroom recording.
    Optionally attach a browser-playable recording.
    Alternatively choose local CPU transcription and upload a recording instead

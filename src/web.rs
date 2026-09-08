@@ -113,6 +113,7 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
         )
         .route("/api/jobs", get(list_jobs).post(upload))
         .route("/api/rain-classroom/connect", post(connect_rain_classroom))
+        .route("/api/rain-classroom/logout", post(logout_rain_classroom))
         .route(
             "/api/rain-classroom/login-view",
             get(rain_classroom_login_view),
@@ -314,6 +315,13 @@ async fn connect_rain_classroom(
 ) -> Result<Json<serde_json::Value>, AppError> {
     app.rain_classroom.connect().await.map_err(AppError::bad)?;
     Ok(Json(json!({"opened": true})))
+}
+
+async fn logout_rain_classroom(
+    State(app): State<App>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    app.rain_classroom.logout().await.map_err(AppError::bad)?;
+    Ok(Json(json!({"logged_out": true})))
 }
 
 async fn rain_classroom_courses(

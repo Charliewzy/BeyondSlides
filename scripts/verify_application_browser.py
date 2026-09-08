@@ -178,6 +178,7 @@ def main():
             page.screenshot(path=str(args.workspace / "browser-mobile.png"), full_page=True)
             page.locator("#new-lecture").click()
             page.route("**/api/rain-classroom/connect", lambda route: route.fulfill(json={"opened": True}))
+            page.route("**/api/rain-classroom/logout", lambda route: route.fulfill(json={"logged_out": True}))
             page.route("**/api/rain-classroom/courses", lambda route: route.fulfill(json=[{
                 "classroom_id": 3195306, "course_name": "程序设计训练", "classroom_name": "Rust 语言",
             }]))
@@ -211,7 +212,13 @@ def main():
             assert page.locator("#rain-download-bar").evaluate("progress => progress.value / progress.max") == 0.25
             page.evaluate("stopRainDownloadProgress()")
             assert page.locator("#rain-download").is_hidden()
+            page.locator("#rain-logout").click()
+            page.locator("#rain-authenticated").wait_for(state="hidden")
+            assert page.locator("#rain-logout").is_hidden()
+            assert page.locator("#rain-connect").is_visible()
+            assert page.locator("#rain-slides-course").is_disabled()
             page.unroute("**/api/rain-classroom/connect")
+            page.unroute("**/api/rain-classroom/logout")
             page.unroute("**/api/rain-classroom/courses")
             page.unroute("**/api/rain-classroom/courses/3195306/lectures")
             page.unroute("**/api/rain-classroom/courses/3195306/lectures/1765600343592779520/presentations")

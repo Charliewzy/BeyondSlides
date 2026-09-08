@@ -328,7 +328,18 @@ $("slides-source-mode").addEventListener("change", syncImportSources);
 $("lecture-source-mode").addEventListener("change", syncImportSources);
 function setRainAuthenticated(authenticated) {
   $("rain-authenticated").hidden = !authenticated;
+  $("rain-logout").hidden = !authenticated;
   $("rain-connect").hidden = authenticated;
+}
+function clearRainSelections() {
+  for (const prefix of ["rain-slides", "rain-recording"]) {
+    $(`${prefix}-course`).disabled = true;
+    $(`${prefix}-course`).replaceChildren(new Option("先加载课程", ""));
+    $(`${prefix}-lecture`).disabled = true;
+    $(`${prefix}-lecture`).replaceChildren(new Option("先选择课程", ""));
+  }
+  $("rain-presentation").disabled = true;
+  $("rain-presentation").replaceChildren(new Option("先选择讲次", ""));
 }
 function showRainCourses(courses) {
   for (const prefix of ["rain-slides", "rain-recording"]) {
@@ -382,6 +393,16 @@ $("rain-connect").addEventListener("click", async () => {
     refreshRainLoginView(); $("rain-login-dialog").showModal(); pollRainLogin();
   } catch (error) { $("rain-status").textContent = error.message; }
   finally { $("rain-connect").disabled = false; }
+});
+$("rain-logout").addEventListener("click", async () => {
+  $("rain-logout").disabled = true;
+  $("rain-status").textContent = "正在退出雨课堂…";
+  try {
+    await api("/api/rain-classroom/logout", { method: "POST" });
+    clearRainSelections(); setRainAuthenticated(false); rainSessionChecked = false;
+    $("rain-status").textContent = "已退出。下次使用雨课堂时需要重新扫码登录。";
+  } catch (error) { $("rain-status").textContent = error.message; }
+  finally { $("rain-logout").disabled = false; }
 });
 $("rain-login-close").addEventListener("click", () => $("rain-login-dialog").close());
 $("rain-login-dialog").addEventListener("close", () => clearTimeout(rainLoginTimer));

@@ -56,6 +56,7 @@ input[type=file] { font-size: 12px; }
 .provider-import .actions { margin: 0 0 18px; }
 .provider-import .provider-grid label { margin-bottom: 0; }
 .session-status { align-self: center; color: #28765f; font-size: 13px; font-weight: 700; }
+.compact { padding: 5px 9px; font-size: 11px; }
 .import-progress { margin-top: 16px; }
 .import-progress small { display: block; margin-top: 7px; font-variant-numeric: tabular-nums; }
 button, .button { border: 1px solid #dcd8e6; border-radius: 8px; padding: 11px 17px; font: inherit; font-size: 13px; font-weight: 600; background: white; cursor: pointer; text-decoration: none; text-align: center; }

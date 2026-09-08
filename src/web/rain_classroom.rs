@@ -152,6 +152,31 @@ impl RainClassroom {
     /// Gives Chromium an opportunity to flush its persistent profile before
     /// the local controller exits.
     pub async fn shutdown(&self) {
+        self.close_browser().await;
+    }
+
+    /// Forgets the dedicated local login without affecting the user's normal
+    /// browser profile or their remote Rain Classroom account.
+    pub async fn logout(&self) -> Result<(), String> {
+        if !self
+            .downloads
+            .lock()
+            .expect("Rain Classroom download progress lock is not poisoned")
+            .is_empty()
+        {
+            return Err("Wait for the active Rain Classroom import before logging out".into());
+        }
+        self.close_browser().await;
+        match tokio::fs::remove_dir_all(&self.profile).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!(
+                "Could not forget the local Rain Classroom login: {error}"
+            )),
+        }
+    }
+
+    async fn close_browser(&self) {
         let Some(mut session) = self.session.lock().await.take() else {
             return;
         };
@@ -852,6 +877,38 @@ fn default_slide_height() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn logout_removes_only_the_dedicated_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let rain_classroom = RainClassroom::new(root.path());
+        tokio::fs::create_dir_all(&rain_classroom.profile)
+            .await
+            .unwrap();
+        tokio::fs::write(rain_classroom.profile.join("Cookies"), b"session")
+            .await
+            .unwrap();
+
+        rain_classroom.logout().await.unwrap();
+
+        assert!(!rain_classroom.profile.exists());
+        assert!(root.path().exists());
+    }
+
+    #[tokio::test]
+    async fn logout_does_not_interrupt_an_active_import() {
+        let root = tempfile::tempdir().unwrap();
+        let rain_classroom = RainClassroom::new(root.path());
+        tokio::fs::create_dir_all(&rain_classroom.profile)
+            .await
+            .unwrap();
+        let _registration = rain_classroom.register_download("active-import").unwrap();
+
+        let error = rain_classroom.logout().await.unwrap_err();
+
+        assert!(error.contains("active Rain Classroom import"));
+        assert!(rain_classroom.profile.exists());
+    }
 
     #[test]
     fn download_progress_exists_only_for_the_registered_import() {

@@ -36,7 +36,7 @@ class Model(BaseHTTPRequestHandler):
         if "output_contract" in task:
             answer = {"spans": [dict(kind="text", source_start=s["id"], source_end=s["id"], text=s["text"]) for s in task["owned_region"]]}
         elif "windows" in task:
-            answer = {"windows": [dict(window_index=w["window_index"], boundaries=[dict(after_atom=i, strength="preferred_break") for i in w["owned_boundary_after_atom_ids"]]) for w in task["windows"]]}
+            answer = {"windows": [dict(window_index=w["window_index"], boundaries=[dict(after_atom=i, cut_cost=0) for i in w["owned_boundary_after_atom_ids"]]) for w in task["windows"]]}
         elif "comparisons" in task:
             answer = {"comparisons": [dict(comparison_id=c["comparison_id"], most="A", least=list(c["candidates"])[-1]) for c in task["comparisons"]]}
         elif "owned_text" in task:

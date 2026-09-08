@@ -3,12 +3,12 @@ use std::{error::Error, fmt, num::NonZeroUsize};
 use crate::processing::{BatchRunError, StopSignal, run_bounded};
 
 use crate::{
-    AnnotationDiagnostics, ChatCompletionsClient, ChatCompletionsError,
-    PassageProjectionDiagnostics, RestoredAnalysisAssemblyError, RestoredAnnotationError,
-    RestoredAnnotationResult, RestoredTranscript, RestoredWindowingError, SearchError,
-    SlideAlignmentError, SlideId, SlideScorer, ValidatedRestoredAnalysis, ValidatedSources,
-    WindowingConfig, assemble_restored_window_analyses, build_restored_annotation_tasks,
-    build_restored_windows, infer_slide_positions, validate_restored_window_analysis,
+    AnnotationDiagnostics, ChatCompletionsError, LectureModelBackend, PassageProjectionDiagnostics,
+    RestoredAnalysisAssemblyError, RestoredAnnotationError, RestoredAnnotationResult,
+    RestoredTranscript, RestoredWindowingError, SearchError, SlideAlignmentError, SlideId,
+    SlideScorer, ValidatedRestoredAnalysis, ValidatedSources, WindowingConfig,
+    assemble_restored_window_analyses, build_restored_annotation_tasks, build_restored_windows,
+    infer_slide_positions, validate_restored_window_analysis,
 };
 
 pub type LectureAnalysisProgressError = Box<dyn Error + Send + Sync>;
@@ -106,7 +106,7 @@ impl LectureAnalysisResult {
 /// then call `complete_analysis` to process the remaining windows.
 pub struct LectureAnalysisSession<'a> {
     stop: StopSignal,
-    client: &'a ChatCompletionsClient,
+    client: &'a dyn LectureModelBackend,
     scorer: &'a dyn SlideScorer,
     sources: ValidatedSources,
     restored_transcript: RestoredTranscript,
@@ -118,7 +118,7 @@ pub struct LectureAnalysisSession<'a> {
 impl<'a> LectureAnalysisSession<'a> {
     /// Prepares a lecture analysis without sending any model requests.
     pub fn prepare(
-        client: &'a ChatCompletionsClient,
+        client: &'a dyn LectureModelBackend,
         sources: ValidatedSources,
         restored_transcript: RestoredTranscript,
         scorer: &'a dyn SlideScorer,

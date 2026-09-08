@@ -15,7 +15,7 @@ use beyond_slides::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::run_support::{read_json, write_json_atomically};
+use crate::run_support::{ModelBackendKind, read_json, write_json_atomically};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct Job {
@@ -44,6 +44,8 @@ pub(super) struct Preview {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Settings {
+    #[serde(default)]
+    pub backend: ModelBackendKind,
     pub base_url: String,
     pub model: String,
     pub extra_body: Option<Value>,
@@ -55,6 +57,20 @@ pub(super) struct Settings {
 
 impl Settings {
     pub fn validate(&self, key: &str) -> Result<(), String> {
+        if self.model.trim().is_empty() {
+            return Err("Model name cannot be empty".into());
+        }
+        if self.backend == ModelBackendKind::Codex {
+            if self.extra_body.is_some() {
+                return Err(
+                    "Codex app-server does not accept provider extra request fields".into(),
+                );
+            }
+            if !(1..=32).contains(&self.max_concurrency) || self.request_interval_ms > 60_000 {
+                return Err("Concurrency must be 1–32 and request spacing 0–60000 ms".into());
+            }
+            return Ok(());
+        }
         let config = ChatCompletionsConfig::new(&self.base_url, key, &self.model)
             .map_err(|e| e.to_string())?;
         let url = url::Url::parse(&self.base_url).map_err(|e| e.to_string())?;
@@ -80,9 +96,10 @@ impl Settings {
     }
 
     pub fn same_restoration(&self, other: &Self) -> bool {
-        self.base_url == other.base_url
+        self.backend == other.backend
             && self.model == other.model
-            && self.extra_body == other.extra_body
+            && (self.backend == ModelBackendKind::Codex
+                || (self.base_url == other.base_url && self.extra_body == other.extra_body))
     }
 
     pub fn same_analysis(&self, other: &Self) -> bool {
@@ -356,6 +373,68 @@ pub(super) fn copy_restoration(previous: &Path, next: &Path) -> Result<(), io::E
 mod tests {
     use super::*;
 
+    fn settings(backend: ModelBackendKind) -> Settings {
+        Settings {
+            backend,
+            base_url: "http://localhost/v1".into(),
+            model: "test-model".into(),
+            extra_body: None,
+            max_concurrency: 2,
+            request_interval_ms: 0,
+            adaptive: false,
+            boundary_passages: true,
+        }
+    }
+
+    #[test]
+    fn codex_settings_need_no_endpoint_or_api_key() {
+        let mut settings = settings(ModelBackendKind::Codex);
+        settings.base_url.clear();
+        assert_eq!(settings.validate(""), Ok(()));
+    }
+
+    #[test]
+    fn codex_settings_reject_openai_specific_extra_body() {
+        let mut settings = settings(ModelBackendKind::Codex);
+        settings.extra_body = Some(serde_json::json!({"thinking": {"type": "disabled"}}));
+        assert!(settings.validate("").unwrap_err().contains("extra request"));
+    }
+
+    #[test]
+    fn codex_checkpoint_reuse_ignores_the_hidden_endpoint_field() {
+        let left = settings(ModelBackendKind::Codex);
+        let mut right = left.clone();
+        right.base_url = "https://a-hidden-old-value.example/v1".into();
+        assert!(left.same_restoration(&right));
+    }
+
+    #[test]
+    fn backend_wire_names_match_the_browser_and_environment_contract() {
+        assert_eq!(
+            serde_json::to_value(ModelBackendKind::OpenAiCompatible).unwrap(),
+            "openai_compatible"
+        );
+        assert_eq!(
+            serde_json::to_value(ModelBackendKind::Codex).unwrap(),
+            "codex"
+        );
+    }
+
+    #[test]
+    fn settings_without_backend_keep_openai_compatibility() {
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "base_url": "http://localhost/v1",
+            "model": "test-model",
+            "extra_body": null,
+            "max_concurrency": 2,
+            "request_interval_ms": 0,
+            "adaptive": false,
+            "boundary_passages": true
+        }))
+        .expect("legacy settings deserialize");
+        assert_eq!(settings.backend, ModelBackendKind::OpenAiCompatible);
+    }
+
     #[test]
     fn pdf_import_warnings_group_pages_and_explain_the_caveat() {
         let warnings = import_warnings(&[
@@ -409,6 +488,7 @@ mod tests {
         let run = Run {
             number: 1,
             settings: Settings {
+                backend: ModelBackendKind::OpenAiCompatible,
                 base_url: "http://localhost/v1".into(),
                 model: "test".into(),
                 extra_body: None,

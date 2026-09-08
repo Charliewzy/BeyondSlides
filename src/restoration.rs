@@ -4,7 +4,7 @@ use crate::processing::{BatchRunError, StopSignal, run_bounded};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ChatCompletionsClient, ChatCompletionsError, RestorationDiagnostics, RestoredTranscript,
+    ChatCompletionsError, LectureModelBackend, RestorationDiagnostics, RestoredTranscript,
     RestoredTranscriptSpan, SlideDeck, Transcript, TranscriptSegment, TranscriptSegmentId,
     TranscriptWindow, TranscriptWindowRestorationResult, ValidatedSources, ValidationError,
     WindowingConfig, build_windows,
@@ -188,7 +188,7 @@ pub struct RestorationProgress<'a> {
 /// A prepared restoration that pauses after its first model request.
 pub struct TranscriptRestorationSession<'a> {
     stop: StopSignal,
-    client: &'a ChatCompletionsClient,
+    client: &'a dyn LectureModelBackend,
     sources: ValidatedSources,
     config: TranscriptRestorationConfig,
     window_results: Vec<Option<TranscriptWindowRestorationResult>>,
@@ -197,7 +197,7 @@ pub struct TranscriptRestorationSession<'a> {
 impl<'a> TranscriptRestorationSession<'a> {
     /// Validates and windows the transcript without contacting the model.
     pub fn prepare(
-        client: &'a ChatCompletionsClient,
+        client: &'a dyn LectureModelBackend,
         transcript: Transcript,
         config: TranscriptRestorationConfig,
     ) -> Result<Self, RestorationSessionError> {

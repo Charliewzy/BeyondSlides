@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use async_trait::async_trait;
 use genai::{
     Client, ModelIden, ServiceTarget,
     adapter::AdapterKind,
@@ -740,6 +741,48 @@ impl ChatCompletionsClient {
                 .map_err(ChatCompletionsError::ModelTrace)?;
         }
         Err(error)
+    }
+}
+
+#[async_trait]
+impl crate::LectureModelBackend for ChatCompletionsClient {
+    async fn annotate_window(
+        &self,
+        sources: &ValidatedSources,
+        scorer: &dyn SlideScorer,
+        task: &TranscriptWindowTask<'_>,
+    ) -> Result<AnnotationResult, ChatCompletionsError> {
+        ChatCompletionsClient::annotate_window(self, sources, scorer, task).await
+    }
+
+    async fn annotate_restored_window(
+        &self,
+        sources: &ValidatedSources,
+        scorer: &dyn SlideScorer,
+        task: &RestoredTranscriptWindowTask<'_>,
+    ) -> Result<RestoredAnnotationResult, ChatCompletionsError> {
+        ChatCompletionsClient::annotate_restored_window(self, sources, scorer, task).await
+    }
+
+    async fn restore_window(
+        &self,
+        task: &TranscriptRestorationTask<'_>,
+    ) -> Result<TranscriptWindowRestorationResult, ChatCompletionsError> {
+        ChatCompletionsClient::restore_window(self, task).await
+    }
+
+    async fn compare_passages(
+        &self,
+        task: &ComparativeRankingTask,
+    ) -> Result<ComparativeRankingBatchResult, ChatCompletionsError> {
+        ChatCompletionsClient::compare_passages(self, task).await
+    }
+
+    async fn classify_passage_boundaries(
+        &self,
+        task: &BoundaryBatchTask,
+    ) -> Result<BoundaryBatchResult, ChatCompletionsError> {
+        ChatCompletionsClient::classify_passage_boundaries(self, task).await
     }
 }
 
@@ -1672,17 +1715,19 @@ fn unexpected_finish_reason(response: &ChatResponse, has_tool_calls: bool) -> Ch
     }
 }
 
-fn parse_analysis(content: &str) -> Result<(TranscriptWindowAnalysis, bool), ChatCompletionsError> {
+pub(crate) fn parse_analysis(
+    content: &str,
+) -> Result<(TranscriptWindowAnalysis, bool), ChatCompletionsError> {
     parse_json_content(content).map_err(ChatCompletionsError::InvalidAnalysisJson)
 }
 
-fn parse_restored_analysis(
+pub(crate) fn parse_restored_analysis(
     content: &str,
 ) -> Result<(ProposedTranscriptWindowAnalysis, bool), ChatCompletionsError> {
     parse_json_content(content).map_err(ChatCompletionsError::InvalidRestoredAnalysisJson)
 }
 
-fn parse_restoration(
+pub(crate) fn parse_restoration(
     content: &str,
 ) -> Result<(TranscriptWindowRestoration, bool), ChatCompletionsError> {
     parse_json_content(content).map_err(ChatCompletionsError::InvalidRestorationJson)
@@ -1725,7 +1770,7 @@ fn fresh_restored_annotation_retry_instructions(
     )
 }
 
-fn is_passage_text_difference(error: &ChatCompletionsError) -> bool {
+pub(crate) fn is_passage_text_difference(error: &ChatCompletionsError) -> bool {
     match error {
         ChatCompletionsError::InvalidRestoredWindowAnalysis(
             RestoredAnnotationError::PassageProjection(

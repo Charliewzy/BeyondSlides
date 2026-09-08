@@ -10,8 +10,8 @@ use crate::processing::{BatchRunError, StopSignal, run_bounded};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AnnotationDiagnostics, ChatCompletionsClient, ChatCompletionsError, ComparativeScore,
-    ComparativeScoreError, SearchError, SlideId, SlideScorer, ValidatedRestoredAnalysis,
+    AnnotationDiagnostics, ChatCompletionsError, ComparativeScore, ComparativeScoreError,
+    LectureModelBackend, SearchError, SlideId, SlideScorer, ValidatedRestoredAnalysis,
 };
 
 const IMPORTANCE_INSTRUCTIONS: &str = include_str!(concat!(
@@ -246,7 +246,7 @@ fn slice_is_empty<T>(values: &&[T]) -> bool {
 
 /// One model request containing independent best--worst comparisons.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ComparativeRankingTask {
+pub struct ComparativeRankingTask {
     task_index: usize,
     batch_index: usize,
     metric: ComparativeMetric,
@@ -494,7 +494,7 @@ pub struct ComparativeRankingProgress<'a> {
 /// Resumable lecture-wide importance and novelty ranking.
 pub struct ComparativeRankingSession<'a> {
     stop: StopSignal,
-    client: &'a ChatCompletionsClient,
+    client: &'a dyn LectureModelBackend,
     passage_count: usize,
     config: ComparativeRankingConfig,
     tasks: Vec<ComparativeRankingTask>,
@@ -503,7 +503,7 @@ pub struct ComparativeRankingSession<'a> {
 
 impl<'a> ComparativeRankingSession<'a> {
     pub fn prepare(
-        client: &'a ChatCompletionsClient,
+        client: &'a dyn LectureModelBackend,
         analysis: &ValidatedRestoredAnalysis,
         scorer: &dyn SlideScorer,
         config: ComparativeRankingConfig,

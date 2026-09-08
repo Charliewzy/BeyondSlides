@@ -156,10 +156,29 @@ function transcriptionTiming(data, observed, active) {
 }
 function setSettings(settings) {
   if (!settings) return;
+  $("model-backend").value = settings.backend || "openai_compatible";
   $("base-url").value = settings.base_url; $("model").value = settings.model;
   $("extra-body").value = settings.extra_body ? JSON.stringify(settings.extra_body, null, 2) : "";
   $("concurrency").value = settings.max_concurrency; $("spacing").value = settings.request_interval_ms;
   $("adaptive").checked = settings.adaptive; $("boundaries").checked = settings.boundary_passages;
+  syncModelBackend();
+}
+async function syncModelBackend() {
+  const codex = $("model-backend").value === "codex";
+  $("openai-provider-settings").hidden = codex;
+  $("extra-body-setting").hidden = codex;
+  $("base-url").required = !codex;
+  $("api-key").required = !codex;
+  $("codex-provider-status").hidden = !codex;
+  if (!codex) return;
+  try {
+    const status = await api("/api/codex/status");
+    $("codex-provider-status").textContent = status.logged_in
+      ? `已连接 ${status.version}，将使用本机缓存的 ChatGPT 登录。`
+      : `未登录 Codex。请先在终端运行 codex login（检测到 ${status.version || "Codex CLI"}）。`;
+  } catch (error) {
+    $("codex-provider-status").textContent = `Codex 不可用：${error.message}`;
+  }
 }
 async function refreshLibrary() {
   jobs = await api("/api/jobs");
@@ -572,9 +591,10 @@ $("start-form").addEventListener("submit", async (event) => {
   const id = currentId;
   try {
     const request = {
-      settings: { base_url: $("base-url").value.trim(), model: $("model").value.trim(), extra_body: $("extra-body").value.trim() ? JSON.parse($("extra-body").value) : null,
+      settings: { backend: $("model-backend").value, base_url: $("base-url").value.trim(), model: $("model").value.trim(), extra_body: $("model-backend").value === "codex" ? null : ($("extra-body").value.trim() ? JSON.parse($("extra-body").value) : null),
         max_concurrency: Number($("concurrency").value), request_interval_ms: Number($("spacing").value), adaptive: $("adaptive").checked, boundary_passages: $("boundaries").checked },
-      api_key: $("api-key").value, confirm_reprocessing: false,
+      api_key: $("model-backend").value === "codex" ? "" : $("api-key").value,
+      confirm_reprocessing: false,
     };
     const send = () => api(`/api/jobs/${id}/start`, { method: "POST", body: JSON.stringify(request) });
     try { await send(); }
@@ -591,6 +611,8 @@ $("stop-button").addEventListener("click", async () => {
   try { await api(`/api/jobs/${currentId}/stop`, { method: "POST" }); clearTimeout(pollingTimer); await poll(); }
   catch (error) { notice(error.message); }
 });
+$("model-backend").addEventListener("change", syncModelBackend);
+syncModelBackend();
 refreshLibrary().then(() => {
   const id = location.hash.slice(1);
   if (jobs.some(j => j.id === id)) return select(id);

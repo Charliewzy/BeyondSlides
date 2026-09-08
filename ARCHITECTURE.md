@@ -490,10 +490,25 @@ artifact.
 
 ## 6. Model transport and observability
 
-The model adapter targets an explicitly configured OpenAI-compatible Chat
+The lecture pipeline depends on the provider-neutral `LectureModelBackend`
+interface. Its operations restore a transcript window, prepare passages,
+classify boundary costs, and compare passages; orchestration does not know the
+wire protocol used to perform them. Deterministic schema and domain validation
+remain local for every backend.
+
+The OpenAI-compatible backend targets an explicitly configured Chat
 Completions endpoint through `genai`; model names are not used to infer a
-provider. JSON mode is requested, while deterministic schema and domain
-validation remain local.
+provider. JSON mode is requested. The Codex backend instead starts one
+long-lived local `codex app-server` over JSONL stdio and reuses the user's
+cached `codex login` session. Each task runs in an ephemeral thread rooted in
+an empty temporary directory with read-only sandboxing, approval disabled, and
+an explicit structured-output schema. Lecture analysis does not require coding
+tools: built-in tool feature flags and web search are disabled, the model is
+instructed not to use tools, and any tool item nevertheless emitted by Codex is
+rejected. The child does not inherit the OpenAI-compatible API key. Concurrent
+pipeline work is multiplexed over the single app-server process, while
+checkpoint identities record the selected backend so artifacts cannot silently
+cross transports.
 
 The first window of each windowed stage runs alone as a canary. Comparative
 ranking instead accepts one batch for importance and one for novelty before

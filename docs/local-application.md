@@ -56,8 +56,11 @@ and the existing dense-retrieval model may download on first use.
    concurrent Poppler renders at most and a 30-second rendering timeout.
    Preview PNGs live in a separate per-job `slide-review/` cache, not report
    assets or analysis checkpoints. Preview failures leave analysis available.
-3. Enter your OpenAI-compatible base URL, exact model name, and API key. Text
-   is sent to that endpoint; original media is not attached to model requests.
+3. Choose either an OpenAI-compatible endpoint (base URL, exact model name,
+   and API key) or a locally installed, authenticated Codex CLI (model name
+   only). Text is sent through that backend; original media is not attached to
+   model requests. Codex mode reuses `codex login` and never receives the API
+   key field.
    Advanced settings accept provider-specific request JSON. For GLM, disabling
    thinking can use `{"thinking":{"type":"disabled"}}`; no provider-specific
    option is imposed by default.

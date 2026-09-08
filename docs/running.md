@@ -184,3 +184,24 @@ latest scheduling settings, not a replacement source/provenance manifest.
 The transcript may still be windowed and scored locally to validate and rebuild
 tasks on resume. Reusing completed model results does not mean skipping those
 deterministic checks.
+
+## Model backends
+
+The default backend is an OpenAI-compatible endpoint configured with
+`BEYOND_SLIDES_API_BASE_URL`, `BEYOND_SLIDES_API_KEY`, and
+`BEYOND_SLIDES_MODEL`.
+
+To use a ChatGPT subscription through the local Codex CLI, first run
+`codex login`, then set:
+
+```sh
+export BEYOND_SLIDES_MODEL_BACKEND=codex
+export BEYOND_SLIDES_MODEL=gpt-5.6-luna
+```
+
+The Codex backend does not read the API URL, API key, or provider-specific
+extra-body variables. It starts one local app-server lazily, uses ephemeral
+read-only task threads in an empty directory, and retains BeyondSlides'
+checkpoint, progress, token-usage, validation, and model-trace behavior.
+The web application exposes the same choice under “模型连接方式” and reports
+whether the local CLI is logged in.

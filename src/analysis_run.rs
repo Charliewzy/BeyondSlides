@@ -8,10 +8,10 @@ use std::{
 };
 
 use beyond_slides::{
-    ChatCompletionsClient, ComparativeMetric, ComparativeRankingConfig,
-    ComparativeRankingProgressError, ComparativeRankingSession, ContinuousReportMedia,
-    DenseSlideScorer, HybridSlideScorer, LectureAnalysisConfig, LectureAnalysisProgressError,
-    LectureAnalysisSession, LexicalSlideScorer, ModelExchangeTrace, PlaybackTimingBasis,
+    ComparativeMetric, ComparativeRankingConfig, ComparativeRankingProgressError,
+    ComparativeRankingSession, ContinuousReportMedia, DenseSlideScorer, HybridSlideScorer,
+    LectureAnalysisConfig, LectureAnalysisProgressError, LectureAnalysisSession,
+    LectureModelBackend, LexicalSlideScorer, ModelExchangeTrace, PlaybackTimingBasis,
     RestoredAnalysisArtifact, RestoredTranscript, SlideDeck, TimedTranscript, Transcript,
     ValidatedRestoredAnalysis, ValidatedSources, WindowingConfig,
     evaluation::{render_annotation_quality, summarize_annotation_quality},
@@ -133,7 +133,7 @@ pub async fn run_canary(
 
     eprintln!("Preparing the lecture and scoring every transcript window...");
     let mut session = LectureAnalysisSession::prepare(
-        &client,
+        client.as_ref(),
         sources,
         restored_transcript,
         &hybrid,
@@ -231,7 +231,7 @@ pub async fn run_complete(
         match preparation_mode {
             PassagePreparationMode::Windows => {
                 let result = prepare_window_passages(
-                    &client,
+                    client.as_ref(),
                     &provider,
                     sources,
                     restored_transcript,
@@ -245,7 +245,7 @@ pub async fn run_complete(
             }
             PassagePreparationMode::Boundaries => {
                 let result = boundary_run::prepare(
-                    &client,
+                    client.as_ref(),
                     &provider,
                     sources,
                     restored_transcript,
@@ -269,7 +269,7 @@ pub async fn run_complete(
         .worker
         .progress(crate::worker_control::Stage::Comparisons, 0, None)?;
     let mut ranking_session = ComparativeRankingSession::prepare(
-        &client,
+        client.as_ref(),
         &analysis,
         &hybrid,
         comparative_ranking_config(&provider)?,
@@ -376,7 +376,7 @@ pub async fn run_complete(
 }
 
 async fn prepare_window_passages(
-    client: &ChatCompletionsClient,
+    client: &dyn LectureModelBackend,
     provider: &ProviderSettings,
     sources: ValidatedSources,
     restored_transcript: RestoredTranscript,
@@ -567,23 +567,24 @@ pub fn evaluate_saved_analysis(
 fn analysis_client(
     provider: &ProviderSettings,
     model_trace: ModelExchangeTrace,
-) -> Result<ChatCompletionsClient, Box<dyn Error>> {
-    let config = provider
-        .chat_config()?
-        .with_model_trace(model_trace)
-        .with_max_tool_rounds(MAX_TOOL_ROUNDS)?
-        .with_max_final_answer_repairs(MAX_FINAL_ANSWER_REPAIRS)?
-        .with_max_fresh_annotation_retries(MAX_FRESH_ANNOTATION_RETRIES)
-        .with_max_provider_retries(MAX_PROVIDER_RETRIES)
-        .with_max_search_results(MAX_SEARCH_RESULTS)?
-        .with_max_output_tokens(MAX_OUTPUT_TOKENS)?;
-    Ok(ChatCompletionsClient::new(config))
+) -> Result<Box<dyn LectureModelBackend>, Box<dyn Error>> {
+    provider.model_client(model_trace, |config| {
+        config
+            .with_max_tool_rounds(MAX_TOOL_ROUNDS)?
+            .with_max_final_answer_repairs(MAX_FINAL_ANSWER_REPAIRS)?
+            .with_max_fresh_annotation_retries(MAX_FRESH_ANNOTATION_RETRIES)
+            .with_max_provider_retries(MAX_PROVIDER_RETRIES)
+            .with_max_search_results(MAX_SEARCH_RESULTS)?
+            .with_max_output_tokens(MAX_OUTPUT_TOKENS)
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AnalysisRunManifest {
     format_version: u32,
+    #[serde(default = "crate::run_support::default_model_backend")]
+    model_backend: String,
     transcript_sha256: String,
     slides_sha256: String,
     restored_transcript_sha256: String,
@@ -626,6 +627,7 @@ impl AnalysisRunManifest {
     ) -> Self {
         Self {
             format_version: ANALYSIS_RUN_FORMAT_VERSION,
+            model_backend: provider.backend_name().into(),
             transcript_sha256,
             slides_sha256,
             restored_transcript_sha256,
@@ -670,6 +672,7 @@ impl AnalysisRunManifest {
     fn preparation_identity(&self) -> PreparationIdentity {
         PreparationIdentity {
             format_version: self.format_version,
+            model_backend: self.model_backend.clone(),
             transcript_sha256: self.transcript_sha256.clone(),
             slides_sha256: self.slides_sha256.clone(),
             restored_transcript_sha256: self.restored_transcript_sha256.clone(),
@@ -707,6 +710,8 @@ impl AnalysisRunManifest {
 #[serde(deny_unknown_fields)]
 struct PreparationIdentity {
     format_version: u32,
+    #[serde(default = "crate::run_support::default_model_backend")]
+    model_backend: String,
     transcript_sha256: String,
     slides_sha256: String,
     restored_transcript_sha256: String,
@@ -982,6 +987,7 @@ mod tests {
 
         for field in [
             "format_version",
+            "model_backend",
             "transcript_sha256",
             "slides_sha256",
             "restored_transcript_sha256",
@@ -1009,7 +1015,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_manifest_defaults_the_clean_annotation_retry_policy() -> Result<(), Box<dyn Error>> {
+    fn legacy_manifest_defaults_new_compatible_fields() -> Result<(), Box<dyn Error>> {
         let provider = ProviderSettings::new(
             "https://example.test/v1",
             "secret-not-persisted",
@@ -1026,6 +1032,10 @@ mod tests {
             .as_object_mut()
             .expect("an analysis manifest is an object")
             .remove("max_fresh_annotation_retries");
+        value
+            .as_object_mut()
+            .expect("an analysis manifest is an object")
+            .remove("model_backend");
 
         let restored: AnalysisRunManifest = serde_json::from_value(value)?;
 
@@ -1033,6 +1043,7 @@ mod tests {
             restored.max_fresh_annotation_retries,
             MAX_FRESH_ANNOTATION_RETRIES
         );
+        assert_eq!(restored.model_backend, "openai_compatible");
         Ok(())
     }
 

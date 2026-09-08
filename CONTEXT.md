@@ -71,6 +71,13 @@ _Avoid_: Owned window, annotation span
 
 ## Analysis
 
+**Model backend**:
+The authenticated execution adapter that turns provider-neutral lecture tasks
+into validated structured model results. Current backends are an explicitly
+configured OpenAI-compatible endpoint and a local Codex app-server using the
+user's cached ChatGPT sign-in.
+_Avoid_: Provider (when referring to our adapter), model endpoint (for Codex)
+
 **Cut cost**:
 An ordinal `0..5` judgment of how much semantic or grammatical damage would be
 caused by dividing restored transcript text at one candidate gap. Zero is a

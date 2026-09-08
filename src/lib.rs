@@ -2,11 +2,13 @@ mod alignment;
 mod analysis_artifact;
 mod annotation;
 mod chat_completions;
+mod codex;
 mod comparative_ranking;
 mod continuous_report;
 mod domain;
 pub mod evaluation;
 pub mod ingestion;
+mod model_backend;
 mod model_trace;
 mod orchestration;
 mod passage_boundaries;
@@ -34,12 +36,13 @@ pub use chat_completions::{
     ChatCompletionsConfigError, ChatCompletionsError, RestorationDiagnostics,
     RestoredAnnotationResult, TranscriptWindowRestorationResult,
 };
+pub use codex::{CodexAppServerClient, CodexAppServerConfig, CodexAppServerConfigError};
 pub use comparative_ranking::{
     ComparativeDecision, ComparativeMetric, ComparativeRankingBatchInfo,
     ComparativeRankingBatchResult, ComparativeRankingConfig, ComparativeRankingConfigError,
     ComparativeRankingError, ComparativeRankingProgress, ComparativeRankingProgressError,
-    ComparativeRankingSession, ComparativeRankingValidationError, ComparativeRankings,
-    CompleteComparativeRanking,
+    ComparativeRankingSession, ComparativeRankingTask, ComparativeRankingValidationError,
+    ComparativeRankings, CompleteComparativeRanking,
 };
 pub use continuous_report::{
     ContinuousReportError, ContinuousReportMedia, ReportAudio, ReportSlideImage,
@@ -51,6 +54,7 @@ pub use domain::{
     Slide, SlideDeck, SlideId, TimedTranscript, TimedTranscriptToken, Transcript,
     TranscriptSegment, TranscriptSegmentId,
 };
+pub use model_backend::LectureModelBackend;
 pub use model_trace::{
     MODEL_TRACE_FORMAT_VERSION, ModelExchangeTrace, ModelProviderError, ModelRequestKind,
     ModelTraceEvent, ModelTraceRecord, ModelWorkflow, read_model_trace,

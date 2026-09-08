@@ -112,6 +112,7 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
             }),
         )
         .route("/api/jobs", get(list_jobs).post(upload))
+        .route("/api/codex/status", get(codex_status))
         .route("/api/rain-classroom/connect", post(connect_rain_classroom))
         .route("/api/rain-classroom/logout", post(logout_rain_classroom))
         .route(
@@ -267,7 +268,7 @@ mod tests {
                 "transcript_sample": "", "slide_sample": "", "warnings": []},
             "recording": "recording.mp4", "transcribe_recording": true,
             "runs": [{"number": 1, "started_ms": 10, "elapsed_before_ms": 0,
-                "settings": {"base_url": "http://localhost/v1", "model": "test", "extra_body": null,
+                "settings": {"backend": "openai_compatible", "base_url": "http://localhost/v1", "model": "test", "extra_body": null,
                     "max_concurrency": 2, "request_interval_ms": 0, "adaptive": false, "boundary_passages": true}}]
         })).unwrap();
         save_job(&directory, &job).unwrap();
@@ -766,6 +767,26 @@ struct StartRequest {
     confirm_reprocessing: bool,
 }
 
+async fn codex_status() -> Result<Json<serde_json::Value>, AppError> {
+    let version = tokio::process::Command::new("codex")
+        .arg("--version")
+        .output()
+        .await
+        .map_err(|error| AppError::bad(format!("could not run codex: {error}")))?;
+    if !version.status.success() {
+        return Err(AppError::bad("codex --version failed"));
+    }
+    let login = tokio::process::Command::new("codex")
+        .args(["login", "status"])
+        .output()
+        .await
+        .map_err(|error| AppError::bad(format!("could not inspect Codex login: {error}")))?;
+    Ok(Json(json!({
+        "version": String::from_utf8_lossy(&version.stdout).trim(),
+        "logged_in": login.status.success(),
+    })))
+}
+
 async fn start(
     State(app): State<App>,
     Path(id): Path<String>,
@@ -869,17 +890,14 @@ async fn start(
         command.env("BEYOND_SLIDES_ASR_PYTHON", python);
     }
     command
-        .env("BEYOND_SLIDES_API_BASE_URL", &run.settings.base_url)
-        .env("BEYOND_SLIDES_MODEL", &run.settings.model)
-        .env("BEYOND_SLIDES_API_KEY", request.api_key)
         .env(
-            "BEYOND_SLIDES_CHAT_EXTRA_BODY",
-            run.settings
-                .extra_body
-                .as_ref()
-                .unwrap_or(&json!({}))
-                .to_string(),
+            "BEYOND_SLIDES_MODEL_BACKEND",
+            match run.settings.backend {
+                crate::run_support::ModelBackendKind::OpenAiCompatible => "openai_compatible",
+                crate::run_support::ModelBackendKind::Codex => "codex",
+            },
         )
+        .env("BEYOND_SLIDES_MODEL", &run.settings.model)
         .env(
             "BEYOND_SLIDES_MAX_CONCURRENCY",
             run.settings.max_concurrency.to_string(),
@@ -905,6 +923,19 @@ async fn start(
             },
         )
         .env("BEYOND_SLIDES_WORKER_CONTROL", path.join("control"));
+    if run.settings.backend == crate::run_support::ModelBackendKind::OpenAiCompatible {
+        command
+            .env("BEYOND_SLIDES_API_BASE_URL", &run.settings.base_url)
+            .env("BEYOND_SLIDES_API_KEY", request.api_key)
+            .env(
+                "BEYOND_SLIDES_CHAT_EXTRA_BODY",
+                run.settings
+                    .extra_body
+                    .as_ref()
+                    .unwrap_or(&json!({}))
+                    .to_string(),
+            );
+    }
     // A terminal Ctrl+C should stop the controller, not the independently owned
     // worker and its log supervisor. They retain graceful stop-file control.
     #[cfg(unix)]

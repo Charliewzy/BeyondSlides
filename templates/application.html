@@ -88,16 +88,20 @@
       </details>
       <section class="card" id="provider-panel">
         <h2>分析模型</h2>
-        <p class="disclosure">开始后，转写文字与幻灯片文字会发送到你指定的模型端点。PDF、录音和视频文件不会作为模型附件上传。<br>
+        <p class="disclosure">开始后，转写文字与幻灯片文字会发送到你选择的模型后端。PDF、录音和视频文件不会作为模型附件上传。使用 Codex 时，BeyondSlides 复用本机 Codex CLI 的 ChatGPT 登录，不保存账号凭据。<br>
           <strong>为加快处理，建议尝试关闭模型的思考模式（如模型支持）。</strong><br>
           使用 GLM-5 时，可在「高级设置 → 服务商额外请求字段」中填写 <code>{"thinking":{"type": "disabled"}}</code>。其他模型或服务商的设置方式可能不同，请查阅对应文档。
         </p>
         <form id="start-form">
           <div class="provider-grid">
-            <label>OpenAI-compatible API base URL<input id="base-url" type="url" required placeholder="https://provider.example/api/v1"></label>
+            <label>模型连接方式<select id="model-backend"><option value="openai_compatible">OpenAI-compatible API</option><option value="codex">本机 Codex（ChatGPT 订阅）</option></select></label>
             <label>模型名称<input id="model" required placeholder="输入服务商提供的准确名称"></label>
           </div>
-          <label>API key<input id="api-key" type="password" required autocomplete="off" placeholder="仅传给本地后端；不写入讲座配置"></label>
+          <div id="openai-provider-settings">
+            <label>OpenAI-compatible API base URL<input id="base-url" type="url" required placeholder="https://provider.example/api/v1"></label>
+            <label>API key<input id="api-key" type="password" required autocomplete="off" placeholder="仅传给本地后端；不写入讲座配置"></label>
+          </div>
+          <p id="codex-provider-status" class="muted" hidden>正在检查本机 Codex 登录状态…</p>
           <details><summary>高级设置</summary>
             <div class="provider-grid">
               <label>最大并发数<input id="concurrency" type="number" min="1" max="32" value="2" required></label>
@@ -105,7 +109,7 @@
             </div>
             <label class="check"><input id="adaptive" type="checkbox"> 自动调整并发（以上数值为上限）</label>
             <label class="check"><input id="boundaries" type="checkbox"> 使用实验性的全局语义边界分段</label>
-            <label>服务商额外请求字段（JSON，可选）<textarea id="extra-body" rows="3" placeholder='例如 GLM 关闭思考：{"thinking":{"type":"disabled"}}'></textarea></label>
+            <label id="extra-body-setting">服务商额外请求字段（JSON，可选）<textarea id="extra-body" rows="3" placeholder='例如 GLM 关闭思考：{"thinking":{"type":"disabled"}}'></textarea></label>
             <p class="muted">更改并发或间隔可直接续跑；更改模型或分段方式会先提示需要重跑的阶段。</p>
           </details>
           <div class="actions"><button class="primary" id="start-button">开始分析</button><button type="button" id="stop-button" hidden>完成当前任务后停止</button><a class="primary button" id="open-report" hidden target="_blank" rel="noopener">打开阅读报告 ↗</a><a class="button" id="export-report" hidden>下载分享包（含录音）</a></div>

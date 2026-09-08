@@ -9,7 +9,7 @@ use std::{
 use beyond_slides::processing::{BatchRunError, run_bounded};
 use beyond_slides::{
     BOUNDARY_MAX_PASSAGE_CHARACTERS, BoundaryBatchResult, BoundarySegmentationPlan,
-    ChatCompletionsClient, PASSAGE_BOUNDARY_INSTRUCTIONS, RestoredTranscript, SlideScorer,
+    LectureModelBackend, PASSAGE_BOUNDARY_INSTRUCTIONS, RestoredTranscript, SlideScorer,
     ValidatedRestoredAnalysis, ValidatedSources,
 };
 use indicatif::{ProgressBar, ProgressStyle};
@@ -26,6 +26,8 @@ use crate::run_support::{
 #[serde(deny_unknown_fields)]
 pub(crate) struct BoundaryRunIdentity {
     format_version: u32,
+    #[serde(default = "crate::run_support::default_model_backend")]
+    model_backend: String,
     task_plan_sha256: String,
     prompt_sha256: String,
     api_base_url: String,
@@ -42,6 +44,7 @@ impl BoundaryRunIdentity {
     ) -> Result<Self, serde_json::Error> {
         Ok(Self {
             format_version: 1,
+            model_backend: provider.backend_name().into(),
             task_plan_sha256: sha256(&serde_json::to_vec(plan.tasks())?),
             prompt_sha256: sha256(PASSAGE_BOUNDARY_INSTRUCTIONS.as_bytes()),
             api_base_url: provider.base_url().into(),
@@ -62,7 +65,7 @@ pub(crate) struct BoundaryPreparation {
 }
 
 pub(crate) async fn prepare(
-    client: &ChatCompletionsClient,
+    client: &dyn LectureModelBackend,
     provider: &ProviderSettings,
     sources: ValidatedSources,
     restored: RestoredTranscript,
@@ -251,6 +254,13 @@ mod tests {
             BoundaryRunIdentity::new(&provider, &different, 16_384)?
         );
         assert!(!serde_json::to_string(&identity)?.contains("secret"));
+        let mut legacy = serde_json::to_value(&identity)?;
+        legacy
+            .as_object_mut()
+            .expect("a boundary identity is an object")
+            .remove("model_backend");
+        let legacy: BoundaryRunIdentity = serde_json::from_value(legacy)?;
+        assert_eq!(legacy.model_backend, "openai_compatible");
         Ok(())
     }
 }

@@ -7,10 +7,11 @@ use std::{
 };
 
 use beyond_slides::{
-    ChatCompletionsConfig, ChatCompletionsConfigError, ModelExchangeTrace, RequestScheduler,
+    ChatCompletionsConfig, ChatCompletionsConfigError, CodexAppServerConfig, LectureModelBackend,
+    ModelExchangeTrace, RequestScheduler,
 };
 use indicatif::{ProgressBar, ProgressStyle};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
@@ -18,6 +19,7 @@ use tempfile::NamedTempFile;
 const API_BASE_URL_ENV: &str = "BEYOND_SLIDES_API_BASE_URL";
 const API_KEY_ENV: &str = "BEYOND_SLIDES_API_KEY";
 const MODEL_ENV: &str = "BEYOND_SLIDES_MODEL";
+const MODEL_BACKEND_ENV: &str = "BEYOND_SLIDES_MODEL_BACKEND";
 const CHAT_EXTRA_BODY_ENV: &str = "BEYOND_SLIDES_CHAT_EXTRA_BODY";
 const ANNOTATION_CHAT_EXTRA_BODY_ENV: &str = "BEYOND_SLIDES_ANNOTATION_CHAT_EXTRA_BODY";
 const RESTORATION_CHAT_EXTRA_BODY_ENV: &str = "BEYOND_SLIDES_RESTORATION_CHAT_EXTRA_BODY";
@@ -44,12 +46,22 @@ pub(crate) fn lock_run_directory(directory: &Path) -> Result<fs::File, io::Error
 
 pub(crate) struct ProviderSettings {
     pub(crate) worker: crate::worker_control::WorkerControl,
-    base_url: String,
-    api_key: String,
+    backend: ModelBackendKind,
+    base_url: Option<String>,
+    api_key: Option<String>,
     model: String,
     extra_body: Option<Value>,
     execution: ExecutionSettings,
     scheduler: RequestScheduler,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ModelBackendKind {
+    #[default]
+    #[serde(rename = "openai_compatible")]
+    OpenAiCompatible,
+    Codex,
 }
 
 /// Operational settings do not change the identity of a validated checkpoint.
@@ -132,9 +144,24 @@ impl ProviderSettings {
     }
 
     fn from_environment(stage_extra_body_env: &str) -> Result<Self, io::Error> {
-        let extra_body = match optional_json_object(stage_extra_body_env)? {
-            Some(extra_body) => Some(extra_body),
-            None => optional_json_object(CHAT_EXTRA_BODY_ENV)?,
+        let backend = match optional_environment_variable(MODEL_BACKEND_ENV)?.as_deref() {
+            None | Some("openai_compatible") => ModelBackendKind::OpenAiCompatible,
+            Some("codex") => ModelBackendKind::Codex,
+            Some(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "invalid BEYOND_SLIDES_MODEL_BACKEND: expected openai_compatible or codex",
+                ));
+            }
+        };
+        let extra_body = match backend {
+            ModelBackendKind::Codex => None,
+            ModelBackendKind::OpenAiCompatible => {
+                match optional_json_object(stage_extra_body_env)? {
+                    Some(extra_body) => Some(extra_body),
+                    None => optional_json_object(CHAT_EXTRA_BODY_ENV)?,
+                }
+            }
         };
         let execution = ExecutionSettings::parse(
             optional_environment_variable("BEYOND_SLIDES_SCHEDULING")?.as_deref(),
@@ -143,8 +170,17 @@ impl ProviderSettings {
         )?;
         Ok(Self {
             worker: crate::worker_control::WorkerControl::from_environment()?,
-            base_url: required_environment_variable(API_BASE_URL_ENV)?,
-            api_key: required_environment_variable(API_KEY_ENV)?,
+            backend,
+            base_url: if backend == ModelBackendKind::OpenAiCompatible {
+                Some(required_environment_variable(API_BASE_URL_ENV)?)
+            } else {
+                None
+            },
+            api_key: if backend == ModelBackendKind::OpenAiCompatible {
+                Some(required_environment_variable(API_KEY_ENV)?)
+            } else {
+                None
+            },
             model: required_environment_variable(MODEL_ENV)?,
             extra_body,
             execution,
@@ -158,8 +194,9 @@ impl ProviderSettings {
         Self {
             worker: crate::worker_control::WorkerControl::new(None)
                 .expect("disabled worker control"),
-            base_url: base_url.into(),
-            api_key: api_key.into(),
+            backend: ModelBackendKind::OpenAiCompatible,
+            base_url: Some(base_url.into()),
+            api_key: Some(api_key.into()),
             model: model.into(),
             extra_body: None,
             execution,
@@ -168,7 +205,16 @@ impl ProviderSettings {
     }
 
     pub(crate) fn base_url(&self) -> &str {
-        &self.base_url
+        self.base_url
+            .as_deref()
+            .unwrap_or("codex-app-server://stdio")
+    }
+
+    pub(crate) const fn backend_name(&self) -> &'static str {
+        match self.backend {
+            ModelBackendKind::OpenAiCompatible => "openai_compatible",
+            ModelBackendKind::Codex => "codex",
+        }
     }
 
     pub(crate) fn model(&self) -> &str {
@@ -207,7 +253,7 @@ impl ProviderSettings {
     pub(crate) fn progress_message(&self, task: &str) -> String {
         let snapshot = self.scheduler.snapshot();
         format!(
-            "{task} · HTTP {}/{} · {} ms spacing",
+            "{task} · model {}/{} · {} ms spacing",
             snapshot.effective_concurrency, snapshot.max_concurrency, snapshot.request_interval_ms
         )
     }
@@ -229,8 +275,8 @@ impl ProviderSettings {
 
     pub(crate) fn chat_config(&self) -> Result<ChatCompletionsConfig, ChatCompletionsConfigError> {
         let config = ChatCompletionsConfig::new(
-            self.base_url.clone(),
-            self.api_key.clone(),
+            self.base_url.clone().unwrap_or_default(),
+            self.api_key.clone().unwrap_or_default(),
             self.model.clone(),
         )?
         .with_request_scheduler(self.scheduler.clone());
@@ -239,6 +285,32 @@ impl ProviderSettings {
             None => Ok(config),
         }
     }
+
+    pub(crate) fn model_client(
+        &self,
+        trace: ModelExchangeTrace,
+        configure_chat: impl FnOnce(
+            ChatCompletionsConfig,
+        )
+            -> Result<ChatCompletionsConfig, ChatCompletionsConfigError>,
+    ) -> Result<Box<dyn LectureModelBackend>, Box<dyn std::error::Error>> {
+        match self.backend {
+            ModelBackendKind::OpenAiCompatible => {
+                Ok(Box::new(beyond_slides::ChatCompletionsClient::new(
+                    configure_chat(self.chat_config()?.with_model_trace(trace))?,
+                )))
+            }
+            ModelBackendKind::Codex => Ok(Box::new(beyond_slides::CodexAppServerClient::new(
+                CodexAppServerConfig::new(self.model.clone())?
+                    .with_request_scheduler(self.scheduler.clone())
+                    .with_model_trace(trace),
+            ))),
+        }
+    }
+}
+
+pub(crate) fn default_model_backend() -> String {
+    "openai_compatible".into()
 }
 
 fn optional_environment_variable(name: &str) -> Result<Option<String>, io::Error> {

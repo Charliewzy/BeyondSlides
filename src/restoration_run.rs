@@ -7,7 +7,7 @@ use std::{
 };
 
 use beyond_slides::{
-    ChatCompletionsClient, ModelExchangeTrace, RestorationProgressError, RestoredTranscriptSpan,
+    LectureModelBackend, ModelExchangeTrace, RestorationProgressError, RestoredTranscriptSpan,
     TranscriptRestorationConfig, TranscriptRestorationSession, WindowingConfig,
 };
 use serde::{Deserialize, Serialize};
@@ -50,8 +50,11 @@ pub async fn run_canary(
     )?;
     provider.record_execution_settings(&run_directory)?;
     let client = restoration_client(&provider, open_run_model_trace(&run_directory)?)?;
-    let mut session =
-        TranscriptRestorationSession::prepare(&client, transcript, restoration_config(&provider)?)?;
+    let mut session = TranscriptRestorationSession::prepare(
+        client.as_ref(),
+        transcript,
+        restoration_config(&provider)?,
+    )?;
     restore_checkpoints(&mut session, &run_directory)?;
 
     eprintln!("Sending transcript window 1 as the restoration canary...");
@@ -110,9 +113,12 @@ pub async fn run_complete(
     )?;
     provider.record_execution_settings(&run_directory)?;
     let client = restoration_client(&provider, open_run_model_trace(&run_directory)?)?;
-    let mut session =
-        TranscriptRestorationSession::prepare(&client, transcript, restoration_config(&provider)?)?
-            .with_stop_signal(provider.worker.stop_signal());
+    let mut session = TranscriptRestorationSession::prepare(
+        client.as_ref(),
+        transcript,
+        restoration_config(&provider)?,
+    )?
+    .with_stop_signal(provider.worker.stop_signal());
     restore_checkpoints(&mut session, &run_directory)?;
     provider.worker.baseline(
         crate::worker_control::Stage::Restoration,
@@ -203,14 +209,13 @@ pub async fn run_complete(
 fn restoration_client(
     provider: &ProviderSettings,
     model_trace: ModelExchangeTrace,
-) -> Result<ChatCompletionsClient, Box<dyn Error>> {
-    let config = provider
-        .chat_config()?
-        .with_model_trace(model_trace)
-        .with_max_provider_retries(MAX_PROVIDER_RETRIES)
-        .with_max_final_answer_repairs(MAX_FINAL_ANSWER_REPAIRS)?
-        .with_max_output_tokens(MAX_OUTPUT_TOKENS)?;
-    Ok(ChatCompletionsClient::new(config))
+) -> Result<Box<dyn LectureModelBackend>, Box<dyn Error>> {
+    provider.model_client(model_trace, |config| {
+        config
+            .with_max_provider_retries(MAX_PROVIDER_RETRIES)
+            .with_max_final_answer_repairs(MAX_FINAL_ANSWER_REPAIRS)?
+            .with_max_output_tokens(MAX_OUTPUT_TOKENS)
+    })
 }
 
 fn restoration_config(
@@ -262,6 +267,8 @@ fn restored_span_text(spans: &[RestoredTranscriptSpan]) -> String {
 #[serde(deny_unknown_fields)]
 struct RestorationRunManifest {
     format_version: u32,
+    #[serde(default = "crate::run_support::default_model_backend")]
+    model_backend: String,
     transcript_sha256: String,
     restoration_prompt_sha256: String,
     api_base_url: String,
@@ -281,6 +288,7 @@ impl RestorationRunManifest {
     fn new(provider: &ProviderSettings, transcript_sha256: String) -> Self {
         Self {
             format_version: RESTORATION_RUN_FORMAT_VERSION,
+            model_backend: provider.backend_name().into(),
             transcript_sha256,
             restoration_prompt_sha256: sha256(include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
@@ -322,6 +330,7 @@ mod tests {
         changed.max_final_answer_repairs = 3;
         assert!(original.compatible(&changed));
         for field in [
+            "model_backend",
             "transcript_sha256",
             "restoration_prompt_sha256",
             "model",
@@ -341,5 +350,13 @@ mod tests {
                 "{field}"
             );
         }
+
+        let mut legacy = serde_json::to_value(&original).unwrap();
+        legacy
+            .as_object_mut()
+            .expect("a restoration manifest is an object")
+            .remove("model_backend");
+        let legacy: RestorationRunManifest = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.model_backend, "openai_compatible");
     }
 }

@@ -72,7 +72,7 @@ uv pip install --python .venv/bin/python funasr==1.4.5
 
 1. 点击 **导入讲座**，分别选择“书面材料”和“课堂内容”的来源。前者可上传 PDF 或选择雨课堂课件；后者可上传转写、上传录音 / 视频并本地转写，或选择雨课堂录像。
 2. 检查第一页文字、转写预览和建议检查的幻灯片。图片页或标题页文字少并不一定是错误。
-3. 选择模型连接方式。OpenAI-compatible 模式需填写 API base URL、准确模型名称和 API key；Codex 模式需先安装 Codex CLI 并运行 `codex login`，随后选择本机 Codex 并填写可用的 Codex 模型名称，无需 API key。
+3. 选择模型连接方式。OpenAI-compatible 模式需填写 API base URL、准确模型名称和 API key；Codex 模式需先安装 Codex CLI 并运行 `codex login`，应用随后会读取账号可用的模型、推理强度和 Fast 模式，无需 API key。
 4. 点击 **开始分析**，完成后打开阅读报告。
 
 例如使用课程提供的 GLM-5 服务时：

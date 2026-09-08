@@ -197,11 +197,17 @@ To use a ChatGPT subscription through the local Codex CLI, first run
 ```sh
 export BEYOND_SLIDES_MODEL_BACKEND=codex
 export BEYOND_SLIDES_MODEL=gpt-5.6-luna
+# Optional per-turn controls advertised by the selected model:
+export BEYOND_SLIDES_CODEX_REASONING_EFFORT=medium
+export BEYOND_SLIDES_CODEX_SERVICE_TIER=priority
 ```
 
 The Codex backend does not read the API URL, API key, or provider-specific
 extra-body variables. It starts one local app-server lazily, uses ephemeral
 read-only task threads in an empty directory, and retains BeyondSlides'
 checkpoint, progress, token-usage, validation, and model-trace behavior.
-The web application exposes the same choice under “模型连接方式” and reports
-whether the local CLI is logged in.
+The web application exposes the same choice under “模型连接方式”, reads the
+authenticated account's live model catalog, and limits reasoning-effort and
+speed choices to the capabilities advertised for the selected model. The
+service-tier value is operational and does not invalidate checkpoints;
+reasoning effort is part of model-result identity and does.

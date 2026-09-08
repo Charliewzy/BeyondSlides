@@ -48,6 +48,10 @@ pub(super) struct Settings {
     pub backend: ModelBackendKind,
     pub base_url: String,
     pub model: String,
+    #[serde(default)]
+    pub codex_reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub codex_service_tier: Option<String>,
     pub extra_body: Option<Value>,
     pub max_concurrency: usize,
     pub request_interval_ms: u64,
@@ -61,6 +65,20 @@ impl Settings {
             return Err("Model name cannot be empty".into());
         }
         if self.backend == ModelBackendKind::Codex {
+            if self
+                .codex_reasoning_effort
+                .as_ref()
+                .is_some_and(|effort| effort.trim().is_empty())
+            {
+                return Err("Codex reasoning effort cannot be empty".into());
+            }
+            if self
+                .codex_service_tier
+                .as_ref()
+                .is_some_and(|tier| tier.trim().is_empty())
+            {
+                return Err("Codex service tier cannot be empty".into());
+            }
             if self.extra_body.is_some() {
                 return Err(
                     "Codex app-server does not accept provider extra request fields".into(),
@@ -70,6 +88,9 @@ impl Settings {
                 return Err("Concurrency must be 1–32 and request spacing 0–60000 ms".into());
             }
             return Ok(());
+        }
+        if self.codex_reasoning_effort.is_some() || self.codex_service_tier.is_some() {
+            return Err("Codex reasoning and speed settings require the Codex backend".into());
         }
         let config = ChatCompletionsConfig::new(&self.base_url, key, &self.model)
             .map_err(|e| e.to_string())?;
@@ -98,6 +119,7 @@ impl Settings {
     pub fn same_restoration(&self, other: &Self) -> bool {
         self.backend == other.backend
             && self.model == other.model
+            && self.codex_reasoning_effort == other.codex_reasoning_effort
             && (self.backend == ModelBackendKind::Codex
                 || (self.base_url == other.base_url && self.extra_body == other.extra_body))
     }
@@ -378,6 +400,8 @@ mod tests {
             backend,
             base_url: "http://localhost/v1".into(),
             model: "test-model".into(),
+            codex_reasoning_effort: None,
+            codex_service_tier: None,
             extra_body: None,
             max_concurrency: 2,
             request_interval_ms: 0,
@@ -406,6 +430,16 @@ mod tests {
         let mut right = left.clone();
         right.base_url = "https://a-hidden-old-value.example/v1".into();
         assert!(left.same_restoration(&right));
+    }
+
+    #[test]
+    fn reasoning_changes_checkpoint_identity_but_service_tier_does_not() {
+        let left = settings(ModelBackendKind::Codex);
+        let mut right = left.clone();
+        right.codex_service_tier = Some("priority".into());
+        assert!(left.same_restoration(&right));
+        right.codex_reasoning_effort = Some("high".into());
+        assert!(!left.same_restoration(&right));
     }
 
     #[test]
@@ -491,6 +525,8 @@ mod tests {
                 backend: ModelBackendKind::OpenAiCompatible,
                 base_url: "http://localhost/v1".into(),
                 model: "test".into(),
+                codex_reasoning_effort: None,
+                codex_service_tier: None,
                 extra_body: None,
                 max_concurrency: 2,
                 request_interval_ms: 0,

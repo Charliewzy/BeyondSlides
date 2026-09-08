@@ -36,7 +36,11 @@ pub use chat_completions::{
     ChatCompletionsConfigError, ChatCompletionsError, RestorationDiagnostics,
     RestoredAnnotationResult, TranscriptWindowRestorationResult,
 };
-pub use codex::{CodexAppServerClient, CodexAppServerConfig, CodexAppServerConfigError};
+pub use codex::{
+    CodexAppServerClient, CodexAppServerConfig, CodexAppServerConfigError,
+    CodexModelDiscoveryError, CodexModelInfo, CodexReasoningEffort, CodexServiceTier,
+    discover_codex_models,
+};
 pub use comparative_ranking::{
     ComparativeDecision, ComparativeMetric, ComparativeRankingBatchInfo,
     ComparativeRankingBatchResult, ComparativeRankingConfig, ComparativeRankingConfigError,

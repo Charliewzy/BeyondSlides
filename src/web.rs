@@ -781,9 +781,20 @@ async fn codex_status() -> Result<Json<serde_json::Value>, AppError> {
         .output()
         .await
         .map_err(|error| AppError::bad(format!("could not inspect Codex login: {error}")))?;
+    let logged_in = login.status.success();
+    let (models, model_error) = if logged_in {
+        match beyond_slides::discover_codex_models("codex").await {
+            Ok(models) => (models, None),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        }
+    } else {
+        (Vec::new(), None)
+    };
     Ok(Json(json!({
         "version": String::from_utf8_lossy(&version.stdout).trim(),
-        "logged_in": login.status.success(),
+        "logged_in": logged_in,
+        "models": models,
+        "model_error": model_error,
     })))
 }
 
@@ -935,6 +946,13 @@ async fn start(
                     .unwrap_or(&json!({}))
                     .to_string(),
             );
+    } else {
+        if let Some(reasoning_effort) = &run.settings.codex_reasoning_effort {
+            command.env("BEYOND_SLIDES_CODEX_REASONING_EFFORT", reasoning_effort);
+        }
+        if let Some(service_tier) = &run.settings.codex_service_tier {
+            command.env("BEYOND_SLIDES_CODEX_SERVICE_TIER", service_tier);
+        }
     }
     // A terminal Ctrl+C should stop the controller, not the independently owned
     // worker and its log supervisor. They retain graceful stop-file control.

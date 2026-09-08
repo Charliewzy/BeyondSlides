@@ -20,6 +20,8 @@ const API_BASE_URL_ENV: &str = "BEYOND_SLIDES_API_BASE_URL";
 const API_KEY_ENV: &str = "BEYOND_SLIDES_API_KEY";
 const MODEL_ENV: &str = "BEYOND_SLIDES_MODEL";
 const MODEL_BACKEND_ENV: &str = "BEYOND_SLIDES_MODEL_BACKEND";
+const CODEX_REASONING_EFFORT_ENV: &str = "BEYOND_SLIDES_CODEX_REASONING_EFFORT";
+const CODEX_SERVICE_TIER_ENV: &str = "BEYOND_SLIDES_CODEX_SERVICE_TIER";
 const CHAT_EXTRA_BODY_ENV: &str = "BEYOND_SLIDES_CHAT_EXTRA_BODY";
 const ANNOTATION_CHAT_EXTRA_BODY_ENV: &str = "BEYOND_SLIDES_ANNOTATION_CHAT_EXTRA_BODY";
 const RESTORATION_CHAT_EXTRA_BODY_ENV: &str = "BEYOND_SLIDES_RESTORATION_CHAT_EXTRA_BODY";
@@ -50,6 +52,8 @@ pub(crate) struct ProviderSettings {
     base_url: Option<String>,
     api_key: Option<String>,
     model: String,
+    codex_reasoning_effort: Option<String>,
+    codex_service_tier: Option<String>,
     extra_body: Option<Value>,
     execution: ExecutionSettings,
     scheduler: RequestScheduler,
@@ -182,6 +186,16 @@ impl ProviderSettings {
                 None
             },
             model: required_environment_variable(MODEL_ENV)?,
+            codex_reasoning_effort: if backend == ModelBackendKind::Codex {
+                optional_environment_variable(CODEX_REASONING_EFFORT_ENV)?
+            } else {
+                None
+            },
+            codex_service_tier: if backend == ModelBackendKind::Codex {
+                optional_environment_variable(CODEX_SERVICE_TIER_ENV)?
+            } else {
+                None
+            },
             extra_body,
             execution,
             scheduler: execution.scheduler(),
@@ -198,6 +212,8 @@ impl ProviderSettings {
             base_url: Some(base_url.into()),
             api_key: Some(api_key.into()),
             model: model.into(),
+            codex_reasoning_effort: None,
+            codex_service_tier: None,
             extra_body: None,
             execution,
             scheduler: execution.scheduler(),
@@ -300,11 +316,18 @@ impl ProviderSettings {
                     configure_chat(self.chat_config()?.with_model_trace(trace))?,
                 )))
             }
-            ModelBackendKind::Codex => Ok(Box::new(beyond_slides::CodexAppServerClient::new(
-                CodexAppServerConfig::new(self.model.clone())?
+            ModelBackendKind::Codex => {
+                let mut config = CodexAppServerConfig::new(self.model.clone())?
                     .with_request_scheduler(self.scheduler.clone())
-                    .with_model_trace(trace),
-            ))),
+                    .with_model_trace(trace);
+                if let Some(reasoning_effort) = &self.codex_reasoning_effort {
+                    config = config.with_reasoning_effort(reasoning_effort.clone())?;
+                }
+                if let Some(service_tier) = &self.codex_service_tier {
+                    config = config.with_service_tier(service_tier.clone())?;
+                }
+                Ok(Box::new(beyond_slides::CodexAppServerClient::new(config)))
+            }
         }
     }
 }

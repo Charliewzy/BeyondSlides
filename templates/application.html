@@ -95,13 +95,18 @@
         <form id="start-form">
           <div class="provider-grid">
             <label>模型连接方式<select id="model-backend"><option value="openai_compatible">OpenAI-compatible API</option><option value="codex">本机 Codex（ChatGPT 订阅）</option></select></label>
-            <label>模型名称<input id="model" required placeholder="输入服务商提供的准确名称"></label>
+            <label id="openai-model-setting">模型名称<input id="model" required placeholder="输入服务商提供的准确名称"></label>
+            <label id="codex-model-setting" hidden>Codex 模型<select id="codex-model" required disabled><option value="">正在读取可用模型…</option></select></label>
           </div>
           <div id="openai-provider-settings">
             <label>OpenAI-compatible API base URL<input id="base-url" type="url" required placeholder="https://provider.example/api/v1"></label>
             <label>API key<input id="api-key" type="password" required autocomplete="off" placeholder="仅传给本地后端；不写入讲座配置"></label>
           </div>
           <p id="codex-provider-status" class="muted" hidden>正在检查本机 Codex 登录状态…</p>
+          <div id="codex-model-controls" class="provider-grid" hidden>
+            <label>推理强度<select id="codex-reasoning-effort" disabled><option value="">模型默认</option></select><small id="codex-reasoning-description"></small></label>
+            <label class="codex-speed-control"><span>响应速度</span><span class="check"><input id="codex-fast" type="checkbox" disabled> Fast 模式</span><small id="codex-fast-description">所选模型不提供 Fast 模式。</small></label>
+          </div>
           <details><summary>高级设置</summary>
             <div class="provider-grid">
               <label>最大并发数<input id="concurrency" type="number" min="1" max="32" value="2" required></label>

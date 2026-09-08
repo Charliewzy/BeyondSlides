@@ -14,6 +14,10 @@ let activeRainImportId;
 let rainLectures = [];
 let rainSelectedLessonId = "";
 let rainLectureRequest = 0;
+let codexStatusPromise;
+let desiredCodexModel = "";
+let desiredCodexReasoningEffort = "";
+let desiredCodexServiceTier = "";
 
 function showReviewPage(page, source) {
   $("review-page-title").textContent = `第 ${page.page} 页`;
@@ -158,25 +162,105 @@ function setSettings(settings) {
   if (!settings) return;
   $("model-backend").value = settings.backend || "openai_compatible";
   $("base-url").value = settings.base_url; $("model").value = settings.model;
+  desiredCodexModel = settings.backend === "codex" ? settings.model : "";
+  desiredCodexReasoningEffort = settings.codex_reasoning_effort || "";
+  desiredCodexServiceTier = settings.codex_service_tier || "";
   $("extra-body").value = settings.extra_body ? JSON.stringify(settings.extra_body, null, 2) : "";
   $("concurrency").value = settings.max_concurrency; $("spacing").value = settings.request_interval_ms;
   $("adaptive").checked = settings.adaptive; $("boundaries").checked = settings.boundary_passages;
   syncModelBackend();
 }
+function selectedCodexModel() {
+  const model = $("codex-model").selectedOptions[0];
+  return model?.dataset.model ? JSON.parse(model.dataset.model) : null;
+}
+function renderCodexModelControls() {
+  const model = selectedCodexModel();
+  const effort = $("codex-reasoning-effort");
+  effort.replaceChildren();
+  if (!model) {
+    effort.add(new Option("模型默认", "")); effort.disabled = true;
+    $("codex-fast").checked = false; $("codex-fast").disabled = true;
+    $("codex-reasoning-description").textContent = "";
+    $("codex-fast-description").textContent = "所选模型不提供 Fast 模式。";
+    return;
+  }
+  const defaultEffort = model.supported_reasoning_efforts
+    .find(option => option.reasoning_effort === model.default_reasoning_effort);
+  const defaultOption = new Option(`${model.default_reasoning_effort}（模型默认）`, model.default_reasoning_effort);
+  defaultOption.dataset.description = defaultEffort?.description || "";
+  effort.add(defaultOption);
+  for (const option of model.supported_reasoning_efforts) {
+    if (option.reasoning_effort === model.default_reasoning_effort) continue;
+    const item = new Option(option.reasoning_effort, option.reasoning_effort);
+    item.dataset.description = option.description;
+    effort.add(item);
+  }
+  effort.value = [...effort.options].some(option => option.value === desiredCodexReasoningEffort)
+    ? desiredCodexReasoningEffort : model.default_reasoning_effort;
+  effort.disabled = false;
+  const tier = model.service_tiers.find(candidate => candidate.name.toLowerCase() === "fast")
+    || model.service_tiers.find(candidate => ["fast", "priority"].includes(candidate.id));
+  const fast = $("codex-fast");
+  fast.dataset.serviceTier = tier?.id || "";
+  fast.disabled = !tier;
+  fast.checked = Boolean(tier && desiredCodexServiceTier === tier.id);
+  $("codex-fast-description").textContent = tier
+    ? `${tier.description}；会消耗更多 ChatGPT 额度。`
+    : "所选模型不提供 Fast 模式。";
+  renderCodexReasoningDescription();
+}
+function renderCodexReasoningDescription() {
+  const effort = $("codex-reasoning-effort");
+  const selected = effort.selectedOptions[0];
+  $("codex-reasoning-description").textContent = selected?.value
+    ? selected.dataset.description || ""
+    : "";
+}
+function populateCodexModels(models) {
+  const select = $("codex-model");
+  select.replaceChildren();
+  for (const model of models) {
+    const option = new Option(`${model.display_name}${model.is_default ? "（默认）" : ""}`, model.model);
+    option.dataset.model = JSON.stringify(model);
+    select.add(option);
+  }
+  const preferred = desiredCodexModel || models.find(model => model.is_default)?.model;
+  if (preferred && models.some(model => model.model === preferred)) select.value = preferred;
+  select.disabled = models.length === 0;
+  renderCodexModelControls();
+}
 async function syncModelBackend() {
   const codex = $("model-backend").value === "codex";
   $("openai-provider-settings").hidden = codex;
   $("extra-body-setting").hidden = codex;
+  $("openai-model-setting").hidden = codex;
+  $("codex-model-setting").hidden = !codex;
+  $("codex-model-controls").hidden = !codex;
   $("base-url").required = !codex;
   $("api-key").required = !codex;
+  $("model").required = !codex;
+  $("codex-model").required = codex;
   $("codex-provider-status").hidden = !codex;
   if (!codex) return;
+  $("codex-model").disabled = true;
   try {
-    const status = await api("/api/codex/status");
-    $("codex-provider-status").textContent = status.logged_in
-      ? `已连接 ${status.version}，将使用本机缓存的 ChatGPT 登录。`
-      : `未登录 Codex。请先在终端运行 codex login（检测到 ${status.version || "Codex CLI"}）。`;
+    codexStatusPromise ||= api("/api/codex/status").catch(error => { codexStatusPromise = null; throw error; });
+    const status = await codexStatusPromise;
+    if (!status.logged_in) {
+      codexStatusPromise = null;
+      populateCodexModels([]);
+      $("codex-provider-status").textContent = `未登录 Codex。请先在终端运行 codex login（检测到 ${status.version || "Codex CLI"}）。`;
+    } else if (status.model_error) {
+      codexStatusPromise = null;
+      populateCodexModels([]);
+      $("codex-provider-status").textContent = `已登录 ${status.version}，但无法读取模型列表：${status.model_error}`;
+    } else {
+      populateCodexModels(status.models);
+      $("codex-provider-status").textContent = `已连接 ${status.version}，已读取 ${status.models.length} 个可用模型。`;
+    }
   } catch (error) {
+    populateCodexModels([]);
     $("codex-provider-status").textContent = `Codex 不可用：${error.message}`;
   }
 }
@@ -590,10 +674,17 @@ $("start-form").addEventListener("submit", async (event) => {
   event.preventDefault(); notice(""); $("start-button").disabled = true;
   const id = currentId;
   try {
+    const codex = $("model-backend").value === "codex";
+    const model = codex ? $("codex-model").value : $("model").value.trim();
+    if (!model) throw new Error(codex ? "无法读取可用的 Codex 模型，请检查 Codex 登录状态" : "请输入模型名称");
+    const codexServiceTier = codex && $("codex-fast").checked ? $("codex-fast").dataset.serviceTier : null;
     const request = {
-      settings: { backend: $("model-backend").value, base_url: $("base-url").value.trim(), model: $("model").value.trim(), extra_body: $("model-backend").value === "codex" ? null : ($("extra-body").value.trim() ? JSON.parse($("extra-body").value) : null),
+      settings: { backend: $("model-backend").value, base_url: $("base-url").value.trim(), model,
+        codex_reasoning_effort: codex ? ($("codex-reasoning-effort").value || null) : null,
+        codex_service_tier: codexServiceTier || null,
+        extra_body: codex ? null : ($("extra-body").value.trim() ? JSON.parse($("extra-body").value) : null),
         max_concurrency: Number($("concurrency").value), request_interval_ms: Number($("spacing").value), adaptive: $("adaptive").checked, boundary_passages: $("boundaries").checked },
-      api_key: $("model-backend").value === "codex" ? "" : $("api-key").value,
+      api_key: codex ? "" : $("api-key").value,
       confirm_reprocessing: false,
     };
     const send = () => api(`/api/jobs/${id}/start`, { method: "POST", body: JSON.stringify(request) });
@@ -612,6 +703,19 @@ $("stop-button").addEventListener("click", async () => {
   catch (error) { notice(error.message); }
 });
 $("model-backend").addEventListener("change", syncModelBackend);
+$("codex-model").addEventListener("change", () => {
+  desiredCodexModel = $("codex-model").value;
+  desiredCodexReasoningEffort = "";
+  desiredCodexServiceTier = "";
+  renderCodexModelControls();
+});
+$("codex-reasoning-effort").addEventListener("change", () => {
+  desiredCodexReasoningEffort = $("codex-reasoning-effort").value;
+  renderCodexReasoningDescription();
+});
+$("codex-fast").addEventListener("change", () => {
+  desiredCodexServiceTier = $("codex-fast").checked ? $("codex-fast").dataset.serviceTier : "";
+});
 syncModelBackend();
 refreshLibrary().then(() => {
   const id = location.hash.slice(1);

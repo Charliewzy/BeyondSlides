@@ -14,6 +14,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::{
@@ -50,6 +51,8 @@ const ENDPOINT: &str = "codex-app-server://stdio";
 pub struct CodexAppServerConfig {
     executable: PathBuf,
     model: String,
+    reasoning_effort: Option<String>,
+    service_tier: Option<String>,
     max_final_answer_repairs: usize,
     max_fresh_annotation_retries: usize,
     turn_timeout: Duration,
@@ -66,6 +69,8 @@ impl CodexAppServerConfig {
         Ok(Self {
             executable: PathBuf::from("codex"),
             model,
+            reasoning_effort: None,
+            service_tier: None,
             max_final_answer_repairs: DEFAULT_MAX_FINAL_ANSWER_REPAIRS,
             max_fresh_annotation_retries: DEFAULT_MAX_FRESH_ANNOTATION_RETRIES,
             turn_timeout: DEFAULT_TURN_TIMEOUT,
@@ -84,6 +89,30 @@ impl CodexAppServerConfig {
         self
     }
 
+    pub fn with_reasoning_effort(
+        mut self,
+        reasoning_effort: impl Into<String>,
+    ) -> Result<Self, CodexAppServerConfigError> {
+        let reasoning_effort = reasoning_effort.into();
+        if reasoning_effort.trim().is_empty() {
+            return Err(CodexAppServerConfigError::EmptyReasoningEffort);
+        }
+        self.reasoning_effort = Some(reasoning_effort);
+        Ok(self)
+    }
+
+    pub fn with_service_tier(
+        mut self,
+        service_tier: impl Into<String>,
+    ) -> Result<Self, CodexAppServerConfigError> {
+        let service_tier = service_tier.into();
+        if service_tier.trim().is_empty() {
+            return Err(CodexAppServerConfigError::EmptyServiceTier);
+        }
+        self.service_tier = Some(service_tier);
+        Ok(self)
+    }
+
     pub fn with_model_trace(mut self, trace: ModelExchangeTrace) -> Self {
         self.model_trace = Some(trace);
         self
@@ -98,17 +127,71 @@ impl CodexAppServerConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexAppServerConfigError {
     EmptyModel,
+    EmptyReasoningEffort,
+    EmptyServiceTier,
 }
 
 impl fmt::Display for CodexAppServerConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyModel => formatter.write_str("the Codex model name cannot be empty"),
+            Self::EmptyReasoningEffort => {
+                formatter.write_str("the Codex reasoning effort cannot be empty")
+            }
+            Self::EmptyServiceTier => formatter.write_str("the Codex service tier cannot be empty"),
         }
     }
 }
 
 impl Error for CodexAppServerConfigError {}
+
+/// One reasoning-effort option advertised for a Codex model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CodexReasoningEffort {
+    pub reasoning_effort: String,
+    pub description: String,
+}
+
+/// One serving-speed tier advertised for a Codex model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexServiceTier {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+/// A model available to the user's authenticated local Codex installation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CodexModelInfo {
+    pub model: String,
+    pub display_name: String,
+    pub description: String,
+    pub is_default: bool,
+    pub default_reasoning_effort: String,
+    pub supported_reasoning_efforts: Vec<CodexReasoningEffort>,
+    pub service_tiers: Vec<CodexServiceTier>,
+}
+
+#[derive(Debug)]
+pub struct CodexModelDiscoveryError(String);
+
+impl fmt::Display for CodexModelDiscoveryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl Error for CodexModelDiscoveryError {}
+
+/// Lists the models and per-model controls exposed by the local Codex app-server.
+pub async fn discover_codex_models(
+    executable: impl AsRef<Path>,
+) -> Result<Vec<CodexModelInfo>, CodexModelDiscoveryError> {
+    let server = AppServer::launch(executable.as_ref())
+        .await
+        .map_err(CodexModelDiscoveryError)?;
+    server.list_models().await.map_err(CodexModelDiscoveryError)
+}
 
 /// A lazily started, shared Codex app-server process.
 ///
@@ -180,7 +263,7 @@ impl CodexAppServerClient {
                 request_kind,
             };
             let permit = self.config.request_scheduler.acquire().await;
-            let request = json!({
+            let mut request = json!({
                 "threadId": thread_id,
                 "input": [{"type": "text", "text": prompt}],
                 "model": self.config.model,
@@ -188,6 +271,7 @@ impl CodexAppServerClient {
                 "sandboxPolicy": {"type": "readOnly"},
                 "outputSchema": task.schema,
             });
+            apply_turn_overrides(&mut request, &self.config);
             let exchange_id = self
                 .config
                 .model_trace
@@ -565,6 +649,58 @@ struct AppServer {
     _workspace: TempDir,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelListPage {
+    data: Vec<WireModelInfo>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireModelInfo {
+    model: String,
+    display_name: String,
+    description: String,
+    hidden: bool,
+    is_default: bool,
+    default_reasoning_effort: String,
+    supported_reasoning_efforts: Vec<WireReasoningEffort>,
+    #[serde(default)]
+    service_tiers: Vec<CodexServiceTier>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireReasoningEffort {
+    reasoning_effort: String,
+    description: String,
+}
+
+impl From<WireModelInfo> for CodexModelInfo {
+    fn from(model: WireModelInfo) -> Self {
+        Self {
+            model: model.model,
+            display_name: model.display_name,
+            description: model.description,
+            is_default: model.is_default,
+            default_reasoning_effort: model.default_reasoning_effort,
+            supported_reasoning_efforts: model
+                .supported_reasoning_efforts
+                .into_iter()
+                // Ultra delegates work to subagents, while this backend deliberately
+                // disables tools and subagents for lecture-text transformations.
+                .filter(|effort| effort.reasoning_effort != "ultra")
+                .map(|effort| CodexReasoningEffort {
+                    reasoning_effort: effort.reasoning_effort,
+                    description: effort.description,
+                })
+                .collect(),
+            service_tiers: model.service_tiers,
+        }
+    }
+}
+
 impl AppServer {
     async fn launch(executable: &Path) -> Result<Arc<Self>, String> {
         let workspace = tempfile::tempdir().map_err(|error| error.to_string())?;
@@ -632,6 +768,33 @@ impl AppServer {
             .await?;
         server.notify("initialized", json!({})).await?;
         Ok(server)
+    }
+
+    async fn list_models(&self) -> Result<Vec<CodexModelInfo>, String> {
+        let mut models = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let mut params = json!({"limit": 100, "includeHidden": false});
+            if let Some(cursor) = &cursor {
+                params["cursor"] = Value::String(cursor.clone());
+            }
+            let result = self.request("model/list", params).await?;
+            let page: ModelListPage = serde_json::from_value(result)
+                .map_err(|error| format!("invalid model/list response: {error}"))?;
+            models.extend(
+                page.data
+                    .into_iter()
+                    .filter(|model| !model.hidden)
+                    .map(CodexModelInfo::from),
+            );
+            match page.next_cursor {
+                Some(next_cursor) if Some(&next_cursor) != cursor.as_ref() => {
+                    cursor = Some(next_cursor);
+                }
+                Some(_) => return Err("model/list returned a repeated cursor".into()),
+                None => return Ok(models),
+            }
+        }
     }
 
     async fn start_thread(&self, model: &str) -> Result<String, String> {
@@ -870,6 +1033,21 @@ fn add_optional(total: Option<u64>, value: Option<u64>) -> Option<u64> {
     }
 }
 
+fn apply_turn_overrides(request: &mut Value, config: &CodexAppServerConfig) {
+    let fields = request
+        .as_object_mut()
+        .expect("Codex turn request is constructed as an object");
+    if let Some(reasoning_effort) = &config.reasoning_effort {
+        fields.insert("effort".into(), Value::String(reasoning_effort.clone()));
+    }
+    if let Some(service_tier) = &config.service_tier {
+        fields.insert(
+            "serviceTierForTurn".into(),
+            Value::String(service_tier.clone()),
+        );
+    }
+}
+
 fn codex_error(error: impl fmt::Display) -> ChatCompletionsError {
     ChatCompletionsError::Provider(format!("Codex app-server: {error}"))
 }
@@ -937,5 +1115,45 @@ mod tests {
             restoration.spans.as_slice(),
             [crate::RestoredTranscriptSpan::OmittedDisfluency { .. }]
         ));
+    }
+
+    #[test]
+    fn model_catalog_maps_dynamic_controls_and_omits_ultra() {
+        let page: ModelListPage = serde_json::from_value(json!({
+            "data": [{
+                "model": "gpt-test",
+                "displayName": "GPT Test",
+                "description": "A test model",
+                "hidden": false,
+                "isDefault": true,
+                "defaultReasoningEffort": "medium",
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "low", "description": "Quick"},
+                    {"reasoningEffort": "ultra", "description": "Delegates"}
+                ],
+                "serviceTiers": [{"id": "priority", "name": "Fast", "description": "Faster"}]
+            }],
+            "nextCursor": null
+        }))
+        .expect("valid model catalog");
+        let model = CodexModelInfo::from(page.data.into_iter().next().unwrap());
+        assert_eq!(model.model, "gpt-test");
+        assert_eq!(model.supported_reasoning_efforts.len(), 1);
+        assert_eq!(model.supported_reasoning_efforts[0].reasoning_effort, "low");
+        assert_eq!(model.service_tiers[0].id, "priority");
+    }
+
+    #[test]
+    fn turn_overrides_use_app_server_field_names() {
+        let config = CodexAppServerConfig::new("gpt-test")
+            .unwrap()
+            .with_reasoning_effort("high")
+            .unwrap()
+            .with_service_tier("priority")
+            .unwrap();
+        let mut request = json!({"threadId": "thread"});
+        apply_turn_overrides(&mut request, &config);
+        assert_eq!(request["effort"], "high");
+        assert_eq!(request["serviceTierForTurn"], "priority");
     }
 }

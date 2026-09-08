@@ -31,3 +31,12 @@ passage, and comparison checkpoint identity so results are never silently
 reused across adapters. Manifests written before this decision default a
 missing backend field to `openai_compatible`, preserving their existing
 checkpoint compatibility.
+
+The web application discovers the authenticated account's visible models with
+`model/list` rather than maintaining a static catalog. Reasoning efforts and
+service tiers are taken from each model's advertised capabilities. A selected
+reasoning effort is sent as `effort` and participates in checkpoint identity;
+a selected speed tier is sent as `serviceTierForTurn` and remains an
+operational setting that does not invalidate validated results. Ultra effort
+is not offered because it delegates to subagents, which this text-only backend
+deliberately disables.

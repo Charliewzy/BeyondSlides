@@ -118,7 +118,8 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
              BEYOND_SLIDES_API_KEY, and BEYOND_SLIDES_MODEL; optional \
              BEYOND_SLIDES_CHAT_EXTRA_BODY contains provider-specific JSON; optional \n\
              BEYOND_SLIDES_RESTORATION_CHAT_EXTRA_BODY and \n\
-             BEYOND_SLIDES_ANNOTATION_CHAT_EXTRA_BODY override it per stage",
+             BEYOND_SLIDES_ANNOTATION_CHAT_EXTRA_BODY override it per stage; Codex also accepts \
+             BEYOND_SLIDES_CODEX_REASONING_EFFORT and BEYOND_SLIDES_CODEX_SERVICE_TIER",
         )
         .into()),
     }

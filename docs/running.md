@@ -120,8 +120,8 @@ cargo run --release -- analyze \
 ```
 
 Use the provider/thinking settings that match the restored checkpoints. The
-new mode restores raw transcript windows as before, then classifies candidate
-boundaries across the whole restored text. It does **not** run the legacy
+new mode restores raw transcript windows as before, then assigns a `0..5` cut
+cost to candidate gaps across the whole restored text. It does **not** run the legacy
 tool-calling passage preparation. New passages get inferred slide positions,
 then both comparative metrics run with pre-fetched novelty evidence. Related
 slides, summaries, notes, and connection strength are not judged in this mode;
@@ -141,10 +141,11 @@ Switching preparation modes in an existing run preserves its checkpoints but
 replaces the final `analysis.json` and report; use a separate run directory to
 keep both reports, as this experiment does.
 
-If classifications cannot produce a legal partition within 450 characters,
-the run stops rather than cutting a model-declared inseparable span. The
-classifications remain inspectable; rerunning unchanged settings will not cure
-that deterministic conflict. Do not delete validated restoration to address it.
+Rust selects a source-exact partition with a 300-character maximum. Every gap
+remains cuttable: the dynamic program first avoids the most damaging cuts, then
+minimizes passage count and balances otherwise equivalent passage lengths.
+Long punctuation-free text receives UTF-8-safe fallback candidates, so semantic
+judgments cannot make the partition infeasible.
 
 `boundary-preparation.json` contains the new mode's diagnostics. The legacy
 `window_diagnostics` and `window_projections` arrays are empty in its analysis

@@ -2,8 +2,8 @@ use std::error::Error;
 
 use beyond_slides::{
     AnnotationDiagnostics, BoundaryBatchResult, BoundaryDecision, BoundaryError,
-    BoundarySegmentationPlan, BoundaryStrength, BoundaryWindowDecision, ProposedBoundaryBatch,
-    RestoredTranscript, RestoredTranscriptSpan, SearchError, Slide, SlideDeck, SlideId, SlideScore,
+    BoundarySegmentationPlan, BoundaryWindowDecision, ProposedBoundaryBatch, RestoredTranscript,
+    RestoredTranscriptSpan, Score5, SearchError, Slide, SlideDeck, SlideId, SlideScore,
     SlideScorer, Transcript, TranscriptSegment, TranscriptSegmentId, ValidatedSources,
 };
 
@@ -17,10 +17,7 @@ fn restored(text: &str) -> RestoredTranscript {
     }
 }
 
-fn results(
-    plan: &BoundarySegmentationPlan,
-    strength: BoundaryStrength,
-) -> Vec<BoundaryBatchResult> {
+fn results(plan: &BoundarySegmentationPlan, cut_cost: u8) -> Vec<BoundaryBatchResult> {
     plan.tasks()
         .iter()
         .map(|task| {
@@ -37,7 +34,7 @@ fn results(
                         .iter()
                         .map(|id| BoundaryDecision {
                             after_atom: id.as_u64().unwrap() as usize,
-                            strength,
+                            cut_cost: Score5::try_from(cut_cost).unwrap(),
                         })
                         .collect(),
                 })
@@ -56,7 +53,7 @@ fn passage_can_cross_both_window_and_batch_edges() {
     let source = restored(&"甲。".repeat(98));
     let plan = BoundarySegmentationPlan::new(&source);
     assert_eq!(plan.tasks().len(), 2);
-    let mut decisions = results(&plan, BoundaryStrength::Continue);
+    let mut decisions = results(&plan, 5);
     // Completion order is unrelated to transcript order.
     decisions.reverse();
     let partition = plan.partition(&decisions).unwrap();
@@ -79,19 +76,71 @@ fn passage_can_cross_both_window_and_batch_edges() {
 }
 
 #[test]
-fn required_breaks_are_constraints_even_when_they_create_short_passages() {
-    let source = restored("你好。再见。");
+fn lowest_cut_cost_is_selected_when_a_cut_is_required() {
+    let source = restored(&format!(
+        "{}。{}。{}。{}。",
+        "甲".repeat(99),
+        "乙".repeat(99),
+        "丙".repeat(99),
+        "丁".repeat(99)
+    ));
     let plan = BoundarySegmentationPlan::new(&source);
-    let partition = plan
-        .partition(&results(&plan, BoundaryStrength::RequiredBreak))
-        .unwrap();
+    let mut decisions = results(&plan, 5);
+    decisions[0].decisions.windows[0].boundaries[1].cut_cost = Score5::ZERO;
+    let partition = plan.partition(&decisions).unwrap();
     let text = source.text();
+    assert_eq!(partition.len(), 2);
+    assert_eq!(
+        partition[0].clone(),
+        0.."甲".repeat(99).len() + "。".len() + "乙".repeat(99).len() + "。".len()
+    );
     assert_eq!(
         partition
             .iter()
             .map(|r| &text[r.clone()])
-            .collect::<Vec<_>>(),
-        vec!["你好。", "再见。"]
+            .collect::<String>(),
+        text
+    );
+}
+
+#[test]
+fn semantic_cut_quality_precedes_passage_count() {
+    let source = restored(&format!(
+        "{}。{}。{}。{}。{}。",
+        "甲".repeat(99),
+        "乙".repeat(99),
+        "丙".repeat(99),
+        "丁".repeat(99),
+        "戊".repeat(99)
+    ));
+    let plan = BoundarySegmentationPlan::new(&source);
+    let mut decisions = results(&plan, 5);
+    let boundaries = &mut decisions[0].decisions.windows[0].boundaries;
+    boundaries[0].cut_cost = Score5::ZERO;
+    boundaries[1].cut_cost = Score5::try_from(1).unwrap();
+    boundaries[2].cut_cost = Score5::try_from(1).unwrap();
+    boundaries[3].cut_cost = Score5::ZERO;
+    let partition = plan.partition(&decisions).unwrap();
+
+    assert_eq!(partition.len(), 3);
+}
+
+#[test]
+fn passage_count_and_balance_resolve_equal_cut_costs() {
+    let source = restored(&format!(
+        "{}。{}。{}。{}。",
+        "甲".repeat(99),
+        "乙".repeat(99),
+        "丙".repeat(99),
+        "丁".repeat(99)
+    ));
+    let plan = BoundarySegmentationPlan::new(&source);
+    let partition = plan.partition(&results(&plan, 0)).unwrap();
+
+    assert_eq!(partition.len(), 2);
+    assert_eq!(
+        source.text()[partition[0].clone()].chars().count(),
+        source.text()[partition[1].clone()].chars().count()
     );
 }
 
@@ -100,9 +149,7 @@ fn immutable_utf8_partition_preserves_spaces_emoji_and_code_paths() {
     let text = " 类型是 Option<Self::Item>，不是别的：说明在这里。\n🦀 e\u{301}。";
     let source = restored(text);
     let plan = BoundarySegmentationPlan::new(&source);
-    let parts = plan
-        .partition(&results(&plan, BoundaryStrength::PreferredBreak))
-        .unwrap();
+    let parts = plan.partition(&results(&plan, 0)).unwrap();
     assert_eq!(
         parts.iter().map(|r| &text[r.clone()]).collect::<String>(),
         text
@@ -117,7 +164,7 @@ fn immutable_utf8_partition_preserves_spaces_emoji_and_code_paths() {
 #[test]
 fn rejects_missing_duplicate_foreign_and_wrongly_numbered_checkpoint_entries() {
     let plan = BoundarySegmentationPlan::new(&restored(&"甲。".repeat(100)));
-    let valid = results(&plan, BoundaryStrength::PreferredBreak);
+    let valid = results(&plan, 0);
     for mutation in 0..7 {
         let mut invalid = valid.clone();
         match mutation {
@@ -156,17 +203,64 @@ fn rejects_missing_duplicate_foreign_and_wrongly_numbered_checkpoint_entries() {
 }
 
 #[test]
-fn impossible_semantic_constraints_fail_instead_of_silently_cutting() {
-    let plan = BoundarySegmentationPlan::new(&restored(&"甲。".repeat(230)));
-    assert!(matches!(
-        plan.partition(&results(&plan, BoundaryStrength::Continue)),
-        Err(BoundaryError::NoLegalPartition { .. })
-    ));
-    let plan = BoundarySegmentationPlan::new(&restored(&"甲".repeat(451)));
-    assert!(matches!(
-        plan.partition(&[]),
-        Err(BoundaryError::Unbreakable { .. })
-    ));
+fn costly_boundaries_still_produce_an_exact_partition_under_300_characters() {
+    let text = "甲。".repeat(230);
+    let plan = BoundarySegmentationPlan::new(&restored(&text));
+    let partition = plan.partition(&results(&plan, 5)).unwrap();
+    assert!(
+        partition
+            .iter()
+            .all(|range| text[range.clone()].chars().count() <= 300)
+    );
+    assert_eq!(
+        partition
+            .iter()
+            .map(|range| &text[range.clone()])
+            .collect::<String>(),
+        text
+    );
+}
+
+#[test]
+fn real_course_451_character_region_no_longer_stops_partitioning() {
+    let text = "并发的优点，其实它最大的优点就是有了并发以后，我们才有可能让我们程序的执行性能变得更快。比如说举个例子，一个很简单的例子，数组求和，对吧？非常简单的一个例子。这个数组求和如果是单线程去计算的话，就是我们写一个最简单的这样的程序，它只能单线程去计算，那么它只能是单核去参与。也就是说，哪怕你的计算机有双核、四核、十核，甚至服务器上，比如说有好几百核，对吧？你如果只是这样的一个程序的话，它只能用到其中的一个核，这样的话它的性能会比较低，对吧？当然它的优点就是编写起来肯定是最简单的，便于理解。那这个程序它是怎么写的？就这么两行，实际上核心的就是我定义了一个向量，是一到一千。然后我用这个 map 对它先做一个计算。当然这里面为了模拟一个相对耗时的计算，通过 thread sleep 让它睡一毫秒，让它的运行时间相对慢一点。那么算完了以后，实际上就是做了一个两倍的操作，然后我求一个和，求出来就是这个东西。那程序本身很简单，但是这样一个程序，我哪怕给你再多的计算资源，它也只能用其中的一个核去运行，对吧？";
+    assert_eq!(text.chars().count(), 451);
+    let plan = BoundarySegmentationPlan::new(&restored(text));
+    let partition = plan.partition(&results(&plan, 5)).unwrap();
+    assert_eq!(partition.len(), 2);
+    assert!(
+        partition
+            .iter()
+            .all(|range| text[range.clone()].chars().count() <= 300)
+    );
+    assert_eq!(
+        partition
+            .iter()
+            .map(|range| &text[range.clone()])
+            .collect::<String>(),
+        text
+    );
+}
+
+#[test]
+fn unpunctuated_text_receives_balanced_utf8_safe_fallback_atoms() {
+    let text = "甲".repeat(451);
+    let plan = BoundarySegmentationPlan::new(&restored(&text));
+    assert!(!plan.tasks().is_empty());
+    let partition = plan.partition(&results(&plan, 5)).unwrap();
+    assert_eq!(partition.len(), 2);
+    assert!(
+        partition
+            .iter()
+            .all(|range| text[range.clone()].chars().count() <= 300)
+    );
+    assert_eq!(
+        partition
+            .iter()
+            .map(|range| &text[range.clone()])
+            .collect::<String>(),
+        text
+    );
 }
 
 #[test]
@@ -215,6 +309,7 @@ fn assembly_preserves_coarse_provenance_and_does_not_invent_evidence() -> Result
             },
         )
     };
+    let long_sentence = format!("{}。{}。", "第一部分".repeat(38), "第二部分".repeat(38));
     let restored = RestoredTranscript {
         spans: vec![
             RestoredTranscriptSpan::OmittedDisfluency {
@@ -224,12 +319,12 @@ fn assembly_preserves_coarse_provenance_and_does_not_invent_evidence() -> Result
             RestoredTranscriptSpan::Text {
                 source_start: TranscriptSegmentId(1),
                 source_end: TranscriptSegmentId(2),
-                text: "第一个完整意思。第二个完整意思。".into(),
+                text: long_sentence,
             },
         ],
     };
     let plan = BoundarySegmentationPlan::new(&restored);
-    let decisions = results(&plan, BoundaryStrength::RequiredBreak);
+    let decisions = results(&plan, 0);
     let analysis = plan.assemble(sources()?, restored.clone(), &Scorer, &decisions)?;
     assert_eq!(analysis.passages().len(), 2);
     for passage in analysis.passages() {

@@ -71,6 +71,13 @@ _Avoid_: Owned window, annotation span
 
 ## Analysis
 
+**Cut cost**:
+An ordinal `0..5` judgment of how much semantic or grammatical damage would be
+caused by dividing restored transcript text at one candidate gap. Zero is a
+natural division and five is severely damaging; no value makes a gap
+absolutely forbidden.
+_Avoid_: Boundary strength, confidence, break score
+
 **Oral addition**:
 A lecture passage whose explanation, insight, caveat, example, advice, or
 connection provides meaningful learning value beyond the written source.

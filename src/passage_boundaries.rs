@@ -14,29 +14,19 @@ const OWNED_BOUNDARIES: usize = 48;
 const CONTEXT_ATOMS: usize = 8;
 const WINDOWS_PER_BATCH: usize = 2;
 const LONG_ATOM_CHARACTERS: usize = 180;
-const PREFERRED_MIN: usize = 80;
-const PREFERRED_MAX: usize = 280;
-const HARD_MAX: usize = 450;
+const MAX_ATOM_CHARACTERS: usize = 150;
+pub const BOUNDARY_MAX_PASSAGE_CHARACTERS: usize = 300;
 
 pub const PASSAGE_BOUNDARY_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/prompts/passage_boundaries.md"
 ));
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BoundaryStrength {
-    Continue,
-    PossibleBreak,
-    PreferredBreak,
-    RequiredBreak,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BoundaryDecision {
     pub after_atom: usize,
-    pub strength: BoundaryStrength,
+    pub cut_cost: Score5,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -122,8 +112,9 @@ impl BoundaryBatchTask {
     }
 }
 
-/// Punctuation supplies possible cuts; model judgments and global DP select them.
-/// The plan retains the exact source bytes, including spaces and omissions.
+/// Punctuation supplies ordinary cuts, while long atoms receive UTF-8-safe
+/// fallback cuts. Model costs and global DP select the least damaging exact
+/// source partition.
 pub struct BoundarySegmentationPlan {
     text: String,
     atoms: Vec<Range<usize>>,
@@ -178,7 +169,7 @@ impl BoundarySegmentationPlan {
             ));
         }
         let mut seen = vec![false; self.tasks.len()];
-        let mut strengths = vec![BoundaryStrength::Continue; self.atoms.len().saturating_sub(1)];
+        let mut cut_costs = vec![Score5::ZERO; self.atoms.len().saturating_sub(1)];
         for result in results {
             let task = self
                 .tasks
@@ -193,11 +184,11 @@ impl BoundarySegmentationPlan {
             task.validate(&result.decisions)?;
             for window in &result.decisions.windows {
                 for boundary in &window.boundaries {
-                    strengths[boundary.after_atom] = boundary.strength;
+                    cut_costs[boundary.after_atom] = boundary.cut_cost;
                 }
             }
         }
-        partition(&self.text, &self.atoms, &strengths)
+        partition(&self.text, &self.atoms, &cut_costs)
     }
 
     /// Attaches coarse source provenance and newly inferred slide positions to
@@ -272,62 +263,103 @@ fn atomize(text: &str) -> Vec<Range<usize>> {
                 vec![range]
             }
         })
+        .flat_map(|range| split_long_atom(text, range))
         .collect()
+}
+
+fn split_long_atom(text: &str, range: Range<usize>) -> Vec<Range<usize>> {
+    let character_count = text[range.clone()].chars().count();
+    if character_count <= MAX_ATOM_CHARACTERS {
+        return vec![range];
+    }
+
+    let part_count = character_count.div_ceil(MAX_ATOM_CHARACTERS);
+    let short_part = character_count / part_count;
+    let longer_parts = character_count % part_count;
+    let mut boundaries = text[range.clone()]
+        .char_indices()
+        .map(|(offset, _)| range.start + offset);
+    let mut start = boundaries.next().expect("a long atom is non-empty");
+    let mut pieces = Vec::with_capacity(part_count);
+    for part in 0..part_count {
+        let length = short_part + usize::from(part < longer_parts);
+        let end = if part + 1 == part_count {
+            range.end
+        } else {
+            boundaries
+                .nth(length - 1)
+                .expect("the atom has enough character boundaries")
+        };
+        pieces.push(start..end);
+        start = end;
+    }
+    pieces
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PartitionCost {
+    /// Counts are ordered from the most damaging cut cost (5) to 1. Cost-zero
+    /// cuts do not need a bucket because passage count resolves their ties.
+    damaging_cuts: [usize; 5],
+    passage_count: usize,
+    squared_lengths: u64,
+}
+
+impl PartitionCost {
+    const ZERO: Self = Self {
+        damaging_cuts: [0; 5],
+        passage_count: 0,
+        squared_lengths: 0,
+    };
+
+    fn append_passage(mut self, characters: usize, cut_cost: Option<Score5>) -> Self {
+        if let Some(cost) = cut_cost
+            && cost.get() > 0
+        {
+            self.damaging_cuts[(5 - cost.get()) as usize] += 1;
+        }
+        self.passage_count += 1;
+        self.squared_lengths = self
+            .squared_lengths
+            .saturating_add((characters as u64).saturating_pow(2));
+        self
+    }
+
+    fn is_better_than(self, other: Self) -> bool {
+        self.damaging_cuts
+            .cmp(&other.damaging_cuts)
+            .then_with(|| self.passage_count.cmp(&other.passage_count))
+            .then_with(|| self.squared_lengths.cmp(&other.squared_lengths))
+            .is_lt()
+    }
 }
 
 fn partition(
     text: &str,
     atoms: &[Range<usize>],
-    strengths: &[BoundaryStrength],
+    cut_costs: &[Score5],
 ) -> Result<Vec<Range<usize>>, BoundaryError> {
     let mut lengths = vec![0];
-    for (index, atom) in atoms.iter().enumerate() {
+    for atom in atoms {
         let count = text[atom.clone()].chars().count();
-        if count > HARD_MAX {
-            return Err(BoundaryError::Unbreakable {
-                start_atom: index,
-                characters: count,
-            });
-        }
         lengths.push(lengths.last().unwrap() + count);
     }
-    let mut best = vec![f64::NEG_INFINITY; atoms.len() + 1];
+    let mut best = vec![None; atoms.len() + 1];
     let mut previous = vec![None; atoms.len() + 1];
-    best[0] = 0.0;
+    best[0] = Some(PartitionCost::ZERO);
     for end in 1..=atoms.len() {
-        if end < atoms.len() && strengths[end - 1] == BoundaryStrength::Continue {
-            continue;
-        }
         for start in (0..end).rev() {
-            // A required break cannot be crossed, including by a shorter or
-            // higher-scoring alternative. It is not merely a reward.
-            if start + 1 < end && strengths[start] == BoundaryStrength::RequiredBreak {
-                break;
-            }
             let length = lengths[end] - lengths[start];
-            if length > HARD_MAX {
+            if length > BOUNDARY_MAX_PASSAGE_CHARACTERS {
                 break;
             }
-            let length_penalty = if length < PREFERRED_MIN {
-                (PREFERRED_MIN - length) as f64 / 8.0
-            } else if length > PREFERRED_MAX {
-                (length - PREFERRED_MAX) as f64 / 12.0
-            } else {
-                0.0
+            let Some(prefix) = best[start] else {
+                continue;
             };
-            let reward = if end == atoms.len() {
-                0.0
-            } else {
-                match strengths[end - 1] {
-                    BoundaryStrength::Continue => unreachable!("continue endpoints were skipped"),
-                    BoundaryStrength::PossibleBreak => -2.0,
-                    BoundaryStrength::PreferredBreak => 4.0,
-                    BoundaryStrength::RequiredBreak => 16.0,
-                }
-            };
-            let score = best[start] - length_penalty + reward;
-            if score > best[end] {
-                best[end] = score;
+            let candidate =
+                prefix.append_passage(length, (end < atoms.len()).then(|| cut_costs[end - 1]));
+            if best[end].is_none_or(|current| candidate.is_better_than(current)) {
+                best[end] = Some(candidate);
                 previous[end] = Some(start);
             }
         }
@@ -336,7 +368,7 @@ fn partition(
     let mut end = atoms.len();
     while end > 0 {
         let start = previous[end].ok_or(BoundaryError::NoLegalPartition {
-            max_characters: HARD_MAX,
+            max_characters: BOUNDARY_MAX_PASSAGE_CHARACTERS,
         })?;
         ranges.push(atoms[start].start..atoms[end - 1].end);
         end = start;
@@ -348,13 +380,7 @@ fn partition(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BoundaryError {
     InvalidResponse(String),
-    Unbreakable {
-        start_atom: usize,
-        characters: usize,
-    },
-    NoLegalPartition {
-        max_characters: usize,
-    },
+    NoLegalPartition { max_characters: usize },
     SourceChanged,
 }
 
@@ -362,16 +388,9 @@ impl fmt::Display for BoundaryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidResponse(message) => write!(f, "invalid boundary response: {message}"),
-            Self::Unbreakable {
-                start_atom,
-                characters,
-            } => write!(
-                f,
-                "atom {start_atom} has {characters} characters and cannot fit the passage limit"
-            ),
             Self::NoLegalPartition { max_characters } => write!(
                 f,
-                "no semantic partition fits {max_characters} characters without cutting a continue boundary; classifications are preserved for inspection"
+                "no exact source partition fits the {max_characters}-character passage limit"
             ),
             Self::SourceChanged => f.write_str("boundary plan does not match the restored source"),
         }

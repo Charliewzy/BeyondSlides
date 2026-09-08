@@ -61,9 +61,9 @@ pub use orchestration::{
     LectureAnalysisSession,
 };
 pub use passage_boundaries::{
-    BoundaryBatchResult, BoundaryBatchTask, BoundaryDecision, BoundaryError,
-    BoundarySegmentationPlan, BoundaryStrength, BoundaryWindowDecision,
-    PASSAGE_BOUNDARY_INSTRUCTIONS, ProposedBoundaryBatch,
+    BOUNDARY_MAX_PASSAGE_CHARACTERS, BoundaryBatchResult, BoundaryBatchTask, BoundaryDecision,
+    BoundaryError, BoundarySegmentationPlan, BoundaryWindowDecision, PASSAGE_BOUNDARY_INSTRUCTIONS,
+    ProposedBoundaryBatch,
 };
 pub use passage_projection::{
     PassageProjection, PassageProjectionDiagnostics, PassageProjectionError,

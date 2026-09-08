@@ -30,7 +30,8 @@ async fn boundary_classification_repairs_unknown_ids_and_traces_without_tools()
     };
     let plan = beyond_slides::BoundarySegmentationPlan::new(&restored);
     let response = |id| {
-        json!({"windows":[{"window_index":0,"boundaries":[{"after_atom":id,"strength":"continue"}]}]}).to_string()
+        json!({"windows":[{"window_index":0,"boundaries":[{"after_atom":id,"cut_cost":5}]}]})
+            .to_string()
     };
     let api = mock_api(vec![
         final_response("bad", response(99)),

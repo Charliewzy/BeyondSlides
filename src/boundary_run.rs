@@ -8,9 +8,9 @@ use std::{
 
 use beyond_slides::processing::{BatchRunError, run_bounded};
 use beyond_slides::{
-    BoundaryBatchResult, BoundarySegmentationPlan, ChatCompletionsClient,
-    PASSAGE_BOUNDARY_INSTRUCTIONS, RestoredTranscript, SlideScorer, ValidatedRestoredAnalysis,
-    ValidatedSources,
+    BOUNDARY_MAX_PASSAGE_CHARACTERS, BoundaryBatchResult, BoundarySegmentationPlan,
+    ChatCompletionsClient, PASSAGE_BOUNDARY_INSTRUCTIONS, RestoredTranscript, SlideScorer,
+    ValidatedRestoredAnalysis, ValidatedSources,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
@@ -205,6 +205,10 @@ pub(crate) async fn prepare(
         "classification_seconds_this_invocation": classification_seconds,
         "preparation_seconds_this_invocation": started.elapsed().as_secs_f64(),
         "passage_count": lengths.len(), "passage_character_counts": lengths,
+        "partition_policy": {
+            "optimization": "lexicographic_cut_cost_then_count_then_balance",
+            "maximum_passage_characters": BOUNDARY_MAX_PASSAGE_CHARACTERS,
+        },
         "exact_source_coverage": true,
         "batch_diagnostics": results.iter().map(|r| &r.diagnostics).collect::<Vec<_>>(),
         "unassessed_fields": ["connection_strength", "related_slides", "summary", "comparison_note"],

@@ -1104,7 +1104,7 @@ impl ConversationWorkflow for BoundaryWorkflow<'_> {
 
     fn repair_instruction(&self, error: &ChatCompletionsError) -> String {
         format!(
-            "上一份边界 JSON 无效：{error}。请完整回答原来的 windows，每个 owned boundary 恰好出现一次，保留原始编号，只返回指定 JSON。"
+            "上一份切分代价 JSON 无效：{error}。请完整回答原来的 windows，每个 owned boundary 恰好出现一次，保留原始编号，并为每项提供 0 到 5 的 cut_cost；只返回指定 JSON。"
         )
     }
 }

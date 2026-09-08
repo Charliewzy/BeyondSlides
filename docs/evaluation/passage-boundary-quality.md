@@ -79,7 +79,7 @@ also stores its exact prompt, task inputs, source hash, audit, and partition.
 The failed trial's wall time was not saved by the initial harness; the harness
 now records timing before attempting the DP so this failure does not recur.
 
-## Integration decision
+## Superseded integration decision
 
 Integrate the no-colon candidate method as an opt-in passage-preparation mode,
 retaining the old window-owned mode for comparison. Requests classify gaps;
@@ -87,6 +87,11 @@ Rust selects a global partition, so request boundaries cannot force cuts.
 Keep the semantic `continue` constraint and enforce `required_break` as a hard
 constraint rather than merely rewarding it. Infeasible constraints must be
 reported, with classifications preserved. Do not silently relax them.
+
+This categorical policy records the experiment evaluated below. ADR-0006 now
+supersedes it with ordinal cut costs and an always-feasible 300-character
+partition after a 451-character real-course region exposed the categorical
+policy's deterministic failure mode.
 
 This mode prepares passages directly from restoration, without running the old
 tool-calling preparation first. It infers slide positions for the new passages;

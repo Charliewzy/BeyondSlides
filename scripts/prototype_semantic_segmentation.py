@@ -36,7 +36,7 @@ MAX_PASSAGE_CHARACTERS = 500
 SYSTEM_PROMPT = """\
 你负责把已经恢复为可读文字的大学课堂讲稿划分成语义完整的 LecturePassage。
 
-这一步只决定语义边界。不得评价或猜测 importance、novelty、connection strength，
+这一步只决定语义边界。不得评价或猜测 importance 或 novelty，
 也不得根据内容看起来是否重要来决定段落长短。
 
 每个输入 window 包含 left_context、owned_text 和 right_context。必须遵守：

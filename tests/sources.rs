@@ -56,7 +56,6 @@ fn validated_sources_can_be_completed_with_lecture_passages() {
             start: TranscriptSegmentId(0),
             end: TranscriptSegmentId(0),
             novelty: score(3),
-            connection_strength: score(0),
             importance: score(4),
             related_slides: vec![SlideId(0)],
             summary: None,

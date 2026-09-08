@@ -2018,7 +2018,6 @@ mod tests {
             "start": 0,
             "end": 0,
             "novelty": 1,
-            "connection_strength": 2,
             "importance": 3,
             "related_slides": []
         }]

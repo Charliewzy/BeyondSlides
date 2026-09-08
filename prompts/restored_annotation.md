@@ -13,7 +13,4 @@
 - summary 是可选的用户可读摘要；comparison_note 是可选的内部证据记录。没有有用内容时可以省略二者。
 - 本阶段不得评价或输出 novelty 或 importance。程序会在完整讲稿划分完成后，通过整堂课范围的相对比较产生它们。
 
-评分标准：
-- connection_strength：0=无有意义联系；1=弱或偶然；2=相关但学习价值有限；3=清晰且有用；4=明显增进理解；5=跨概念或主题的重要综合。
-
-只返回匹配 ProposedTranscriptWindowAnalysis 的 JSON，不要添加 Markdown 或解释。顶层只有 passages 数组。每个 passage 必须包含 text、connection_strength、related_slides；summary 和 comparison_note 可选。connection_strength 必须是 0 到 5 的整数。
+只返回匹配 ProposedTranscriptWindowAnalysis 的 JSON，不要添加 Markdown 或解释。顶层只有 passages 数组。每个 passage 必须包含 text、related_slides；summary 和 comparison_note 可选。

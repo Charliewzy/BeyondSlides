@@ -39,34 +39,6 @@ fn untimed_transcript_renders_without_inventing_playback_times() -> Result<(), B
 }
 
 #[test]
-fn unassessed_connection_strength_is_distinct_from_a_measured_zero() -> Result<(), Box<dyn Error>> {
-    let original = analysis()?;
-    let mut passages = original.passages().to_vec();
-    let mut json = serde_json::to_value(&passages[0])?;
-    json["connection_strength"] = serde_json::json!(0);
-    let measured: beyond_slides::RestoredLecturePassage = serde_json::from_value(json.clone())?;
-    assert_eq!(
-        measured.connection_strength,
-        Some(beyond_slides::Score5::ZERO)
-    );
-    json["connection_strength"] = serde_json::Value::Null;
-    let unassessed: beyond_slides::RestoredLecturePassage = serde_json::from_value(json)?;
-    assert!(unassessed.connection_strength.is_none());
-    passages[0].connection_strength = None;
-    passages[1].connection_strength = Some(beyond_slides::Score5::ZERO);
-    let analysis = beyond_slides::ValidatedRestoredAnalysis::new(
-        ValidatedSources::new(original.transcript().clone(), original.slide_deck().clone())?,
-        original.restored_transcript().clone(),
-        passages,
-    )?;
-    let report = render_continuous_report(&analysis);
-    assert!(report.contains("data-connection=\"\""));
-    assert!(report.contains("data-connection=\"0\""));
-    assert!(report.contains("未评估"));
-    Ok(())
-}
-
-#[test]
 fn report_renders_authoritative_passages_in_continuous_order() -> Result<(), Box<dyn Error>> {
     let analysis = analysis()?;
     let report = render_continuous_report(&analysis);
@@ -337,12 +309,10 @@ fn analysis() -> Result<beyond_slides::ValidatedRestoredAnalysis, Box<dyn Error>
         "passages": [
             {
                 "text": "<所有权 & 资源管理>。",
-                "connection_strength": 2,
                 "related_slides": [0]
             },
             {
                 "text": "借用让函数临时访问数据。",
-                "connection_strength": 2,
                 "related_slides": [1]
             }
         ]

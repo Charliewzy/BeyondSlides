@@ -80,7 +80,6 @@ pub struct RestoredAnnotationMessage {
 #[serde(deny_unknown_fields)]
 pub struct ProposedLecturePassage {
     pub text: String,
-    pub connection_strength: Score5,
     pub related_slides: Vec<SlideId>,
     pub summary: Option<String>,
     pub comparison_note: Option<String>,
@@ -286,7 +285,6 @@ pub fn project_window_analysis(
             source_end,
             slide_position: task.slide_position,
             novelty: Score5::ZERO,
-            connection_strength: Some(proposed.connection_strength),
             importance: Score5::ZERO,
             comparative_novelty: None,
             comparative_importance: None,

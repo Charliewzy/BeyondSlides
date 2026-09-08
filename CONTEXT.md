@@ -112,11 +112,6 @@ written source. Final novelty is ranked relative to other passages in the same
 lecture from slide-grounded comparisons; it is not calibrated across lectures.
 _Avoid_: Uniqueness
 
-**Connection strength**:
-The degree to which a lecture passage makes a useful conceptual connection to
-content elsewhere in the written source.
-_Avoid_: Relatedness
-
 **Importance**:
 The learning value of a lecture passage for understanding or applying the
 course. Final importance is ranked relative to other passages in the same

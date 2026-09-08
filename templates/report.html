@@ -28,7 +28,6 @@
         <ul class="scores" aria-label="讲稿段落评分">
           <li>重要性 <strong>{{ passage.importance }}</strong></li>
           <li>新颖度 <strong>{{ passage.novelty }}</strong></li>
-          <li>连接强度 <strong>{{ passage.connection_strength }}</strong></li>
         </ul>
         <blockquote>{{ passage.transcript }}</blockquote>
         <div class="related-slides">
@@ -53,7 +52,6 @@
           <ul class="scores" aria-label="讲稿段落评分">
             <li>重要性 <strong>{{ passage.importance }}</strong></li>
             <li>新颖度 <strong>{{ passage.novelty }}</strong></li>
-            <li>连接强度 <strong>{{ passage.connection_strength }}</strong></li>
           </ul>
         </header>
 {% for segment in passage.segments %}

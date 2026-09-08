@@ -224,7 +224,6 @@ impl BoundarySegmentationPlan {
                     slide_position,
                     novelty: Score5::ZERO,
                     importance: Score5::ZERO,
-                    connection_strength: None,
                     comparative_novelty: None,
                     comparative_importance: None,
                     related_slides: Vec::new(),

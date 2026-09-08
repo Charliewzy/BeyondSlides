@@ -173,7 +173,7 @@ fn saved_restored_analysis_can_be_rendered_and_evaluated_without_a_provider() {
         &analysis_path,
         r#"{
             "restored_transcript":{"spans":[{"kind":"text","source_start":0,"source_end":0,"text":"可读讲稿。"}]},
-            "passages":[{"text":"可读讲稿。","source_start":0,"source_end":0,"slide_position":0,"novelty":3,"connection_strength":2,"importance":4,"related_slides":[0],"summary":null,"comparison_note":null}],
+            "passages":[{"text":"可读讲稿。","source_start":0,"source_end":0,"slide_position":0,"novelty":3,"importance":4,"related_slides":[0],"summary":null,"comparison_note":null}],
             "window_diagnostics":[{"provider_retries":0,"tool_rounds":0,"final_answer_repairs":1,"prompt_tokens":10,"completion_tokens":5,"accepted_json_fence":false}],
             "window_projections":[{"changed_characters":1,"compared_characters":20}]
         }"#,

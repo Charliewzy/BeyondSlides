@@ -309,8 +309,8 @@ fn valid_analysis_parts() -> (Transcript, SlideDeck, LecturePassages) {
     };
     let passages = LecturePassages {
         passages: vec![
-            passage(0, 0, 0, 0, 1, vec![0], None),
-            passage(1, 2, 3, 2, 5, vec![0, 1], Some("A useful oral addition")),
+            passage(0, 0, 0, 1, vec![0], None),
+            passage(1, 2, 3, 5, vec![0, 1], Some("A useful oral addition")),
         ],
     };
 
@@ -326,12 +326,10 @@ fn segment(id: u32, start_ms: u64, end_ms: u64, text: &str) -> TranscriptSegment
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn passage(
     start: u32,
     end: u32,
     novelty: u8,
-    connection_strength: u8,
     importance: u8,
     related_slides: Vec<u32>,
     summary: Option<&str>,
@@ -340,7 +338,6 @@ fn passage(
         start: TranscriptSegmentId(start),
         end: TranscriptSegmentId(end),
         novelty: score(novelty),
-        connection_strength: score(connection_strength),
         importance: score(importance),
         related_slides: related_slides.into_iter().map(SlideId).collect(),
         summary: summary.map(str::to_owned),

@@ -41,8 +41,6 @@ SYSTEM_PROMPT = """\
 这一步不得改变 passage 边界或文字，也不得评价 importance。对每个 passage 独立输出：
 - novelty：0=候选幻灯片直接陈述；1=基本是改述；2=有意义但大体可推知的展开；
   3=大量额外解释或细节；4=幻灯片基本没有；5=相对幻灯片真正新颖且不明显。
-- connection_strength：0=无有意义联系；1=弱或偶然；2=相关但学习价值有限；
-  3=清晰且有用；4=明显增进理解；5=跨概念或主题的重要综合。
 - related_slides：只列出真正支持判断的零基 SlideId，不得重复。
 - comparison_note：一句简洁的内部证据记录，说明哪些内容在幻灯片中出现、哪些是口头增加。
 
@@ -57,7 +55,6 @@ candidate_slide_ids 来自该位置附近与词法检索；slides 给出本批�
     {
       "passage_id": 0,
       "novelty": 3,
-      "connection_strength": 2,
       "related_slides": [4],
       "comparison_note": "幻灯片给出定义；讲者补充了适用限制。"
     }
@@ -221,7 +218,6 @@ def validate_response(
     required = {
         "passage_id",
         "novelty",
-        "connection_strength",
         "related_slides",
         "comparison_note",
     }
@@ -235,10 +231,9 @@ def validate_response(
             raise ValueError(f"unknown passage_id {passage_id!r}")
         if passage_id in actual:
             raise ValueError(f"passage {passage_id} was returned more than once")
-        for field in ("novelty", "connection_strength"):
-            score = annotation[field]
-            if not isinstance(score, int) or not 0 <= score <= 5:
-                raise ValueError(f"passage {passage_id} has invalid {field}")
+        score = annotation["novelty"]
+        if not isinstance(score, int) or not 0 <= score <= 5:
+            raise ValueError(f"passage {passage_id} has invalid novelty")
         related_slides = annotation["related_slides"]
         if not isinstance(related_slides, list) or not all(
             isinstance(slide_id, int) for slide_id in related_slides
@@ -445,13 +440,6 @@ def aggregate(
             "novelty_distribution": dict(
                 sorted(
                     Counter(annotation["novelty"] for annotation in annotations).items()
-                )
-            ),
-            "connection_strength_distribution": dict(
-                sorted(
-                    Counter(
-                        annotation["connection_strength"] for annotation in annotations
-                    ).items()
                 )
             ),
             "provider_calls": sum(item["provider_calls"] for item in diagnostics),

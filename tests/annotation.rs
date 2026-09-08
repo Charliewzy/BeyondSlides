@@ -19,7 +19,6 @@ fn transcript_window_analyses_become_one_validated_analysis() -> Result<(), Box<
               "start": 0,
               "end": 1,
               "novelty": 0,
-              "connection_strength": 0,
               "importance": 2,
               "related_slides": [0]
             }]
@@ -30,7 +29,6 @@ fn transcript_window_analyses_become_one_validated_analysis() -> Result<(), Box<
                 "start": 2,
                 "end": 2,
                 "novelty": 3,
-                "connection_strength": 2,
                 "importance": 5,
                 "related_slides": [1],
                 "summary": "口头补充"
@@ -39,7 +37,6 @@ fn transcript_window_analyses_become_one_validated_analysis() -> Result<(), Box<
                 "start": 3,
                 "end": 3,
                 "novelty": 1,
-                "connection_strength": 0,
                 "importance": 2,
                 "related_slides": []
               }
@@ -76,7 +73,6 @@ fn transcript_window_analysis_cannot_claim_context_segments() -> Result<(), Box<
               "start": 0,
               "end": 1,
               "novelty": 0,
-              "connection_strength": 0,
               "importance": 2,
               "related_slides": [0]
             }]
@@ -86,7 +82,6 @@ fn transcript_window_analysis_cannot_claim_context_segments() -> Result<(), Box<
               "start": 1,
               "end": 3,
               "novelty": 3,
-              "connection_strength": 2,
               "importance": 5,
               "related_slides": [1]
             }]
@@ -125,7 +120,6 @@ fn transcript_window_analysis_rejects_a_reversed_passage() -> Result<(), Box<dyn
               "start": 0,
               "end": 1,
               "novelty": 0,
-              "connection_strength": 0,
               "importance": 2,
               "related_slides": [0]
             }]
@@ -135,7 +129,6 @@ fn transcript_window_analysis_rejects_a_reversed_passage() -> Result<(), Box<dyn
               "start": 3,
               "end": 2,
               "novelty": 3,
-              "connection_strength": 2,
               "importance": 5,
               "related_slides": [1]
             }]
@@ -172,7 +165,6 @@ fn transcript_window_analysis_cannot_leave_an_owned_segment_uncovered() -> Resul
               "start": 0,
               "end": 1,
               "novelty": 0,
-              "connection_strength": 0,
               "importance": 2,
               "related_slides": [0]
             }]
@@ -182,7 +174,6 @@ fn transcript_window_analysis_cannot_leave_an_owned_segment_uncovered() -> Resul
               "start": 3,
               "end": 3,
               "novelty": 3,
-              "connection_strength": 2,
               "importance": 5,
               "related_slides": [1]
             }]
@@ -219,7 +210,6 @@ fn transcript_window_analysis_cannot_cover_an_owned_segment_twice() -> Result<()
               "start": 0,
               "end": 1,
               "novelty": 0,
-              "connection_strength": 0,
               "importance": 2,
               "related_slides": [0]
             }]
@@ -230,7 +220,6 @@ fn transcript_window_analysis_cannot_cover_an_owned_segment_twice() -> Result<()
                 "start": 2,
                 "end": 3,
                 "novelty": 3,
-                "connection_strength": 2,
                 "importance": 5,
                 "related_slides": [1]
               },
@@ -238,7 +227,6 @@ fn transcript_window_analysis_cannot_cover_an_owned_segment_twice() -> Result<()
                 "start": 3,
                 "end": 3,
                 "novelty": 1,
-                "connection_strength": 0,
                 "importance": 1,
                 "related_slides": []
               }
@@ -276,7 +264,6 @@ fn transcript_window_analysis_must_reach_the_end_of_its_owned_region() -> Result
               "start": 0,
               "end": 1,
               "novelty": 0,
-              "connection_strength": 0,
               "importance": 2,
               "related_slides": [0]
             }]
@@ -286,7 +273,6 @@ fn transcript_window_analysis_must_reach_the_end_of_its_owned_region() -> Result
               "start": 2,
               "end": 2,
               "novelty": 3,
-              "connection_strength": 2,
               "importance": 5,
               "related_slides": [1]
             }]
@@ -321,7 +307,6 @@ fn every_transcript_window_requires_exactly_one_analysis() -> Result<(), Box<dyn
             "start": 0,
             "end": 1,
             "novelty": 0,
-            "connection_strength": 0,
             "importance": 2,
             "related_slides": [0]
           }]

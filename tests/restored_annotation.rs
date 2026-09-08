@@ -44,7 +44,6 @@ fn passage_preparation_rejects_absolute_importance_and_novelty_fields() {
     let error = serde_json::from_value::<ProposedTranscriptWindowAnalysis>(serde_json::json!({
         "passages": [{
             "text": "所有权负责资源管理。",
-            "connection_strength": 2,
             "related_slides": [0],
             "importance": 4,
             "novelty": 3
@@ -66,12 +65,10 @@ fn exact_passage_boundaries_can_split_a_coarsely_sourced_restored_span()
         "passages": [
             {
                 "text": "所有权负责资源管理。",
-                "connection_strength": 2,
                 "related_slides": [0]
             },
             {
                 "text": "借用让函数临时访问数据。",
-                "connection_strength": 2,
                 "related_slides": [1]
             }
         ]
@@ -116,7 +113,6 @@ fn small_copying_errors_are_replaced_with_authoritative_restored_text() -> Resul
     let proposed: ProposedTranscriptWindowAnalysis = serde_json::from_value(serde_json::json!({
         "passages": [{
             "text": "所有权负责资源管理。借用让函数临时访问据。",
-            "connection_strength": 2,
             "related_slides": [1]
         }]
     }))?;
@@ -137,7 +133,6 @@ fn related_slide_evidence_is_validated_after_text_projection() -> Result<(), Box
     let proposed: ProposedTranscriptWindowAnalysis = serde_json::from_value(serde_json::json!({
         "passages": [{
             "text": "所有权负责资源管理。借用让函数临时访问数据。",
-            "connection_strength": 2,
             "related_slides": [1, 1]
         }]
     }))?;
@@ -164,7 +159,6 @@ fn persisted_window_passages_cannot_change_the_inferred_slide_position()
     let proposed: ProposedTranscriptWindowAnalysis = serde_json::from_value(serde_json::json!({
         "passages": [{
             "text": "所有权负责资源管理。借用让函数临时访问数据。",
-            "connection_strength": 2,
             "related_slides": [1]
         }]
     }))?;
@@ -210,7 +204,6 @@ fn projected_window_analyses_assemble_into_one_readable_lecture() -> Result<(), 
             serde_json::from_value(serde_json::json!({
                 "passages": [{
                     "text": task.window().owned_text(),
-                    "connection_strength": 2,
                     "related_slides": [task.slide_position()]
                 }]
             }))?;

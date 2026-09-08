@@ -132,7 +132,6 @@ fn passage(text: &str) -> RestoredLecturePassage {
         source_end: TranscriptSegmentId(0),
         slide_position: SlideId(0),
         novelty: score(0),
-        connection_strength: Some(score(0)),
         importance: score(0),
         comparative_novelty: None,
         comparative_importance: None,

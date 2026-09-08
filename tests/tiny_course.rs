@@ -29,7 +29,6 @@ fn score_outside_zero_to_five_is_rejected_at_the_json_seam() {
             "start": 0,
             "end": 1,
             "novelty": 6,
-            "connection_strength": 0,
             "importance": 0,
             "related_slides": [],
             "comparison_note": "Invalid only because novelty exceeds five."

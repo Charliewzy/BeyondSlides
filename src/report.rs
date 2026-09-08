@@ -30,7 +30,6 @@ struct PassageView<'a> {
     title: String,
     importance: u8,
     novelty: u8,
-    connection_strength: u8,
     transcript: String,
     segments: Vec<&'a str>,
     related_slides: Vec<SlideView<'a>>,
@@ -70,7 +69,6 @@ impl<'a> PassageView<'a> {
             title,
             importance: passage.importance.get(),
             novelty: passage.novelty.get(),
-            connection_strength: passage.connection_strength.get(),
             transcript,
             segments: segments
                 .iter()

@@ -130,9 +130,8 @@ new mode restores raw transcript windows as before, then assigns a `0..5` cut
 cost to candidate gaps across the whole restored text. It does **not** run the legacy
 tool-calling passage preparation. New passages get inferred slide positions,
 then both comparative metrics run with pre-fetched novelty evidence. Related
-slides, summaries, notes, and connection strength are not judged in this mode;
-their fields are empty or `null`, not transferred from old passages. A `null`
-connection strength displays as “未评估”, not as a measured zero.
+slides, summaries, and notes are not judged in this mode; their fields are
+empty, not transferred from old passages.
 
 `windows` remains the default. Select it explicitly to return to the original
 mode.

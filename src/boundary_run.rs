@@ -194,7 +194,7 @@ pub(crate) async fn prepare(
         },
         "exact_source_coverage": true,
         "batch_diagnostics": results.iter().map(|r| &r.diagnostics).collect::<Vec<_>>(),
-        "unassessed_fields": ["connection_strength", "related_slides", "summary", "comparison_note"],
+        "unassessed_fields": ["related_slides", "summary", "comparison_note"],
     });
     write_json_atomically(
         &run_directory.join("boundary-preparation.json"),

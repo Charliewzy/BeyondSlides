@@ -57,7 +57,6 @@ fn annotation_message_keeps_instructions_separate_from_structured_input()
     assert!(message.instructions.contains("inspect_slide"));
     assert!(message.instructions.contains("search_slides"));
     assert!(message.instructions.contains("novelty"));
-    assert!(message.instructions.contains("connection_strength"));
     assert!(message.instructions.contains("importance"));
     assert!(message.instructions.contains("related_slides"));
     assert!(message.instructions.contains("summary 是可选"));

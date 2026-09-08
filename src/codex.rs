@@ -1122,7 +1122,7 @@ fn annotation_schema() -> Value {
 }
 
 fn restored_annotation_schema() -> Value {
-    json!({"type":"object","properties":{"passages":{"type":"array","items":{"type":"object","properties":{"text":{"type":"string"},"connection_strength":{"type":"integer","minimum":0,"maximum":5},"related_slides":{"type":"array","items":{"type":"integer","minimum":0}},"summary":{"type":["string","null"]},"comparison_note":{"type":["string","null"]}},"required":["text","connection_strength","related_slides","summary","comparison_note"],"additionalProperties":false}}},"required":["passages"],"additionalProperties":false})
+    json!({"type":"object","properties":{"passages":{"type":"array","items":{"type":"object","properties":{"text":{"type":"string"},"related_slides":{"type":"array","items":{"type":"integer","minimum":0}},"summary":{"type":["string","null"]},"comparison_note":{"type":["string","null"]}},"required":["text","related_slides","summary","comparison_note"],"additionalProperties":false}}},"required":["passages"],"additionalProperties":false})
 }
 
 fn restoration_schema() -> Value {

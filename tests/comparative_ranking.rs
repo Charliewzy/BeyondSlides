@@ -244,7 +244,6 @@ fn analysis() -> Result<ValidatedRestoredAnalysis, Box<dyn Error>> {
             source_end: TranscriptSegmentId(index as u32),
             slide_position: SlideId((index / 2) as u32),
             novelty: Score5::ZERO,
-            connection_strength: Some(Score5::try_from(2).expect("valid score")),
             importance: Score5::ZERO,
             comparative_novelty: None,
             comparative_importance: None,

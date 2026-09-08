@@ -20,10 +20,7 @@ Importance and novelty are ranked relative to other passages in the same
 lecture through repeated best--worst comparisons. Their stored comparison
 counts and percentiles remain uncertain semantic judgments, not objective
 facts or cross-lecture measurements. Reports derive `1..5` display levels from
-those percentiles. Connection strength is a per-passage `0..5` judgment in the
-legacy window-owned preparation mode. Boundary-first preparation does not
-assess it and stores `None`; the report displays “未评估”, distinct from a
-measured zero.
+those percentiles.
 Optional comparison notes support debugging and evaluation but are neither
 required nor shown to a learner by default.
 
@@ -157,7 +154,6 @@ struct RestoredLecturePassage {
     source_end: TranscriptSegmentId,
     slide_position: SlideId,
     novelty: Score5,
-    connection_strength: Option<Score5>,
     importance: Score5,
     comparative_novelty: Option<ComparativeScore>,
     comparative_importance: Option<ComparativeScore>,
@@ -173,9 +169,8 @@ order. Their `text` is authoritative restored text, never trusted model copy.
 lecture-wide comparative scores. Comparative evidence stores comparison count,
 most and least selections, and percentile in basis points. The optional form
 keeps older preliminary artifacts readable; a newly completed analysis has
-both comparative scores for every passage. Connection strength remains a
-validated inclusive `0..5` value when assessed, otherwise `None`. Related slide IDs must exist and contain no
-duplicates. Summary and comparison note remain optional.
+both comparative scores for every passage. Related slide IDs must exist and
+contain no duplicates. Summary and comparison note remain optional.
 
 ## 5. Pipeline
 
@@ -367,8 +362,8 @@ source bytes and coarse supporting ranges are validated before ranking.
 This path does not run the old tool-calling preparation first. It infers slide
 positions on the resulting passages; novelty obtains its own retrieval and
 slide-neighborhood evidence. Optional summaries/notes and related-slide
-judgments are empty, connection strength is unassessed (`None`),
-and importance/novelty are assigned only by subsequent comparative ranking.
+judgments are empty, and importance/novelty are assigned only by subsequent
+comparative ranking.
 
 `boundary_run.rs` persists validated model classifications in
 `boundaries/<identity-hash>/batch-NNNN.json`. The identity includes exact task
@@ -641,8 +636,7 @@ Real-course evaluation separates uncertain components:
 - labeled slide retrieval recall;
 - restoration evidence review;
 - exact/fuzzy/rejected passage-partition rates;
-- human review of comparative novelty and importance stability, and of
-  connection strength;
+- human review of comparative novelty and importance stability;
 - whether continuous score typography helps a learner locate useful oral
   additions without destroying lecture context.
 

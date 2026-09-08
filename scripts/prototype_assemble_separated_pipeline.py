@@ -124,7 +124,6 @@ def main() -> int:
                 "source_end": source_end,
                 "slide_position": slide_position,
                 "novelty": novelty_result["novelty"],
-                "connection_strength": novelty_result["connection_strength"],
                 "importance": display_importance,
                 "related_slides": novelty_result["related_slides"],
                 "summary": None,

@@ -180,8 +180,7 @@
     const novelty = noveltyPercentile
       ? `${passage.dataset.novelty}（全讲 ${noveltyPercentile}%）`
       : passage.dataset.novelty;
-    const connection = passage.dataset.connection === "" ? "未评估" : passage.dataset.connection;
-    details.textContent = `对齐页 ${passage.dataset.slideNumber} · 重要性 ${importance} · 新颖度 ${novelty} · 连接强度 ${connection}`;
+    details.textContent = `对齐页 ${passage.dataset.slideNumber} · 重要性 ${importance} · 新颖度 ${novelty}`;
   }
 
   function setAudioCurrentPassage(passage, forceScroll) {

@@ -40,7 +40,7 @@ class Model(BaseHTTPRequestHandler):
         elif "comparisons" in task:
             answer = {"comparisons": [dict(comparison_id=c["comparison_id"], most="A", least=list(c["candidates"])[-1]) for c in task["comparisons"]]}
         elif "owned_text" in task:
-            answer = {"passages": [dict(text=task["owned_text"], connection_strength=0, related_slides=[])]}
+            answer = {"passages": [dict(text=task["owned_text"], related_slides=[])]}
         else:
             raise AssertionError(f"Unexpected task keys: {list(task)}")
         payload = json.dumps({"id": "local-test", "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": json.dumps(answer, ensure_ascii=False)}}], "usage": {"prompt_tokens": 100, "completion_tokens": 50}}).encode()

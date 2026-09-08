@@ -331,7 +331,6 @@ fn assembly_preserves_coarse_provenance_and_does_not_invent_evidence() -> Result
         assert_eq!(passage.source_start, TranscriptSegmentId(1));
         assert_eq!(passage.source_end, TranscriptSegmentId(2));
         assert!(passage.related_slides.is_empty() && passage.summary.is_none());
-        assert!(passage.connection_strength.is_none());
         assert!(passage.comparative_importance.is_none() && passage.comparative_novelty.is_none());
     }
     assert_eq!(analysis.restored_transcript(), &restored);

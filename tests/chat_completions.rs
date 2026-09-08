@@ -332,7 +332,6 @@ async fn restored_annotation_does_not_fresh_retry_unrelated_validation_failures(
     let invalid = json!({
         "passages": [{
             "text": restored.text(),
-            "connection_strength": 3,
             "related_slides": [99]
         }]
     })
@@ -938,7 +937,6 @@ async fn invalid_final_json_is_returned_to_the_model_for_repair() -> Result<(), 
             "start": 0,
             "end": 0,
             "novelty": 1,
-            "connection_strength": 2,
             "importance": 3
         }]
     })
@@ -989,7 +987,6 @@ async fn invalid_window_analysis_fails_after_the_repair_limit() -> Result<(), Bo
             "start": 0,
             "end": 0,
             "novelty": 1,
-            "connection_strength": 2,
             "importance": 3,
             "related_slides": [99]
         }]
@@ -1095,7 +1092,6 @@ fn analysis_json() -> String {
             "start": 0,
             "end": 0,
             "novelty": 1,
-            "connection_strength": 2,
             "importance": 3,
             "related_slides": [0]
         }]
@@ -1119,7 +1115,6 @@ fn restored_analysis_json(text: &str) -> String {
     json!({
         "passages": [{
             "text": text,
-            "connection_strength": 3,
             "related_slides": [0]
         }]
     })

@@ -58,7 +58,18 @@ pub(super) struct Settings {
     pub max_concurrency: usize,
     pub request_interval_ms: u64,
     pub adaptive: bool,
-    pub boundary_passages: bool,
+    /// Retained only to distinguish jobs created with the retired window-owned
+    /// preparation path. New requests omit this field and always default to
+    /// the standard global-boundary pipeline.
+    #[serde(
+        default = "standard_passage_segmentation",
+        rename = "boundary_passages"
+    )]
+    legacy_boundary_passages: bool,
+}
+
+const fn standard_passage_segmentation() -> bool {
+    true
 }
 
 impl Settings {
@@ -138,7 +149,8 @@ impl Settings {
     }
 
     pub fn same_analysis(&self, other: &Self) -> bool {
-        self.same_restoration(other) && self.boundary_passages == other.boundary_passages
+        self.same_restoration(other)
+            && self.legacy_boundary_passages == other.legacy_boundary_passages
     }
 }
 
@@ -425,7 +437,7 @@ mod tests {
             max_concurrency: 2,
             request_interval_ms: 0,
             adaptive: false,
-            boundary_passages: true,
+            legacy_boundary_passages: true,
         }
     }
 
@@ -497,11 +509,21 @@ mod tests {
             "extra_body": null,
             "max_concurrency": 2,
             "request_interval_ms": 0,
-            "adaptive": false,
-            "boundary_passages": true
+            "adaptive": false
         }))
         .expect("legacy settings deserialize");
         assert_eq!(settings.backend, ModelBackendKind::OpenAiCompatible);
+        assert!(settings.legacy_boundary_passages);
+    }
+
+    #[test]
+    fn retired_window_segmentation_starts_a_new_analysis_revision() {
+        let current = settings(ModelBackendKind::OpenAiCompatible);
+        let mut retired = current.clone();
+        retired.legacy_boundary_passages = false;
+
+        assert!(current.same_restoration(&retired));
+        assert!(!current.same_analysis(&retired));
     }
 
     #[test]
@@ -567,7 +589,7 @@ mod tests {
                 max_concurrency: 2,
                 request_interval_ms: 0,
                 adaptive: false,
-                boundary_passages: false,
+                legacy_boundary_passages: false,
             },
             started_ms: 1000,
             elapsed_before_ms: 500,

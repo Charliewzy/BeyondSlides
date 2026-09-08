@@ -114,9 +114,8 @@
               <label>请求间隔下限（ms）<input id="spacing" type="number" min="0" max="60000" value="0" required></label>
             </div>
             <label class="check"><input id="adaptive" type="checkbox"> 自动调整并发（从起始值增长，且不超过上限）</label>
-            <label class="check"><input id="boundaries" type="checkbox"> 使用实验性的全局语义边界分段</label>
             <label id="extra-body-setting">服务商额外请求字段（JSON，可选）<textarea id="extra-body" rows="3" placeholder='例如 GLM 关闭思考：{"thinking":{"type":"disabled"}}'></textarea></label>
-            <p class="muted">更改并发或间隔可直接续跑；更改模型或分段方式会先提示需要重跑的阶段。</p>
+            <p class="muted">更改并发或间隔可直接续跑；更改模型会先提示需要重跑的阶段。</p>
           </details>
           <div class="actions"><button class="primary" id="start-button">开始分析</button><button type="button" id="stop-button" hidden>完成当前任务后停止</button><a class="primary button" id="open-report" hidden target="_blank" rel="noopener">打开阅读报告 ↗</a><a class="button" id="export-report" hidden>下载分享包（含录音）</a></div>
         </form>

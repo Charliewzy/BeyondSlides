@@ -110,12 +110,12 @@ segment timing as a fallback.
 
 ## Resuming safely
 
-### Boundary-first passage preparation (opt-in)
+### Passage segmentation
 
-To avoid forced passage cuts at processing-window edges:
+Passage preparation always classifies candidate boundaries across the restored
+transcript and selects the final source-exact partition in Rust:
 
 ```bash
-export BEYOND_SLIDES_PASSAGE_PREPARATION=boundaries
 cargo run --release -- analyze \
   run/real_course/transcript.json \
   run/real_course/slides.json \
@@ -126,24 +126,21 @@ cargo run --release -- analyze \
 ```
 
 Use the provider/thinking settings that match the restored checkpoints. The
-new mode restores raw transcript windows as before, then assigns a `0..5` cut
+pipeline restores raw transcript windows as before, then assigns a `0..5` cut
 cost to candidate gaps across the whole restored text. It does **not** run the legacy
 tool-calling passage preparation. New passages get inferred slide positions,
 then both comparative metrics run with pre-fetched novelty evidence. Related
 slides, summaries, and notes are not judged in this mode; their fields are
 empty, not transferred from old passages.
 
-`windows` remains the default. Select it explicitly to return to the original
-mode.
-
 Boundary checkpoints are stored under `boundaries/<identity-hash>/`. Changing
 the boundary prompt or task inputs selects a different directory; scheduling
 and comparison changes reuse completed classifications. Every loaded checkpoint
 is revalidated. Changing segmentation reruns the relevant comparisons but not
 restoration. The source hashes still guard against adopting another lecture.
-Switching preparation modes in an existing run preserves its checkpoints but
-replaces the final `analysis.json` and report; use a separate run directory to
-keep both reports, as this experiment does.
+Completed `analysis.json` artifacts from the former window-owned preparation
+path remain renderable. New and resumed analysis execution does not expose or
+select that legacy path.
 
 Rust selects a source-exact partition with a 300-character maximum. Every gap
 remains cuttable: the dynamic program first avoids the most damaging cuts, then
@@ -151,7 +148,7 @@ minimizes passage count and balances otherwise equivalent passage lengths.
 Long punctuation-free text receives UTF-8-safe fallback candidates, so semantic
 judgments cannot make the partition infeasible.
 
-`boundary-preparation.json` contains the new mode's diagnostics. The legacy
+`boundary-preparation.json` contains segmentation diagnostics. The legacy
 `window_diagnostics` and `window_projections` arrays are empty in its analysis
 artifact because there was no copied-text projection stage. A pre-existing
 `annotation-quality.json` describes the old window mode, not the new run.

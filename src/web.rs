@@ -934,14 +934,6 @@ async fn start(
                 "fixed"
             },
         )
-        .env(
-            "BEYOND_SLIDES_PASSAGE_PREPARATION",
-            if run.settings.boundary_passages {
-                "boundaries"
-            } else {
-                "windows"
-            },
-        )
         .env("BEYOND_SLIDES_WORKER_CONTROL", path.join("control"));
     if let Some(initial_concurrency) = run.settings.initial_concurrency {
         command.env(

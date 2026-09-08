@@ -205,9 +205,11 @@ translated at display time without changing saved source metadata.
 
 Scheduling changes reuse the same validated checkpoints. Changes to provider,
 model, or request options require confirmation and create a new run revision.
-Changing passage preparation alone copies restoration artifacts into the new
-revision and revalidates them; old analysis files are not adopted. Prior run
-revisions remain on disk. The initial UI links the latest revision's report.
+Jobs created with the retired window-owned passage preparation path remain
+readable. Starting one under the standard global-boundary pipeline creates a
+new revision, copies reusable restoration artifacts, and revalidates them; old
+analysis files are not adopted. Prior run revisions remain on disk. The initial
+UI links the latest revision's report.
 
 ## Worker control
 

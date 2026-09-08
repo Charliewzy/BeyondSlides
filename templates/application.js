@@ -173,7 +173,7 @@ function setSettings(settings) {
   $("concurrency").value = settings.max_concurrency;
   $("initial-concurrency").value = settings.initial_concurrency ?? Math.min(2, settings.max_concurrency);
   syncConcurrencyLimits(); $("spacing").value = settings.request_interval_ms;
-  $("adaptive").checked = settings.adaptive; $("boundaries").checked = settings.boundary_passages;
+  $("adaptive").checked = settings.adaptive;
   syncModelBackend();
 }
 function selectedCodexModel() {
@@ -704,7 +704,7 @@ $("start-form").addEventListener("submit", async (event) => {
         codex_service_tier: codexServiceTier || null,
         extra_body: codex ? null : ($("extra-body").value.trim() ? JSON.parse($("extra-body").value) : null),
         initial_concurrency: Number($("initial-concurrency").value), max_concurrency: Number($("concurrency").value),
-        request_interval_ms: Number($("spacing").value), adaptive: $("adaptive").checked, boundary_passages: $("boundaries").checked },
+        request_interval_ms: Number($("spacing").value), adaptive: $("adaptive").checked },
       api_key: codex ? "" : $("api-key").value,
       confirm_reprocessing: false,
     };

@@ -1,11 +1,12 @@
 # Classify passage boundaries independently of request windows
 
-Window-owned passage preparation forces cuts through explanations, so an
-opt-in boundary-first mode evaluates punctuation-derived candidate gaps with
-overlapping context and selects a global partition in Rust; request boundaries
-do not constrain passage boundaries. This remains an alternative to ADR-0003's
-copied-text projection and preserves ADR-0002's coarse provenance by slicing
-authoritative restored text directly.
+Window-owned passage preparation forces cuts through explanations, so passage
+segmentation evaluates punctuation-derived candidate gaps with overlapping
+context and selects a global partition in Rust; request boundaries do not
+constrain passage boundaries. This is the standard path for new analyses and
+preserves ADR-0002's coarse provenance by slicing authoritative restored text
+directly. Completed artifacts created through ADR-0003's copied-text projection
+remain readable, but that path is no longer offered for new execution.
 
 The former categorical decisions made `continue` uncuttable and
 `required_break` mandatory. A real lecture produced a coherent 451-character
@@ -24,7 +25,7 @@ shared numeric scale. Punctuation remains the ordinary atomization mechanism;
 long punctuation-free atoms receive evenly distributed UTF-8-safe fallback
 gaps so a source-preserving partition is always feasible.
 
-The mode infers new slide positions and reruns comparative rankings without
-transferring old passage judgments. The legacy window-owned mode and its
-checkpoints remain available. Changing the prompt and serialized decision shape
-selects a new checkpoint identity, so categorical checkpoints are not reused.
+The pipeline infers slide positions and runs comparative rankings after the
+partition exists. Boundary classifications have their own checkpoint identity;
+changing the prompt or serialized decision shape therefore does not silently
+reuse incompatible checkpoints.

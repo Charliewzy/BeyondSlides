@@ -81,7 +81,7 @@ pub(super) async fn prepare(
     };
     publish_progress(run, &progress)?;
     let recording = directory.join(job.recording.as_ref().ok_or("Missing recording")?);
-    let recording_sha256 = speech_recognition::file_hash(&recording)?;
+    let recording_sha256 = super::model_assets::file_hash(&recording)?;
     let asr_directory = directory.join("transcription");
     fs::create_dir_all(&asr_directory)?;
     let checkpoint_path = asr_directory.join("checkpoint.json");

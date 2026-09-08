@@ -1,6 +1,7 @@
 mod export;
 mod jobs;
 mod logs;
+mod model_assets;
 mod rain_classroom;
 mod recognition_eta;
 mod slide_review;

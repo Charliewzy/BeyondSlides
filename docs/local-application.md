@@ -16,6 +16,13 @@ See `examples/demo/README.md` for provenance and regeneration instructions.
 
 ## Launch
 
+The Linux x86-64 standalone bundle includes its own portable Chromium. Run its
+`BeyondSlides` launcher to start the controller, open the application window,
+and stop the controller when that window closes. Its persistent data is kept
+outside the replaceable program directory; see [standalone.md](standalone.md).
+
+For a source checkout:
+
 ```sh
 cargo run --release -- serve
 # Or choose a data directory and port:
@@ -101,7 +108,10 @@ lecture discovery run in that authenticated page context. Selecting either Rain
 source silently checks the saved session: a valid session populates courses and
 shows “已登录雨课堂”; an expired session offers the in-app QR dialog. Graceful
 controller shutdown closes Chromium so it can flush this profile. The browser
-submits only the selected classroom, lecture, and presentation identifiers to
+adapter prefers the verified executable adjacent to a standalone binary and
+otherwise uses chromiumoxide's system-browser discovery. The AppImage uses
+extract-and-run mode for headless provider automation so FUSE is not required.
+The browser submits only the selected classroom, lecture, and presentation identifiers to
 the local backend; the backend obtains fresh, short-lived asset URLs and never
 accepts signed URLs from the UI. This adapter targets Rain Classroom's current
 private web interface and may require maintenance when the site changes.

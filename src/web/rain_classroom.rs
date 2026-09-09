@@ -132,13 +132,19 @@ impl RainClassroom {
             .map_err(|error| {
                 format!("Could not create the Rain Classroom browser profile: {error}")
             })?;
-        let config = BrowserConfig::builder()
+        let mut config = BrowserConfig::builder()
             .new_headless_mode()
             .user_data_dir(&self.profile)
             .request_timeout(Duration::from_secs(45))
-            .launch_timeout(Duration::from_secs(30))
-            .build()
-            .map_err(provider_error)?;
+            .launch_timeout(Duration::from_secs(30));
+        if let Some(executable) =
+            beyond_slides::browser_runtime::packaged_chromium_path().map_err(provider_error)?
+        {
+            config = config
+                .chrome_executable(executable)
+                .env("APPIMAGE_EXTRACT_AND_RUN", "1");
+        }
+        let config = config.build().map_err(provider_error)?;
         let (browser, mut handler) = Browser::launch(config).await.map_err(provider_error)?;
         let handler = tokio::spawn(async move {
             while let Some(event) = handler.next().await {

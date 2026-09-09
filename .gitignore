@@ -1,6 +1,7 @@
 /target
 /.fastembed_cache
 /data
+/dist
 /run
 __pycache__/
 *.py[cod]

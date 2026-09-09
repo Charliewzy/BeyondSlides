@@ -289,6 +289,23 @@ fn install_download_asset(
     replace_file(&staged, destination)
 }
 
+pub(crate) fn install_verified_executable(
+    destination: &Path,
+    url: &str,
+    bytes: u64,
+    sha256: &'static str,
+) -> Result<(), RuntimeToolError> {
+    install_download_asset(
+        &DownloadAsset {
+            url: url.into(),
+            bytes,
+            sha256,
+        },
+        destination,
+    )?;
+    make_executable(destination)
+}
+
 fn download_verified(
     destination: &Path,
     url: &str,
@@ -327,7 +344,7 @@ fn download_verified_on_blocking_thread(
     verify_file(destination, expected_bytes, expected_sha256)
 }
 
-fn verify_file(
+pub(crate) fn verify_file(
     path: &Path,
     expected_bytes: u64,
     expected_sha256: &str,

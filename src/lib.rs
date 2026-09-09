@@ -1,6 +1,7 @@
 mod alignment;
 mod analysis_artifact;
 mod annotation;
+pub mod browser_runtime;
 mod chat_completions;
 mod codex;
 mod comparative_ranking;

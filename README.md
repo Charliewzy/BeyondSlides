@@ -25,9 +25,22 @@
 
 ## 安装与启动
 
-目前主要在 **Linux / WSL** 上开发和验证。尚未提供一键安装包；macOS、原生 Windows 的完整流程尚未验证。
+目前主要在 **Linux / WSL** 上开发和验证。仓库可以生成一个 Linux x86-64 独立预览包；macOS、原生 Windows 的完整流程尚未验证。
 
-### 1. 安装基础依赖
+### Linux 独立预览包
+
+发布者可用一个命令构建可下载的完整目录与压缩包：
+
+```sh
+scripts/package_standalone_linux.sh
+```
+
+解压 `dist/beyond-slides-linux-x86_64.tar.gz` 后，双击或运行其中的
+`BeyondSlides`。启动器会运行本地服务、用随包附带的 Chromium 打开应用窗口，并在窗口关闭后干净地关闭控制服务。讲座、检查点、登录状态和首次下载的模型默认保存在 `~/.local/share/beyond-slides`，所以以后替换程序目录不会删除数据。
+
+本机验证生成的目录约 **424 MiB**，压缩下载约 **283 MiB**；具体大小会随 Rust 和运行时版本变化。包内含 BeyondSlides、完整的 ungoogled-Chromium AppImage、PDFium、FFmpeg、`ffprobe` 与许可证，不要求另行安装这些组件。OCR、ASR 和嵌入模型仍在第一次需要时校验下载。当前包面向具有图形桌面的现代 glibc Linux x86-64；详情和验证命令见 [独立应用说明](docs/standalone.md)。
+
+### 1. 从源码安装
 
 从源码构建只需要 Rust / Cargo 和 C/C++ 构建工具。PDFium、FFmpeg 与
 `ffprobe` 由 BeyondSlides 按固定版本管理，不需要通过系统包管理器安装。
@@ -84,7 +97,7 @@ docker run --rm --name beyond-slides \
 
 首次转写会自动下载并校验约 156 MiB 的压缩模型资源；解压后的模型缓存约 230 MiB，位于应用数据目录的 `models/` 下，之后的讲座会直接复用。速度取决于 CPU、录音长度和模型加载情况；LLM 分析还受服务商速度、限流和思考模式影响，不保证固定完成时间。
 
-从雨课堂导入还需要本机安装 Google Chrome 或 Chromium。BeyondSlides 会在后台使用独立的浏览器配置，并把扫码登录页面显示在应用自己的对话框中；登录状态有效时会自动复用，无需每次扫码。课件和录像选择会绑定到同一门课程、同一讲次，并分别提示该讲次是否缺少可导入的课件或录像；只有存在多份课件时才要求选择。若雨课堂在后台将一堂课存为多份回放，BeyondSlides 会自动合并为一份录像，不要求用户选择或理解这些内部片段。雨课堂逐页图片会组装为图片型 PDF，并由本机 CPU 上的 PP-OCRv5 提取文字；无需 Python、PaddlePaddle、GPU 或在线 OCR 服务。此功能使用雨课堂网页自身的私有接口，网站更新后可能需要同步适配。
+源码运行或默认 Docker 镜像从雨课堂导入时，还需要本机提供 Google Chrome 或 Chromium；Linux 独立预览包已自带固定版本。BeyondSlides 会在后台使用独立的浏览器配置，并把扫码登录页面显示在应用自己的对话框中；登录状态有效时会自动复用，无需每次扫码。课件和录像选择会绑定到同一门课程、同一讲次，并分别提示该讲次是否缺少可导入的课件或录像；只有存在多份课件时才要求选择。若雨课堂在后台将一堂课存为多份回放，BeyondSlides 会自动合并为一份录像，不要求用户选择或理解这些内部片段。雨课堂逐页图片会组装为图片型 PDF，并由本机 CPU 上的 PP-OCRv5 提取文字；无需 Python、PaddlePaddle、GPU 或在线 OCR 服务。此功能使用雨课堂网页自身的私有接口，网站更新后可能需要同步适配。
 
 ### 3. 导入并分析
 
@@ -127,7 +140,7 @@ API base URL: https://lab.cs.tsinghua.edu.cn/ai-platform/api/v1
 - 源码启动默认只绑定 loopback；Docker 镜像在容器内绑定 `0.0.0.0`，但示例只向宿主 loopback 发布。服务没有多用户鉴权，**不要直接通过反向代理或端口转发将它公开到互联网。**
 - 本地上传的 PDF 目前仍依赖可提取文字；PP-OCRv5 只自动处理雨课堂导入的逐页图片。检查警告与 OCR 都不能保证提取内容完整。
 - ASR、文本恢复、分段、排名和幻灯片对齐都可能出错；音频定位可能退回较粗的转写区间。请对重要内容回看原始讲义 / 录音。
-- 软件使用 [MIT 许可证](LICENSE)。托管的 FFmpeg/ffprobe 是独立的 GPLv3 程序，预装包会同时保留上游许可证与构建说明；PDFium 包也保留其上游许可证。内置示例的课程文字和幻灯片不在 MIT 授权范围内；按项目所有者决定，为当前课程提交保留。公开发布前仍需确认授权或替换示例，见 [NOTICE](NOTICE)。
+- 软件使用 [MIT 许可证](LICENSE)。托管的 FFmpeg/ffprobe 是独立的 GPLv3 程序，预装包会同时保留上游许可证与构建说明；PDFium 和独立包中的 ungoogled-Chromium 也保留各自的上游许可证与来源。内置示例的课程文字和幻灯片不在 MIT 授权范围内；按项目所有者决定，为当前课程提交保留。公开发布前仍需确认授权或替换示例，见 [NOTICE](NOTICE)。
 
 ## 开发与验证
 
@@ -146,6 +159,8 @@ cargo build --locked
 uv run scripts/verify_local_application.py run/release-check
 uv run --with playwright python -m playwright install chromium
 uv run scripts/verify_application_browser.py run/release-check
+# 构建独立包后，验证启动、关闭、运行时和雨课堂浏览器：
+scripts/verify_standalone_linux.sh dist/beyond-slides-linux-x86_64
 ```
 
 运行验证脚本前先完成构建；不要在脚本运行过程中替换其使用的二进制。端到端验证需要已缓存的中文检索模型；详细要求见 [本地应用说明](docs/local-application.md#verification)。模拟模型测试验证流程，不验证真实模型的判断质量。
@@ -154,6 +169,7 @@ uv run scripts/verify_application_browser.py run/release-check
 
 - [本地应用：配置、数据与恢复机制](docs/local-application.md)
 - [Docker 与网络部署](docs/deployment.md)
+- [Linux 独立应用包](docs/standalone.md)
 - [命令行分析与检查点说明](docs/running.md)
 - [架构](ARCHITECTURE.md)、[领域词汇](CONTEXT.md)、[架构决策](docs/adr/)
 - [实验与评估记录](docs/evaluation/)

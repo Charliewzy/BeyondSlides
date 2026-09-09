@@ -13,3 +13,11 @@ publicly. Before a public release, confirm redistribution permission or replace
 the example and remove historical copies from the public repository as needed.
 
 Third-party dependencies and model weights retain their own licenses.
+
+Standalone browser
+------------------
+The optional Linux standalone package includes an independently distributed
+ungoogled-Chromium AppImage. It is not part of the MIT-licensed BeyondSlides
+executable. The package retains the portable-build and Chromium licenses,
+records the exact source URL and SHA-256 digest, and exposes Chromium's bundled
+third-party notices through chrome://credits.

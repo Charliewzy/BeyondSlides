@@ -84,7 +84,10 @@ fn report_supports_centered_three_edge_desktop_resizing() -> Result<(), Box<dyn 
     assert!(report.contains("data-reader-resizer=\"left\""));
     assert!(report.contains("data-reader-resizer=\"middle\""));
     assert!(report.contains("data-reader-resizer=\"right\""));
-    assert!(report.contains("readerWidth: drag.initial.readerWidth + 2 * outwardDelta"));
+    assert!(report.contains("function proportionalOuterLayout("));
+    assert!(report.contains("const scale = initialContentWidth > 0"));
+    assert!(report.contains("slideWidth: initial.slideWidth * scale"));
+    assert!(report.contains("drag.transcriptWidth"));
     assert!(report.contains("slideWidth: drag.initial.slideWidth - delta"));
     assert!(report.contains("localStorage.setItem(storageKey"));
     assert!(report.contains("resizer.addEventListener(\"dblclick\", resetLayout)"));

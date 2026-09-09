@@ -2,9 +2,10 @@
 // reader, while the middle edge redistributes its fixed width between columns.
 (() => {
   const layout = document.querySelector("[data-reader-layout].has-slides");
+  const transcriptPanel = document.querySelector(".transcript-card");
   const slidePanel = document.querySelector(".slide-panel");
   const resizers = [...document.querySelectorAll("[data-reader-resizer]")];
-  if (!layout || !slidePanel || resizers.length === 0) return;
+  if (!layout || !transcriptPanel || !slidePanel || resizers.length === 0) return;
 
   const storageKey = "beyond-slides.reader-layout.v1";
   const desktop = window.matchMedia("(min-width: 70.001rem)");
@@ -61,6 +62,21 @@
     window.dispatchEvent(new Event("resize"));
   }
 
+  function proportionalOuterLayout(initial, transcriptWidth, readerWidth) {
+    const normalizedReaderWidth = normalizedLayout({ ...initial, readerWidth }).readerWidth;
+    const fixedChromeWidth = Math.max(
+      0,
+      initial.readerWidth - transcriptWidth - initial.slideWidth,
+    );
+    const initialContentWidth = transcriptWidth + initial.slideWidth;
+    const nextContentWidth = Math.max(0, normalizedReaderWidth - fixedChromeWidth);
+    const scale = initialContentWidth > 0 ? nextContentWidth / initialContentWidth : 1;
+    return {
+      readerWidth: normalizedReaderWidth,
+      slideWidth: initial.slideWidth * scale,
+    };
+  }
+
   function updateAccessibleValues(value) {
     for (const resizer of resizers) {
       const width = resizer.dataset.readerResizer === "middle"
@@ -115,6 +131,7 @@
       kind: resizer.dataset.readerResizer,
       startX: event.clientX,
       initial,
+      transcriptWidth: transcriptPanel.getBoundingClientRect().width,
       resizer,
     };
     resizer.setPointerCapture(event.pointerId);
@@ -130,7 +147,11 @@
       return;
     }
     const outwardDelta = drag.kind === "left" ? -delta : delta;
-    apply({ ...drag.initial, readerWidth: drag.initial.readerWidth + 2 * outwardDelta });
+    apply(proportionalOuterLayout(
+      drag.initial,
+      drag.transcriptWidth,
+      drag.initial.readerWidth + 2 * outwardDelta,
+    ));
   }
 
   function finishDrag(event) {
@@ -151,7 +172,11 @@
       apply({ ...current, slideWidth: current.slideWidth - direction * step }, true);
     } else {
       const outwardDirection = resizer.dataset.readerResizer === "left" ? -direction : direction;
-      apply({ ...current, readerWidth: current.readerWidth + 2 * outwardDirection * step }, true);
+      apply(proportionalOuterLayout(
+        current,
+        transcriptPanel.getBoundingClientRect().width,
+        current.readerWidth + 2 * outwardDirection * step,
+      ), true);
     }
   }
 

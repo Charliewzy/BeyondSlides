@@ -15,7 +15,7 @@
       <div>
         <p class="eyebrow">BeyondSlides</p>
         <h1>在连续讲稿中看见课堂价值</h1>
-        <p class="lede">达到所选重要性阈值的讲稿以粗体显示，达到新颖度阈值的讲稿带有下划线。悬停讲稿可突出完整段落，点击可查看评分{% if has_audio %}和播放音频{% endif %}；悬停幻灯片可临时预览其全部对齐讲稿。</p>
+        <p class="lede"><strong class="importance-key">粗体表示全讲中更重要的内容</strong>，<span class="novelty-key">红色下划线表示相对幻灯片新增的内容</span>。右上角可按全讲百分位调整两种标记。悬停讲稿可突出完整段落，点击可查看评分{% if has_audio %}和播放音频{% endif %}；悬停幻灯片可临时预览其全部对齐讲稿。</p>
       </div>
       <dl class="summary">
         <div><dt>讲稿时长</dt><dd>{{ duration }}</dd></div>
@@ -32,21 +32,30 @@
           <p class="section-kicker">Continuous lecture transcript</p>
           <h2 id="transcript-title">完整讲稿</h2>
         </header>
-        <aside class="score-controls" aria-label="讲稿突出显示阈值">
-          <p class="score-controls-title">突出显示</p>
-          <label class="score-control" for="importance-threshold">
-            <span><strong>重要性</strong><output data-threshold-output="importance" for="importance-threshold">≥4</output></span>
-            <input id="importance-threshold" type="range" min="0" max="6" step="1" value="4" list="score-threshold-stops" data-score-threshold="importance">
-            <span class="threshold-detail"><span>全部</span><span data-threshold-count="importance"></span><span>关闭</span></span>
-          </label>
-          <label class="score-control" for="novelty-threshold">
-            <span><strong>新颖度</strong><output data-threshold-output="novelty" for="novelty-threshold">≥3</output></span>
-            <input id="novelty-threshold" type="range" min="0" max="6" step="1" value="3" list="score-threshold-stops" data-score-threshold="novelty">
-            <span class="threshold-detail"><span>全部</span><span data-threshold-count="novelty"></span><span>关闭</span></span>
-          </label>
-          <datalist id="score-threshold-stops">
-            <option value="0"></option><option value="1"></option><option value="2"></option><option value="3"></option><option value="4"></option><option value="5"></option><option value="6"></option>
-          </datalist>
+        <aside class="score-controls" data-collapsible-widget="score-controls" aria-label="讲稿突出显示范围">
+          <div class="widget-heading">
+            <div>
+              <p class="score-controls-title">阅读标记</p>
+              <p class="score-controls-summary" data-score-widget-summary>粗体 前 40% · 下划线 前 60%</p>
+            </div>
+            <button class="widget-toggle" type="button" data-widget-toggle aria-expanded="true" aria-label="收起阅读标记设置">收起</button>
+          </div>
+          <div class="score-controls-body widget-body" data-widget-body>
+            <p class="score-legend"><strong class="importance-key">粗体 = 更重要</strong><span class="novelty-key">下划线 = 幻灯片外新增</span></p>
+            <label class="score-control" for="importance-threshold">
+              <span><strong>粗体范围</strong><output data-threshold-output="importance" for="importance-threshold">前 40%</output></span>
+              <input id="importance-threshold" type="range" min="0" max="100" step="5" value="40" list="score-threshold-stops" data-score-threshold="importance">
+              <span class="threshold-detail"><span>关闭</span><span data-threshold-count="importance"></span><span>全部</span></span>
+            </label>
+            <label class="score-control" for="novelty-threshold">
+              <span><strong>下划线范围</strong><output data-threshold-output="novelty" for="novelty-threshold">前 60%</output></span>
+              <input id="novelty-threshold" type="range" min="0" max="100" step="5" value="60" list="score-threshold-stops" data-score-threshold="novelty">
+              <span class="threshold-detail"><span>关闭</span><span data-threshold-count="novelty"></span><span>全部</span></span>
+            </label>
+            <datalist id="score-threshold-stops">
+              <option value="0"></option><option value="25"></option><option value="50"></option><option value="75"></option><option value="100"></option>
+            </datalist>
+          </div>
         </aside>
         <div class="continuous-transcript">{% for passage in passages %}<p class="lecture-paragraph"><span class="passage" tabindex="0" data-passage data-source-start="{{ passage.source_start }}" data-source-end="{{ passage.source_end }}" data-time="{{ passage.timestamp }}" data-audio-start-ms="{{ passage.audio_start_ms }}" data-audio-end-ms="{{ passage.audio_end_ms }}" data-audio-basis="{{ passage.audio_basis }}" data-slide-position="{{ passage.slide_position }}" data-slide-number="{{ passage.slide_number }}" data-importance="{{ passage.importance }}" data-novelty="{{ passage.novelty }}" data-importance-percentile="{{ passage.importance_percentile }}" data-novelty-percentile="{{ passage.novelty_percentile }}">{{ passage.text }}</span></p>{% endfor %}</div>
       </section>
@@ -83,19 +92,25 @@
     </div>
   </main>
 
-  <aside class="passage-inspector" data-passage-inspector aria-live="polite">
-    <strong data-inspector-range>点击讲稿段落查看评分</strong>
-    <span data-inspector-details></span>
-{% if has_audio %}
-    <div class="audio-controls">
-      <span data-audio-status>点击讲稿段落播放对应音频</span>
-      <div class="playback-mode" role="group" aria-label="播放模式">
-        <button type="button" data-playback-mode="passage" aria-pressed="true">单段播放</button>
-        <button type="button" data-playback-mode="continuous" aria-pressed="false">连续播放</button>
-      </div>
-      <audio data-lecture-audio controls preload="metadata" src="{{ audio_source }}"></audio>
+  <aside class="passage-inspector" data-passage-inspector data-collapsible-widget="passage-inspector" aria-live="polite">
+    <div class="widget-heading">
+      <strong data-inspector-range>点击讲稿段落查看评分</strong>
+      <strong class="collapsed-widget-label">段落信息</strong>
+      <button class="widget-toggle" type="button" data-widget-toggle aria-expanded="true" aria-label="收起段落信息">收起</button>
     </div>
+    <div class="passage-inspector-body widget-body" data-widget-body>
+      <span data-inspector-details></span>
+{% if has_audio %}
+      <div class="audio-controls">
+        <span data-audio-status>点击讲稿段落播放对应音频</span>
+        <div class="playback-mode" role="group" aria-label="播放模式">
+          <button type="button" data-playback-mode="passage" aria-pressed="true">单段播放</button>
+          <button type="button" data-playback-mode="continuous" aria-pressed="false">连续播放</button>
+        </div>
+        <audio data-lecture-audio controls preload="metadata" src="{{ audio_source }}"></audio>
+      </div>
 {% endif %}
+    </div>
   </aside>
 
   <script>

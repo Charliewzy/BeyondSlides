@@ -304,10 +304,23 @@ fn report_embeds_score_typography_and_escapes_restored_text() -> Result<(), Box<
 
     assert!(report.contains("data-score-threshold=\"importance\""));
     assert!(report.contains("data-score-threshold=\"novelty\""));
+    assert!(report.contains(
+        "id=\"importance-threshold\" type=\"range\" min=\"0\" max=\"100\" step=\"5\" value=\"40\""
+    ));
+    assert!(report.contains(
+        "id=\"novelty-threshold\" type=\"range\" min=\"0\" max=\"100\" step=\"5\" value=\"60\""
+    ));
+    assert!(report.contains("粗体表示全讲中更重要的内容"));
+    assert!(report.contains("红色下划线表示相对幻灯片新增的内容"));
+    assert!(report.contains("data-collapsible-widget=\"score-controls\""));
+    assert!(report.contains("data-collapsible-widget=\"passage-inspector\""));
     assert!(report.contains(".score-controls {\n  position: fixed;"));
     assert!(report.contains(".passage.importance-emphasized"));
     assert!(report.contains(".passage.novelty-emphasized"));
     assert!(report.contains("function applyScoreThreshold(input, preserveScrollPosition)"));
+    assert!(report.contains("passagePercentile(passage, metric) >= percentileThreshold"));
+    assert!(report.contains("cutoffIncludesTie(metric, emphasizedPassages)"));
+    assert!(report.contains("beyond-slides.report-widget.${name}.v1"));
     assert!(!report.contains("legend-card"));
     assert!(!report.contains("href=\"http"));
     assert!(!report.contains("src=\"http"));

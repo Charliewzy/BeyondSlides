@@ -31,10 +31,37 @@
     passagesBySlideId.set(passage.dataset.slidePosition, matches);
   }
 
-  function thresholdLabel(threshold) {
-    if (threshold === 0) return "全部";
-    if (threshold === 6) return "关闭";
-    return `≥${threshold}`;
+  function thresholdLabel(topPercent) {
+    if (topPercent === 0) return "关闭";
+    if (topPercent === 100) return "全部";
+    return `前 ${topPercent}%`;
+  }
+
+  function passagePercentile(passage, metric) {
+    const percentileText = passage.dataset[`${metric}Percentile`];
+    const percentile = Number(percentileText);
+    if (percentileText !== "" && Number.isFinite(percentile)) return percentile;
+
+    // Reports created before comparative percentiles were persisted can still
+    // use their display levels. New reports always take the branch above.
+    const level = Number(passage.dataset[metric]);
+    return Number.isFinite(level) ? Math.max(0, Math.min(100, (level - 1) * 20)) : 0;
+  }
+
+  function cutoffIncludesTie(metric, emphasizedPassages) {
+    if (emphasizedPassages.length === 0 || emphasizedPassages.length === passages.length) return false;
+    const cutoff = Math.min(...emphasizedPassages.map(passage => passagePercentile(passage, metric)));
+    return passages.filter(passage => passagePercentile(passage, metric) === cutoff).length > 1;
+  }
+
+  function updateScoreWidgetSummary() {
+    const summary = document.querySelector("[data-score-widget-summary]");
+    if (!summary) return;
+    const labels = new Map(scoreThresholds.map(input => [
+      input.dataset.scoreThreshold,
+      thresholdLabel(Number(input.value)),
+    ]));
+    summary.textContent = `粗体 ${labels.get("importance")} · 下划线 ${labels.get("novelty")}`;
   }
 
   function passageNearestViewportCenter() {
@@ -54,26 +81,55 @@
 
   function applyScoreThreshold(input, preserveScrollPosition) {
     const metric = input.dataset.scoreThreshold;
-    const threshold = Number(input.value);
+    const topPercent = Number(input.value);
+    const percentileThreshold = 100 - topPercent;
     const anchor = preserveScrollPosition ? passageNearestViewportCenter() : undefined;
     const anchorTop = anchor?.getBoundingClientRect().top;
-    let emphasizedCount = 0;
+    const emphasizedPassages = [];
 
     for (const passage of passages) {
-      const score = Number(passage.dataset[metric]);
-      const emphasized = threshold <= 5 && score >= threshold;
+      const emphasized = topPercent > 0
+        && passagePercentile(passage, metric) >= percentileThreshold;
       passage.classList.toggle(`${metric}-emphasized`, emphasized);
-      emphasizedCount += Number(emphasized);
+      if (emphasized) emphasizedPassages.push(passage);
     }
 
-    const label = thresholdLabel(threshold);
+    const label = thresholdLabel(topPercent);
+    const actualPercent = passages.length === 0
+      ? 0
+      : emphasizedPassages.length / passages.length * 100;
+    const tieNote = cutoffIncludesTie(metric, emphasizedPassages) ? "，含并列" : "";
     document.querySelector(`[data-threshold-output="${metric}"]`).textContent = label;
-    document.querySelector(`[data-threshold-count="${metric}"]`).textContent = `${emphasizedCount}/${passages.length} 段`;
+    document.querySelector(`[data-threshold-count="${metric}"]`).textContent =
+      `实际 ${emphasizedPassages.length}/${passages.length} 段（${actualPercent.toFixed(1)}%${tieNote}）`;
     input.setAttribute("aria-valuetext", label);
+    updateScoreWidgetSummary();
 
     if (anchor && anchorTop !== undefined) {
       window.scrollBy(0, anchor.getBoundingClientRect().top - anchorTop);
     }
+  }
+
+  function setupCollapsibleWidget(widget) {
+    const toggle = widget.querySelector("[data-widget-toggle]");
+    const name = widget.dataset.collapsibleWidget;
+    if (!toggle || !name) return;
+    const storageKey = `beyond-slides.report-widget.${name}.v1`;
+
+    function setCollapsed(collapsed, persist) {
+      widget.classList.toggle("is-collapsed", collapsed);
+      toggle.textContent = collapsed ? "展开" : "收起";
+      toggle.setAttribute("aria-expanded", String(!collapsed));
+      toggle.setAttribute("aria-label", `${collapsed ? "展开" : "收起"}${name === "score-controls" ? "阅读标记设置" : "段落信息"}`);
+      if (persist) {
+        try { localStorage.setItem(storageKey, collapsed ? "collapsed" : "expanded"); } catch (_) {}
+      }
+    }
+
+    let collapsed = false;
+    try { collapsed = localStorage.getItem(storageKey) === "collapsed"; } catch (_) {}
+    setCollapsed(collapsed, false);
+    toggle.addEventListener("click", () => setCollapsed(!widget.classList.contains("is-collapsed"), true));
   }
 
   function updateViewingSlide() {
@@ -312,6 +368,9 @@
   for (const input of scoreThresholds) {
     applyScoreThreshold(input, false);
     input.addEventListener("input", () => applyScoreThreshold(input, true));
+  }
+  for (const widget of document.querySelectorAll("[data-collapsible-widget]")) {
+    setupCollapsibleWidget(widget);
   }
 
   if (rail) {

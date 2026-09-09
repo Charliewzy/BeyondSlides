@@ -99,8 +99,35 @@ def main():
                 assert resizer.is_hidden()
             example.set_viewport_size({"width": 1440, "height": 1000})
             assert example.locator("[data-slide] img").first.evaluate("image => image.naturalWidth > 0 && image.src.startsWith('data:image/png;base64,')")
-            example.locator("#importance-threshold").evaluate("input => { input.value = 6; input.dispatchEvent(new Event('input', {bubbles: true})); }")
+            importance = example.locator("#importance-threshold")
+            importance.evaluate("input => { input.value = 5; input.dispatchEvent(new Event('input', {bubbles: true})); }")
+            expected_top_five = example.locator(
+                '[data-passage][data-importance-percentile]:not([data-importance-percentile=""])'
+            ).evaluate_all(
+                "passages => passages.filter(passage => Number(passage.dataset.importancePercentile) >= 95).length"
+            )
+            actual_top_five = example.locator(".importance-emphasized").count()
+            assert actual_top_five == expected_top_five, (
+                actual_top_five,
+                expected_top_five,
+                importance.input_value(),
+                example.locator('[data-threshold-count="importance"]').inner_text(),
+            )
+            assert "实际" in example.locator('[data-threshold-count="importance"]').inner_text()
+            importance.evaluate("input => { input.value = 0; input.dispatchEvent(new Event('input', {bubbles: true})); }")
             assert example.locator(".importance-emphasized").count() == 0
+            score_widget = example.locator('[data-collapsible-widget="score-controls"]')
+            inspector_widget = example.locator('[data-collapsible-widget="passage-inspector"]')
+            score_widget.locator("[data-widget-toggle]").click()
+            inspector_widget.locator("[data-widget-toggle]").click()
+            assert "is-collapsed" in score_widget.get_attribute("class")
+            assert "is-collapsed" in inspector_widget.get_attribute("class")
+            example.reload()
+            example.locator("[data-minimap-prototype]").wait_for(state="visible")
+            assert "is-collapsed" in example.locator('[data-collapsible-widget="score-controls"]').get_attribute("class")
+            assert "is-collapsed" in example.locator('[data-collapsible-widget="passage-inspector"]').get_attribute("class")
+            example.locator('[data-collapsible-widget="score-controls"] [data-widget-toggle]').click()
+            example.locator('[data-collapsible-widget="passage-inspector"] [data-widget-toggle]').click()
             assert not example.evaluate("performance.getEntriesByType('resource').some(entry => entry.name.startsWith('http'))")
             example.screenshot(path=str(args.workspace / "browser-example-report.png"))
             example.close()

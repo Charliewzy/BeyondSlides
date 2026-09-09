@@ -19,8 +19,9 @@ The system preserves two kinds of evidence:
 Importance and novelty are ranked relative to other passages in the same
 lecture through repeated best--worst comparisons. Their stored comparison
 counts and percentiles remain uncertain semantic judgments, not objective
-facts or cross-lecture measurements. Reports derive `1..5` display levels from
-those percentiles.
+facts or cross-lecture measurements. Reports use those percentiles directly for
+emphasis controls and retain derived `1..5` display levels for compatibility
+and inspection.
 Optional comparison notes support debugging and evaluation but are neither
 required nor shown to a learner by default.
 
@@ -30,9 +31,10 @@ The end-to-end command accepts normalized `transcript.json` and `slides.json`
 and writes a resumable run directory. It first restores readable lecture text,
 then analyzes that restored text against the slides.
 
-The primary report preserves lecture order. Importance controls character
-weight; novelty controls underline thickness. A reader can therefore follow
-the lecture continuously while visually locating high-value oral additions.
+The primary report preserves lecture order. User-selected lecture-percentile
+ranges control whether importance uses bold text and novelty uses an underline.
+A reader can therefore follow the lecture continuously while visually locating
+high-value oral additions.
 Selecting a passage reveals its scores, time range, and raw source range. When
 a slide PDF is supplied at rendering time, a scrollable rail displays real
 slide pages beside the transcript and centers the selected passage's inferred
@@ -434,14 +436,16 @@ match the restored transcript.
 ### 5.9 Rendering and evaluation
 
 The continuous report renders authoritative passage text in lecture order.
-User-controlled discrete thresholds map importance to bold versus normal text
-and novelty to underlined versus plain text; the underlying display levels and
-comparative percentiles remain available to report consumers. The fixed
-upper-right controls range from
-highlighting every score through disabling a channel, and preserve the reader's
-viewport anchor when font-weight changes reflow the transcript. Hover, focus, or
-click reveals timestamps, raw source range, inferred slide position, and
-component scores.
+User-controlled top-percentage thresholds map importance to bold versus normal
+text and novelty to underlined versus plain text. Controls move in five-point
+steps over the lecture-relative percentile and include all passages tied at the
+cutoff; the report shows the resulting count rather than splitting a tie. The
+underlying display levels and comparative evidence remain available to report
+consumers. The fixed upper-right controls preserve the reader's viewport anchor
+when font-weight changes reflow the transcript. Both fixed corner widgets can
+be collapsed independently, with the preference stored in the browser. Hover,
+focus, or click reveals timestamps, raw source range, inferred slide position,
+and component scores.
 
 When audio and timed transcript tokens are supplied, rendering locally aligns
 each passage's restored text within its coarse source interval and projects its

@@ -138,7 +138,6 @@ best--worst balance and percentile rank are derived.
 _Avoid_: Model score, confidence
 
 **Display level**:
-A discrete `1..5` band derived from a comparative percentile for report
-typography and threshold controls. It is presentation data, not an absolute
-semantic measurement.
+A discrete `1..5` compatibility band derived from a comparative percentile.
+It is presentation data for inspection, not an absolute semantic measurement.
 _Avoid_: Absolute score, rating

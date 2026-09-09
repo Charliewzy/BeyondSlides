@@ -32,8 +32,9 @@ use crate::{
     TranscriptWindowRestorationResult, TranscriptWindowTask, ValidatedSources,
     annotation::validate_window_analysis,
     chat_completions::{
-        fresh_comparative_retry_instructions, is_comparative_ranking_failure,
-        is_passage_text_difference, parse_analysis, parse_restoration, parse_restored_analysis,
+        fresh_comparative_retry_instructions, fresh_restoration_retry_instructions,
+        is_comparative_ranking_failure, is_passage_text_difference, is_restoration_failure,
+        parse_analysis, parse_restoration, parse_restored_analysis,
     },
     comparative_ranking::{ComparativeRankingTask, ProposedComparativeRanking},
     model_trace::{ModelProviderFailure, ModelRequestAttempt, ModelTraceContext},
@@ -43,6 +44,7 @@ use crate::{
 };
 
 const DEFAULT_MAX_FINAL_ANSWER_REPAIRS: usize = 2;
+const DEFAULT_MAX_FRESH_RESTORATION_RETRIES: usize = 5;
 const DEFAULT_MAX_FRESH_ANNOTATION_RETRIES: usize = 5;
 const DEFAULT_MAX_FRESH_COMPARISON_RETRIES: usize = 5;
 const DEFAULT_TURN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -56,6 +58,7 @@ pub struct CodexAppServerConfig {
     reasoning_effort: Option<String>,
     service_tier: Option<String>,
     max_final_answer_repairs: usize,
+    max_fresh_restoration_retries: usize,
     max_fresh_annotation_retries: usize,
     max_fresh_comparison_retries: usize,
     turn_timeout: Duration,
@@ -75,6 +78,7 @@ impl CodexAppServerConfig {
             reasoning_effort: None,
             service_tier: None,
             max_final_answer_repairs: DEFAULT_MAX_FINAL_ANSWER_REPAIRS,
+            max_fresh_restoration_retries: DEFAULT_MAX_FRESH_RESTORATION_RETRIES,
             max_fresh_annotation_retries: DEFAULT_MAX_FRESH_ANNOTATION_RETRIES,
             max_fresh_comparison_retries: DEFAULT_MAX_FRESH_COMPARISON_RETRIES,
             turn_timeout: DEFAULT_TURN_TIMEOUT,
@@ -119,6 +123,16 @@ impl CodexAppServerConfig {
 
     pub fn with_model_trace(mut self, trace: ModelExchangeTrace) -> Self {
         self.model_trace = Some(trace);
+        self
+    }
+
+    /// Limits clean retries after transcript restoration remains invalid after
+    /// its in-thread repairs. Zero disables clean retries.
+    pub const fn with_max_fresh_restoration_retries(
+        mut self,
+        max_fresh_restoration_retries: usize,
+    ) -> Self {
+        self.max_fresh_restoration_retries = max_fresh_restoration_retries;
         self
     }
 
@@ -577,30 +591,75 @@ impl LectureModelBackend for CodexAppServerClient {
         let message = task
             .message()
             .map_err(ChatCompletionsError::SerializeTask)?;
-        let (restoration, diagnostics) = self
-            .run_structured(
-                StructuredTask {
-                    instructions: message.instructions,
-                    input: message.input,
-                    schema: restoration_schema(),
-                    workflow: ModelWorkflow::Restoration,
-                    work_item_index: task.window_index,
-                    max_repairs: self.config.max_final_answer_repairs,
+        let attempts = self.config.max_fresh_restoration_retries.saturating_add(1);
+        let mut previous_error: Option<String> = None;
+        for attempt in 0..attempts {
+            let instructions = previous_error.as_ref().map_or_else(
+                || message.instructions.to_owned(),
+                |error| {
+                    fresh_restoration_retry_instructions(
+                        message.instructions,
+                        task,
+                        attempt,
+                        self.config.max_fresh_restoration_retries,
+                        error,
+                    )
                 },
-                |content| {
-                    parse_restoration(content).and_then(|(restoration, fence)| {
-                        validate_window_restoration(task, &restoration)
-                            .map_err(ChatCompletionsError::InvalidWindowRestoration)?;
-                        Ok((restoration, fence))
-                    })
-                },
-                |error| format!("上一份恢复 JSON 无效：{error}。严格覆盖 owned_region 且不要认领 context，只返回完整 JSON。"),
-            )
-            .await?;
-        Ok(TranscriptWindowRestorationResult {
-            restoration,
-            diagnostics: diagnostics.restoration(),
-        })
+            );
+            let result = self
+                .run_structured(
+                    StructuredTask {
+                        instructions: &instructions,
+                        input: message.input.clone(),
+                        schema: restoration_schema(),
+                        workflow: ModelWorkflow::Restoration,
+                        work_item_index: task.window_index,
+                        max_repairs: if attempt == 0 {
+                            self.config.max_final_answer_repairs
+                        } else {
+                            0
+                        },
+                    },
+                    |content| {
+                        parse_restoration(content).and_then(|(restoration, fence)| {
+                            validate_window_restoration(task, &restoration)
+                                .map_err(ChatCompletionsError::InvalidWindowRestoration)?;
+                            Ok((restoration, fence))
+                        })
+                    },
+                    |error| format!("上一份恢复 JSON 无效：{error}。严格覆盖 owned_region 且不要认领 context，只返回完整 JSON。"),
+                )
+                .await;
+            match result {
+                Ok((restoration, diagnostics)) => {
+                    return Ok(TranscriptWindowRestorationResult {
+                        restoration,
+                        diagnostics: diagnostics.restoration(),
+                    });
+                }
+                Err(error) if is_restoration_failure(&error) => {
+                    if attempt + 1 == attempts {
+                        if self.config.max_fresh_restoration_retries == 0 {
+                            return Err(error);
+                        }
+                        return Err(ChatCompletionsError::FreshRestorationRetryLimit {
+                            limit: self.config.max_fresh_restoration_retries,
+                            source: Box::new(error),
+                        });
+                    }
+                    previous_error = Some(error.to_string());
+                    eprintln!(
+                        "Transcript restoration window {} remained invalid; starting clean retry {}/{} (overall attempt {}/{attempts})",
+                        task.window_index,
+                        attempt + 1,
+                        self.config.max_fresh_restoration_retries,
+                        attempt + 2,
+                    );
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("the bounded fresh-attempt loop always returns")
     }
 
     async fn compare_passages(
@@ -1407,5 +1466,11 @@ mod tests {
         apply_turn_overrides(&mut request, &config);
         assert_eq!(request["effort"], "high");
         assert_eq!(request["serviceTierForTurn"], "priority");
+    }
+
+    #[test]
+    fn restoration_defaults_to_five_clean_retries() {
+        let config = CodexAppServerConfig::new("gpt-test").unwrap();
+        assert_eq!(config.max_fresh_restoration_retries, 5);
     }
 }

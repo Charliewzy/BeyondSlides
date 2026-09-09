@@ -470,6 +470,120 @@ async fn invalid_restoration_is_returned_to_the_model_for_repair() -> Result<(),
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn restoration_retries_invalid_ranges_in_clean_numbered_conversations()
+-> Result<(), Box<dyn Error>> {
+    let invalid = json!({
+        "spans": [{
+            "kind": "text",
+            "source_start": 3180,
+            "source_end": 318,
+            "text": "错误的来源范围。"
+        }]
+    })
+    .to_string();
+    let api = mock_api(vec![
+        final_response("initial", invalid.clone()),
+        final_response("repair-1", invalid.clone()),
+        final_response("repair-2", invalid.clone()),
+        final_response("fresh-1", invalid),
+        final_response("fresh-2", restoration_json()),
+    ])
+    .await;
+    let client = beyond_slides::ChatCompletionsClient::new(ChatCompletionsConfig::new(
+        base_url(&api),
+        "test-key",
+        "test-model",
+    )?);
+    let sources = sources()?;
+    let windows = build_windows(
+        &sources,
+        WindowingConfig::new(100, Duration::from_secs(60), 20)?,
+    );
+    let task = build_restoration_tasks(&windows)
+        .into_iter()
+        .next()
+        .expect("the transcript creates one restoration task");
+
+    let result = client.restore_window(&task).await?;
+
+    assert_eq!(result.restoration.spans.len(), 1);
+    let requests = api
+        .received_requests()
+        .await
+        .expect("mock request recording is enabled");
+    assert_eq!(requests.len(), 5);
+    let first_fresh: Value = requests[3].body_json()?;
+    let second_fresh: Value = requests[4].body_json()?;
+    assert_eq!(first_fresh["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(second_fresh["messages"].as_array().unwrap().len(), 2);
+    assert!(
+        first_fresh["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("全新重试 1/5（总体第 2/6 次尝试）")
+    );
+    assert!(
+        second_fresh["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("全新重试 2/5（总体第 3/6 次尝试）")
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restoration_stops_after_the_clean_retry_limit() -> Result<(), Box<dyn Error>> {
+    let invalid = json!({
+        "spans": [{
+            "kind": "text",
+            "source_start": 3180,
+            "source_end": 318,
+            "text": "错误的来源范围。"
+        }]
+    })
+    .to_string();
+    let api = mock_api(vec![
+        final_response("initial", invalid.clone()),
+        final_response("repair", invalid.clone()),
+        final_response("fresh-1", invalid.clone()),
+        final_response("fresh-2", invalid),
+    ])
+    .await;
+    let client = beyond_slides::ChatCompletionsClient::new(
+        ChatCompletionsConfig::new(base_url(&api), "test-key", "test-model")?
+            .with_max_final_answer_repairs(1)?
+            .with_max_fresh_restoration_retries(2),
+    );
+    let sources = sources()?;
+    let windows = build_windows(
+        &sources,
+        WindowingConfig::new(100, Duration::from_secs(60), 20)?,
+    );
+    let task = build_restoration_tasks(&windows)
+        .into_iter()
+        .next()
+        .expect("the transcript creates one restoration task");
+
+    let error = client
+        .restore_window(&task)
+        .await
+        .expect_err("invalid restoration must stop after the clean retry limit");
+
+    assert!(matches!(
+        error,
+        ChatCompletionsError::FreshRestorationRetryLimit { limit: 2, .. }
+    ));
+    assert_eq!(
+        api.received_requests()
+            .await
+            .expect("mock request recording is enabled")
+            .len(),
+        4
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn trace_redacts_credentials_echoed_by_success_and_error_responses()
 -> Result<(), Box<dyn Error>> {
     let key = "dummy-trace-key/with+encoding";

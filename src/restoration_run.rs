@@ -23,11 +23,16 @@ const MAX_OWNED_CHARACTERS: usize = 400;
 const MAX_OWNED_DURATION_SECONDS: u64 = 60;
 const CONTEXT_CHARACTERS: usize = 150;
 const MAX_FINAL_ANSWER_REPAIRS: usize = 2;
+const MAX_FRESH_RESTORATION_RETRIES: usize = 5;
 const MAX_PROVIDER_RETRIES: usize = 2;
 const MAX_OUTPUT_TOKENS: u32 = 8_192;
 pub(crate) const RESTORED_TRANSCRIPT_FILE: &str = "restored-transcript.json";
 const RESTORED_TEXT_FILE: &str = "restored-transcript.txt";
 const DIAGNOSTICS_FILE: &str = "diagnostics.json";
+
+const fn default_max_fresh_restoration_retries() -> usize {
+    MAX_FRESH_RESTORATION_RETRIES
+}
 
 pub async fn run_complete(
     transcript_path: &OsStr,
@@ -137,6 +142,7 @@ fn restoration_client(
         config
             .with_max_provider_retries(MAX_PROVIDER_RETRIES)
             .with_max_final_answer_repairs(MAX_FINAL_ANSWER_REPAIRS)?
+            .with_max_fresh_restoration_retries(MAX_FRESH_RESTORATION_RETRIES)
             .with_max_output_tokens(MAX_OUTPUT_TOKENS)
     })
 }
@@ -193,6 +199,8 @@ struct RestorationRunManifest {
     context_characters: usize,
     max_concurrent_windows: usize,
     max_final_answer_repairs: usize,
+    #[serde(default = "default_max_fresh_restoration_retries")]
+    max_fresh_restoration_retries: usize,
     max_provider_retries: usize,
     max_output_tokens: u32,
 }
@@ -215,6 +223,7 @@ impl RestorationRunManifest {
             context_characters: CONTEXT_CHARACTERS,
             max_concurrent_windows: provider.max_concurrency(),
             max_final_answer_repairs: MAX_FINAL_ANSWER_REPAIRS,
+            max_fresh_restoration_retries: MAX_FRESH_RESTORATION_RETRIES,
             max_provider_retries: MAX_PROVIDER_RETRIES,
             max_output_tokens: MAX_OUTPUT_TOKENS,
         }
@@ -225,6 +234,7 @@ impl RestorationRunManifest {
         actual.max_concurrent_windows = expected.max_concurrent_windows;
         actual.max_provider_retries = expected.max_provider_retries;
         actual.max_final_answer_repairs = expected.max_final_answer_repairs;
+        actual.max_fresh_restoration_retries = expected.max_fresh_restoration_retries;
         actual == *expected
     }
 }
@@ -241,6 +251,7 @@ mod tests {
         changed.max_concurrent_windows = 20;
         changed.max_provider_retries = 6;
         changed.max_final_answer_repairs = 3;
+        changed.max_fresh_restoration_retries = 7;
         assert!(original.compatible(&changed));
         for field in [
             "model_backend",
@@ -269,7 +280,15 @@ mod tests {
             .as_object_mut()
             .expect("a restoration manifest is an object")
             .remove("model_backend");
+        legacy
+            .as_object_mut()
+            .expect("a restoration manifest is an object")
+            .remove("max_fresh_restoration_retries");
         let legacy: RestorationRunManifest = serde_json::from_value(legacy).unwrap();
         assert_eq!(legacy.model_backend, "openai_compatible");
+        assert_eq!(
+            legacy.max_fresh_restoration_retries,
+            MAX_FRESH_RESTORATION_RETRIES
+        );
     }
 }

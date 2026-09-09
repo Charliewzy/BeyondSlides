@@ -45,6 +45,7 @@ use crate::{
 
 const DEFAULT_MAX_TOOL_ROUNDS: usize = 4;
 const DEFAULT_MAX_FINAL_ANSWER_REPAIRS: usize = 2;
+const DEFAULT_MAX_FRESH_RESTORATION_RETRIES: usize = 5;
 const DEFAULT_MAX_FRESH_ANNOTATION_RETRIES: usize = 5;
 const DEFAULT_MAX_FRESH_COMPARISON_RETRIES: usize = 5;
 const DEFAULT_MAX_SEARCH_RESULTS: usize = 5;
@@ -67,6 +68,7 @@ pub struct ChatCompletionsConfig {
     model: String,
     max_tool_rounds: usize,
     max_final_answer_repairs: usize,
+    max_fresh_restoration_retries: usize,
     max_fresh_annotation_retries: usize,
     max_fresh_comparison_retries: usize,
     max_search_results: usize,
@@ -113,6 +115,7 @@ impl ChatCompletionsConfig {
             model,
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
             max_final_answer_repairs: DEFAULT_MAX_FINAL_ANSWER_REPAIRS,
+            max_fresh_restoration_retries: DEFAULT_MAX_FRESH_RESTORATION_RETRIES,
             max_fresh_annotation_retries: DEFAULT_MAX_FRESH_ANNOTATION_RETRIES,
             max_fresh_comparison_retries: DEFAULT_MAX_FRESH_COMPARISON_RETRIES,
             max_search_results: DEFAULT_MAX_SEARCH_RESULTS,
@@ -135,6 +138,16 @@ impl ChatCompletionsConfig {
         }
         self.max_final_answer_repairs = max_final_answer_repairs;
         Ok(self)
+    }
+
+    /// Limits clean retries after transcript restoration remains invalid after
+    /// its in-conversation repairs. Zero disables clean retries.
+    pub const fn with_max_fresh_restoration_retries(
+        mut self,
+        max_fresh_restoration_retries: usize,
+    ) -> Self {
+        self.max_fresh_restoration_retries = max_fresh_restoration_retries;
+        self
     }
 
     /// Limits clean retries after restored annotation repeatedly changes its
@@ -275,6 +288,7 @@ pub struct ChatCompletionsClient {
     options: ChatOptions,
     max_tool_rounds: usize,
     max_final_answer_repairs: usize,
+    max_fresh_restoration_retries: usize,
     max_fresh_annotation_retries: usize,
     max_fresh_comparison_retries: usize,
     max_search_results: usize,
@@ -310,6 +324,7 @@ impl ChatCompletionsClient {
             options,
             max_tool_rounds: config.max_tool_rounds,
             max_final_answer_repairs: config.max_final_answer_repairs,
+            max_fresh_restoration_retries: config.max_fresh_restoration_retries,
             max_fresh_annotation_retries: config.max_fresh_annotation_retries,
             max_fresh_comparison_retries: config.max_fresh_comparison_retries,
             max_search_results: config.max_search_results,
@@ -431,19 +446,65 @@ impl ChatCompletionsClient {
         let message = task
             .message()
             .map_err(ChatCompletionsError::SerializeTask)?;
-        let request = ChatRequest::from_user(message.input).with_system(message.instructions);
-        let outcome = self
-            .run_conversation(
-                request,
-                RestorationWorkflow { task: *task },
-                self.max_final_answer_repairs,
-            )
-            .await?;
+        let total_attempts = self.max_fresh_restoration_retries.saturating_add(1);
+        let mut fresh_retry = 0;
+        let mut previous_error: Option<String> = None;
+        loop {
+            let instructions = previous_error.as_ref().map_or_else(
+                || message.instructions.to_owned(),
+                |error| {
+                    fresh_restoration_retry_instructions(
+                        message.instructions,
+                        task,
+                        fresh_retry,
+                        self.max_fresh_restoration_retries,
+                        error,
+                    )
+                },
+            );
+            let request = ChatRequest::from_user(message.input.clone()).with_system(instructions);
+            let final_answer_repairs = if fresh_retry == 0 {
+                self.max_final_answer_repairs
+            } else {
+                0
+            };
+            let result = self
+                .run_conversation(
+                    request,
+                    RestorationWorkflow { task: *task },
+                    final_answer_repairs,
+                )
+                .await;
 
-        Ok(TranscriptWindowRestorationResult {
-            restoration: outcome.output,
-            diagnostics: RestorationDiagnostics::from(outcome.diagnostics),
-        })
+            match result {
+                Ok(outcome) => {
+                    return Ok(TranscriptWindowRestorationResult {
+                        restoration: outcome.output,
+                        diagnostics: RestorationDiagnostics::from(outcome.diagnostics),
+                    });
+                }
+                Err(error) if is_restoration_failure(&error) => {
+                    if self.max_fresh_restoration_retries == 0 {
+                        return Err(error);
+                    }
+                    if fresh_retry == self.max_fresh_restoration_retries {
+                        return Err(ChatCompletionsError::FreshRestorationRetryLimit {
+                            limit: self.max_fresh_restoration_retries,
+                            source: Box::new(error),
+                        });
+                    }
+                    previous_error = Some(error.to_string());
+                    fresh_retry += 1;
+                    eprintln!(
+                        "Transcript restoration window {} remained invalid; starting clean retry {fresh_retry}/{} (overall attempt {}/{total_attempts})",
+                        task.window_index,
+                        self.max_fresh_restoration_retries,
+                        fresh_retry + 1,
+                    );
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     /// Runs one validated batch of lecture-wide best--worst comparisons.
@@ -1438,6 +1499,10 @@ pub enum ChatCompletionsError {
         limit: usize,
         source: Box<ChatCompletionsError>,
     },
+    FreshRestorationRetryLimit {
+        limit: usize,
+        source: Box<ChatCompletionsError>,
+    },
     FreshAnnotationRetryLimit {
         limit: usize,
         source: Box<ChatCompletionsError>,
@@ -1498,6 +1563,10 @@ impl fmt::Display for ChatCompletionsError {
             Self::FinalAnswerRepairLimit { limit, source } => write!(
                 formatter,
                 "the model still returned an invalid structured response after {limit} repair attempts: {source}"
+            ),
+            Self::FreshRestorationRetryLimit { limit, source } => write!(
+                formatter,
+                "the model still returned an invalid transcript restoration after {limit} clean retries: {source}"
             ),
             Self::FreshAnnotationRetryLimit { limit, source } => write!(
                 formatter,
@@ -1574,6 +1643,7 @@ impl Error for ChatCompletionsError {
             Self::InvalidComparativeRanking(error) => Some(error),
             Self::InvalidBoundaries(error) => Some(error),
             Self::FinalAnswerRepairLimit { source, .. }
+            | Self::FreshRestorationRetryLimit { source, .. }
             | Self::FreshAnnotationRetryLimit { source, .. }
             | Self::FreshComparisonRetryLimit { source, .. } => Some(source.as_ref()),
             Self::Provider(_)
@@ -1944,6 +2014,17 @@ pub(crate) fn is_passage_text_difference(error: &ChatCompletionsError) -> bool {
     }
 }
 
+pub(crate) fn is_restoration_failure(error: &ChatCompletionsError) -> bool {
+    match error {
+        ChatCompletionsError::InvalidRestorationJson(_)
+        | ChatCompletionsError::InvalidWindowRestoration(_) => true,
+        ChatCompletionsError::FinalAnswerRepairLimit { source, .. } => {
+            is_restoration_failure(source)
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn is_comparative_ranking_failure(error: &ChatCompletionsError) -> bool {
     match error {
         ChatCompletionsError::InvalidComparativeRankingJson(_)
@@ -1959,15 +2040,34 @@ fn restoration_repair_instruction(
     task: &TranscriptRestorationTask<'_>,
     error: &ChatCompletionsError,
 ) -> String {
-    let owned_range = match (task.owned_region.first(), task.owned_region.last()) {
+    let owned_range = restoration_owned_range_instruction(task);
+    format!(
+        "你上一条最终答案未通过验证：{error}\n请丢弃上一答案，从原始输入的 owned_region 重新生成完整 TranscriptWindowRestoration JSON 对象；不要平移或局部修补上一答案的 ID。{owned_range} source_start 和 source_end 必须直接复制 owned_region 中的 segment.id，不得按窗口位置从 0 重新编号。不得输出 left_context 或 right_context 的文字，即使句子因此不完整。spans 必须按顺序、无重叠、无遗漏地完整划分 owned_region；不要输出 Markdown 或解释。"
+    )
+}
+
+fn restoration_owned_range_instruction(task: &TranscriptRestorationTask<'_>) -> String {
+    match (task.owned_region.first(), task.owned_region.last()) {
         (Some(first), Some(last)) => format!(
             "本窗口只允许讲座全局来源 ID {} 至 {}。第一个 span 的 source_start 必须是 {}，最后一个 span 的 source_end 必须是 {}。",
             first.id.0, last.id.0, first.id.0, last.id.0
         ),
         _ => "本窗口的 owned_region 为空，不得输出任何 span。".into(),
-    };
+    }
+}
+
+pub(crate) fn fresh_restoration_retry_instructions(
+    instructions: &str,
+    task: &TranscriptRestorationTask<'_>,
+    fresh_retry: usize,
+    max_fresh_retries: usize,
+    previous_error: &str,
+) -> String {
+    let overall_attempt = fresh_retry.saturating_add(1);
+    let total_attempts = max_fresh_retries.saturating_add(1);
+    let owned_range = restoration_owned_range_instruction(task);
     format!(
-        "你上一条最终答案未通过验证：{error}\n请丢弃上一答案，从原始输入的 owned_region 重新生成完整 TranscriptWindowRestoration JSON 对象；不要平移或局部修补上一答案的 ID。{owned_range} source_start 和 source_end 必须直接复制 owned_region 中的 segment.id，不得按窗口位置从 0 重新编号。不得输出 left_context 或 right_context 的文字，即使句子因此不完整。spans 必须按顺序、无重叠、无遗漏地完整划分 owned_region；不要输出 Markdown 或解释。"
+        "{instructions}\n\n全新重试 {fresh_retry}/{max_fresh_retries}（总体第 {overall_attempt}/{total_attempts} 次尝试）：先前尝试未能返回有效的恢复结果：{previous_error}。请丢弃先前答案并从头重新读取原始输入的 owned_region。{owned_range} source_start 和 source_end 必须直接复制 owned_region 中的 segment.id，不得认领 context，不得平移、猜测或重新编号。spans 必须按顺序、无重叠、无遗漏地完整划分 owned_region。"
     )
 }
 

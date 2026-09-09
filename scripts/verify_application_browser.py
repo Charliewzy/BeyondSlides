@@ -41,8 +41,33 @@ def main():
             assert example.locator("[data-example-notice]").is_visible()
             assert example.locator("[data-slide]").count() == 80
             assert example.locator("[data-passage]").count() > 100
+            assert example.locator(".lecture-paragraph").count() == example.locator("[data-passage]").count()
             assert example.locator("audio").count() == 0
             example.locator("[data-minimap-prototype]").wait_for(state="visible")
+            assert example.locator("[data-reader-resizer]").count() == 3
+            layout = example.locator("[data-reader-layout]")
+            before = layout.bounding_box()
+            right_resizer = example.locator('[data-reader-resizer="right"]')
+            right = right_resizer.bounding_box()
+            example.mouse.move(right["x"] + right["width"] / 2, right["y"] + 200)
+            example.mouse.down()
+            example.mouse.move(right["x"] + right["width"] / 2 - 70, right["y"] + 200)
+            example.mouse.up()
+            after_outer = layout.bounding_box()
+            assert after_outer["width"] < before["width"] - 100
+            assert abs((after_outer["x"] + after_outer["width"] / 2) - (before["x"] + before["width"] / 2)) < 2
+            slide_before = example.locator(".slide-panel").bounding_box()["width"]
+            middle_resizer = example.locator('[data-reader-resizer="middle"]')
+            middle = middle_resizer.bounding_box()
+            example.mouse.move(middle["x"] + middle["width"] / 2, middle["y"] + 200)
+            example.mouse.down()
+            example.mouse.move(middle["x"] + middle["width"] / 2 + 50, middle["y"] + 200)
+            example.mouse.up()
+            slide_after = example.locator(".slide-panel").bounding_box()["width"]
+            assert slide_after < slide_before - 35
+            assert example.evaluate("localStorage.getItem('beyond-slides.reader-layout.v1') !== null")
+            right_resizer.dblclick()
+            assert example.evaluate("localStorage.getItem('beyond-slides.reader-layout.v1') === null")
             assert example.locator("[data-slide] img").first.evaluate("image => image.naturalWidth > 0 && image.src.startsWith('data:image/png;base64,')")
             example.locator("#importance-threshold").evaluate("input => { input.value = 6; input.dispatchEvent(new Event('input', {bubbles: true})); }")
             assert example.locator(".importance-emphasized").count() == 0
@@ -172,6 +197,8 @@ def main():
             assert reader.locator(".minimap-prototype-passage").count() == reader.locator("[data-passage]").count()
             reader.set_viewport_size({"width": 390, "height": 844})
             assert reader.locator("[data-minimap-prototype]").is_hidden()
+            for resizer in reader.locator("[data-reader-resizer]").all():
+                assert resizer.is_hidden()
             reader.close()
             with page.expect_download() as download:
                 page.locator("#export-report").click()

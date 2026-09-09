@@ -23,7 +23,10 @@
       </dl>
     </header>
 
-    <div class="lecture-layout{% if has_slides %} has-slides{% endif %}">
+    <div class="lecture-layout{% if has_slides %} has-slides{% endif %}" data-reader-layout>
+{% if has_slides %}
+      <div class="reader-resizer reader-resizer-outer reader-resizer-left" data-reader-resizer="left" role="separator" aria-label="调整阅读区域左边界" aria-orientation="vertical" tabindex="0" title="拖动调整整体宽度；双击恢复默认"></div>
+{% endif %}
       <section class="transcript-card" aria-labelledby="transcript-title">
         <header>
           <p class="section-kicker">Continuous lecture transcript</p>
@@ -45,10 +48,11 @@
             <option value="0"></option><option value="1"></option><option value="2"></option><option value="3"></option><option value="4"></option><option value="5"></option><option value="6"></option>
           </datalist>
         </aside>
-        <p class="continuous-transcript">{% for passage in passages %}<span class="passage" tabindex="0" data-passage data-source-start="{{ passage.source_start }}" data-source-end="{{ passage.source_end }}" data-time="{{ passage.timestamp }}" data-audio-start-ms="{{ passage.audio_start_ms }}" data-audio-end-ms="{{ passage.audio_end_ms }}" data-audio-basis="{{ passage.audio_basis }}" data-slide-position="{{ passage.slide_position }}" data-slide-number="{{ passage.slide_number }}" data-importance="{{ passage.importance }}" data-novelty="{{ passage.novelty }}" data-importance-percentile="{{ passage.importance_percentile }}" data-novelty-percentile="{{ passage.novelty_percentile }}">{{ passage.text }}</span>{% endfor %}</p>
+        <div class="continuous-transcript">{% for passage in passages %}<p class="lecture-paragraph"><span class="passage" tabindex="0" data-passage data-source-start="{{ passage.source_start }}" data-source-end="{{ passage.source_end }}" data-time="{{ passage.timestamp }}" data-audio-start-ms="{{ passage.audio_start_ms }}" data-audio-end-ms="{{ passage.audio_end_ms }}" data-audio-basis="{{ passage.audio_basis }}" data-slide-position="{{ passage.slide_position }}" data-slide-number="{{ passage.slide_number }}" data-importance="{{ passage.importance }}" data-novelty="{{ passage.novelty }}" data-importance-percentile="{{ passage.importance_percentile }}" data-novelty-percentile="{{ passage.novelty_percentile }}">{{ passage.text }}</span></p>{% endfor %}</div>
       </section>
 
 {% if has_slides %}
+      <div class="reader-resizer reader-resizer-middle" data-reader-resizer="middle" role="separator" aria-label="调整讲稿与幻灯片宽度" aria-orientation="vertical" tabindex="0" title="拖动调整两栏宽度；双击恢复默认"></div>
 {% include "continuous_report_minimap_prototype.html" %}
       <aside class="slide-panel" aria-labelledby="slide-panel-title">
         <header class="slide-panel-header">
@@ -74,6 +78,7 @@
           </div>
         </div>
       </aside>
+      <div class="reader-resizer reader-resizer-outer reader-resizer-right" data-reader-resizer="right" role="separator" aria-label="调整阅读区域右边界" aria-orientation="vertical" tabindex="0" title="拖动调整整体宽度；双击恢复默认"></div>
 {% endif %}
     </div>
   </main>
@@ -96,6 +101,7 @@
   <script>
 {% include "continuous_report.js" %}
 {% include "continuous_report_minimap_prototype.js" %}
+{% include "continuous_report_layout.js" %}
   </script>
 </body>
 </html>

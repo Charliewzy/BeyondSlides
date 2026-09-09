@@ -8,8 +8,8 @@ body.minimap-prototype-active {
 }
 
 body.minimap-prototype-active .lecture-layout.has-slides {
-  grid-template-columns: minmax(0, 1fr) var(--prototype-minimap-width) minmax(24rem, 34rem);
-  gap: .8rem;
+  grid-template-columns: minmax(24rem, 1fr) .75rem var(--prototype-minimap-width) minmax(24rem, var(--slide-panel-width, 34rem));
+  gap: .45rem;
 }
 
 .lecture-minimap-prototype {

@@ -54,6 +54,41 @@ fn report_renders_authoritative_passages_in_continuous_order() -> Result<(), Box
     assert!(report.contains("data-novelty-percentile=\"40.0\""));
     assert!(report.contains("data-source-start=\"0\""));
     assert!(report.contains("data-time=\"00:00–00:01\""));
+    assert_eq!(report.matches("class=\"lecture-paragraph\"").count(), 2);
+    assert!(report.contains("<div class=\"continuous-transcript\">"));
+    Ok(())
+}
+
+#[test]
+fn report_supports_centered_three_edge_desktop_resizing() -> Result<(), Box<dyn Error>> {
+    let analysis = analysis()?;
+    let media = ContinuousReportMedia {
+        slide_images: vec![
+            ReportSlideImage {
+                source: "slide-0001.png".into(),
+                width: 960,
+                height: 540,
+            },
+            ReportSlideImage {
+                source: "slide-0002.png".into(),
+                width: 960,
+                height: 540,
+            },
+        ],
+        ..ContinuousReportMedia::default()
+    };
+
+    let report = render_continuous_report_with_media(&analysis, &media)?;
+
+    assert_eq!(report.matches("data-reader-resizer=").count(), 3);
+    assert!(report.contains("data-reader-resizer=\"left\""));
+    assert!(report.contains("data-reader-resizer=\"middle\""));
+    assert!(report.contains("data-reader-resizer=\"right\""));
+    assert!(report.contains("readerWidth: drag.initial.readerWidth + 2 * outwardDelta"));
+    assert!(report.contains("slideWidth: drag.initial.slideWidth - delta"));
+    assert!(report.contains("localStorage.setItem(storageKey"));
+    assert!(report.contains("resizer.addEventListener(\"dblclick\", resetLayout)"));
+    assert!(report.contains("(min-width: 70.001rem)"));
     Ok(())
 }
 

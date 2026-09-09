@@ -36,7 +36,7 @@ use crate::{
         is_passage_text_difference, parse_analysis, parse_restoration, parse_restored_analysis,
     },
     comparative_ranking::{ComparativeRankingTask, ProposedComparativeRanking},
-    model_trace::{ModelProviderFailure, ModelTraceContext},
+    model_trace::{ModelProviderFailure, ModelRequestAttempt, ModelTraceContext},
     request_scheduling::RequestFeedback,
     restoration::validate_window_restoration,
     restored_annotation::project_window_analysis,
@@ -253,15 +253,11 @@ impl CodexAppServerClient {
         repair: impl Fn(&ChatCompletionsError) -> String,
     ) -> Result<(T, CodexDiagnostics), ChatCompletionsError> {
         let server = self.server().await?;
-        let thread_id = server
-            .start_thread(&self.config.model)
-            .await
-            .map_err(codex_error)?;
-        let mut events = server.subscribe(&thread_id).map_err(codex_error)?;
-        let mut prompt = format!(
+        let initial_prompt = format!(
             "<instructions>\n{}\n</instructions>\n\n<lecture_data>\n{}\n</lecture_data>",
             task.instructions, task.input,
         );
+        let mut prompt = initial_prompt.clone();
         let mut diagnostics = CodexDiagnostics::default();
 
         for conversation_turn in 0..=task.max_repairs {
@@ -276,63 +272,139 @@ impl CodexAppServerClient {
                 conversation_turn,
                 request_kind,
             };
-            let permit = self.config.request_scheduler.acquire().await;
-            let mut request = json!({
-                "threadId": thread_id,
-                "input": [{"type": "text", "text": prompt}],
-                "model": self.config.model,
-                "approvalPolicy": "never",
-                "sandboxPolicy": {"type": "readOnly"},
-                "outputSchema": task.schema,
-            });
-            apply_turn_overrides(&mut request, &self.config);
-            let exchange_id = self
+            let turn = self
                 .config
-                .model_trace
-                .as_ref()
-                .map(|trace| {
-                    trace.record_request(
-                        context,
-                        0,
-                        ENDPOINT,
-                        &self.config.model,
-                        &request,
-                        &json!({"transport": "app-server", "sandbox": "read-only"}),
-                    )
+                .request_scheduler
+                .run_with_hedge(context, |permit| {
+                    let server = Arc::clone(&server);
+                    let prompt = prompt.clone();
+                    let schema = task.schema.clone();
+                    async move {
+                        let thread_id = match server.start_thread(&self.config.model).await {
+                            Ok(thread_id) => thread_id,
+                            Err(error) => {
+                                permit.finish(RequestFeedback::Failed { retry_after: None });
+                                return Err(codex_error(error));
+                            }
+                        };
+                        let mut events = match server.subscribe(&thread_id) {
+                            Ok(events) => events,
+                            Err(error) => {
+                                permit.finish(RequestFeedback::Failed { retry_after: None });
+                                return Err(codex_error(error));
+                            }
+                        };
+                        let subscription =
+                            CodexThreadSubscription::new(Arc::clone(&server), thread_id.clone());
+                        let mut request = json!({
+                            "threadId": thread_id.clone(),
+                            "input": [{"type": "text", "text": prompt}],
+                            "model": self.config.model,
+                            "approvalPolicy": "never",
+                            "sandboxPolicy": {"type": "readOnly"},
+                            "outputSchema": schema,
+                        });
+                        apply_turn_overrides(&mut request, &self.config);
+                        let metadata = permit.metadata();
+                        let exchange_id = self
+                            .config
+                            .model_trace
+                            .as_ref()
+                            .map(|trace| {
+                                trace.record_request_attempt(
+                                    context,
+                                    ModelRequestAttempt {
+                                        provider_attempt: 0,
+                                        endpoint: ENDPOINT,
+                                        model: &self.config.model,
+                                        request: &request,
+                                        options: &json!({
+                                            "transport": "app-server",
+                                            "sandbox": "read-only"
+                                        }),
+                                        scheduling: metadata,
+                                    },
+                                )
+                            })
+                            .transpose()
+                            .map_err(ChatCompletionsError::ModelTrace)?;
+                        let cancellation = self.config.model_trace.as_ref().and_then(|trace| {
+                            exchange_id
+                                .map(|exchange_id| trace.cancellation_guard(exchange_id, context))
+                        });
+                        let started = Instant::now();
+                        let turn = server
+                            .turn(&thread_id, request, &mut events, self.config.turn_timeout)
+                            .await;
+                        match turn {
+                            Ok(turn) => {
+                                permit.finish(RequestFeedback::Success);
+                                if let (Some(trace), Some(exchange_id)) =
+                                    (&self.config.model_trace, exchange_id)
+                                {
+                                    trace
+                                        .record_response(
+                                            exchange_id,
+                                            context,
+                                            0,
+                                            started.elapsed(),
+                                            &json!({
+                                                "content": turn.content,
+                                                "usage": {
+                                                    "prompt_tokens": turn.input_tokens,
+                                                    "completion_tokens": turn.output_tokens,
+                                                },
+                                            }),
+                                            None,
+                                        )
+                                        .map_err(ChatCompletionsError::ModelTrace)?;
+                                }
+                                if let Some(cancellation) = cancellation {
+                                    cancellation.complete();
+                                }
+                                subscription.complete().await;
+                                Ok((turn, exchange_id))
+                            }
+                            Err(error) => {
+                                permit.finish(RequestFeedback::Failed { retry_after: None });
+                                if let (Some(trace), Some(exchange_id)) =
+                                    (&self.config.model_trace, exchange_id)
+                                {
+                                    trace
+                                        .record_provider_error(
+                                            exchange_id,
+                                            context,
+                                            ModelProviderFailure {
+                                                provider_attempt: 0,
+                                                elapsed: started.elapsed(),
+                                                retryable: false,
+                                                will_retry: false,
+                                                error: crate::ModelProviderError {
+                                                    kind: "codex_app_server".into(),
+                                                    message: error.clone(),
+                                                    status: None,
+                                                    body: None,
+                                                },
+                                            },
+                                        )
+                                        .map_err(ChatCompletionsError::ModelTrace)?;
+                                }
+                                if let Some(cancellation) = cancellation {
+                                    cancellation.complete();
+                                }
+                                subscription.complete().await;
+                                Err(codex_error(error))
+                            }
+                        }
+                    }
                 })
-                .transpose()
-                .map_err(ChatCompletionsError::ModelTrace)?;
-            let started = Instant::now();
-            let turn = server
-                .turn(&thread_id, request, &mut events, self.config.turn_timeout)
                 .await;
             match turn {
-                Ok(turn) => {
-                    permit.finish(RequestFeedback::Success);
+                Ok((turn, exchange_id)) => {
                     diagnostics.prompt_tokens =
                         add_optional(diagnostics.prompt_tokens, turn.input_tokens);
                     diagnostics.completion_tokens =
                         add_optional(diagnostics.completion_tokens, turn.output_tokens);
-                    if let (Some(trace), Some(exchange_id)) =
-                        (&self.config.model_trace, exchange_id)
-                    {
-                        trace
-                            .record_response(
-                                exchange_id,
-                                context,
-                                0,
-                                started.elapsed(),
-                                &json!({
-                                    "content": turn.content,
-                                    "usage": {
-                                        "prompt_tokens": turn.input_tokens,
-                                        "completion_tokens": turn.output_tokens,
-                                    },
-                                }),
-                                None,
-                            )
-                            .map_err(ChatCompletionsError::ModelTrace)?;
-                    }
                     match parse(&turn.content) {
                         Ok((output, accepted_json_fence)) => {
                             if let (Some(trace), Some(exchange_id)) =
@@ -343,7 +415,6 @@ impl CodexAppServerClient {
                                     .map_err(ChatCompletionsError::ModelTrace)?;
                             }
                             diagnostics.accepted_json_fence = accepted_json_fence;
-                            server.unsubscribe(&thread_id).await;
                             return Ok((output, diagnostics));
                         }
                         Err(error) => {
@@ -361,44 +432,21 @@ impl CodexAppServerClient {
                                     .map_err(ChatCompletionsError::ModelTrace)?;
                             }
                             if conversation_turn == task.max_repairs {
-                                server.unsubscribe(&thread_id).await;
                                 return Err(ChatCompletionsError::FinalAnswerRepairLimit {
                                     limit: task.max_repairs,
                                     source: Box::new(error),
                                 });
                             }
                             diagnostics.final_answer_repairs += 1;
-                            prompt = repair(&error);
+                            prompt = format!(
+                                "{initial_prompt}\n\n<previous_invalid_response>\n{}\n</previous_invalid_response>\n\n<repair>\n{}\n</repair>",
+                                turn.content,
+                                repair(&error),
+                            );
                         }
                     }
                 }
-                Err(error) => {
-                    permit.finish(RequestFeedback::Failed { retry_after: None });
-                    if let (Some(trace), Some(exchange_id)) =
-                        (&self.config.model_trace, exchange_id)
-                    {
-                        trace
-                            .record_provider_error(
-                                exchange_id,
-                                context,
-                                ModelProviderFailure {
-                                    provider_attempt: 0,
-                                    elapsed: started.elapsed(),
-                                    retryable: false,
-                                    will_retry: false,
-                                    error: crate::ModelProviderError {
-                                        kind: "codex_app_server".into(),
-                                        message: error.clone(),
-                                        status: None,
-                                        body: None,
-                                    },
-                                },
-                            )
-                            .map_err(ChatCompletionsError::ModelTrace)?;
-                    }
-                    server.unsubscribe(&thread_id).await;
-                    return Err(codex_error(error));
-                }
+                Err(error) => return Err(error),
             }
         }
         unreachable!("the bounded repair loop always returns")
@@ -895,7 +943,7 @@ impl AppServer {
     }
 
     async fn turn(
-        &self,
+        self: &Arc<Self>,
         thread_id: &str,
         params: Value,
         events: &mut mpsc::UnboundedReceiver<Result<Value, String>>,
@@ -907,6 +955,8 @@ impl AppServer {
             .and_then(Value::as_str)
             .ok_or("turn/start returned no turn id")?
             .to_owned();
+        let cancellation =
+            CodexTurnCancellation::new(Arc::clone(self), thread_id.to_owned(), turn_id.clone());
         let wait = async {
             let mut content = None;
             let mut input_tokens = None;
@@ -965,10 +1015,16 @@ impl AppServer {
             }
             Err("Codex app-server closed the event stream".into())
         };
-        tokio::time::timeout(timeout, wait)
-            .await
-            .map_err(|_| format!("Codex turn timed out after {} seconds", timeout.as_secs()))?
-            .map_err(|error| format!("thread {thread_id}: {error}"))
+        match tokio::time::timeout(timeout, wait).await {
+            Ok(result) => {
+                cancellation.complete();
+                result.map_err(|error| format!("thread {thread_id}: {error}"))
+            }
+            Err(_) => Err(format!(
+                "Codex turn timed out after {} seconds",
+                timeout.as_secs()
+            )),
+        }
     }
 
     async fn unsubscribe(&self, thread_id: &str) {
@@ -1029,6 +1085,86 @@ struct CodexTurn {
     content: String,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
+}
+
+struct CodexThreadSubscription {
+    server: Arc<AppServer>,
+    thread_id: String,
+    completed: bool,
+}
+
+struct CodexTurnCancellation {
+    server: Arc<AppServer>,
+    thread_id: String,
+    turn_id: String,
+    completed: bool,
+}
+
+impl CodexTurnCancellation {
+    fn new(server: Arc<AppServer>, thread_id: String, turn_id: String) -> Self {
+        Self {
+            server,
+            thread_id,
+            turn_id,
+            completed: false,
+        }
+    }
+
+    fn complete(mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for CodexTurnCancellation {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        let server = Arc::clone(&self.server);
+        let thread_id = self.thread_id.clone();
+        let turn_id = self.turn_id.clone();
+        tokio::spawn(async move {
+            let _ = server
+                .request(
+                    "turn/interrupt",
+                    json!({"threadId": thread_id, "turnId": turn_id}),
+                )
+                .await;
+        });
+    }
+}
+
+impl CodexThreadSubscription {
+    fn new(server: Arc<AppServer>, thread_id: String) -> Self {
+        Self {
+            server,
+            thread_id,
+            completed: false,
+        }
+    }
+
+    async fn complete(mut self) {
+        self.completed = true;
+        self.server.unsubscribe(&self.thread_id).await;
+    }
+}
+
+impl Drop for CodexThreadSubscription {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        if let Ok(mut subscribers) = self.server.subscribers.lock() {
+            subscribers.remove(&self.thread_id);
+        }
+        let server = Arc::clone(&self.server);
+        let thread_id = self.thread_id.clone();
+        tokio::spawn(async move {
+            let _ = server
+                .request("thread/unsubscribe", json!({"threadId": thread_id}))
+                .await;
+        });
+    }
 }
 
 async fn read_messages(server: Weak<AppServer>, stdout: tokio::process::ChildStdout) {

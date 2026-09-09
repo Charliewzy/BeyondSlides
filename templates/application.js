@@ -399,6 +399,7 @@ function render(status) {
   $("input-tokens").textContent = tokenUsage(usage.known_input_tokens, usage.missing_input_usage, usage.responses);
   $("output-tokens").textContent = tokenUsage(usage.known_output_tokens, usage.missing_output_usage, usage.responses);
   $("active-requests").textContent = usage.active_requests; $("retries").textContent = usage.retries;
+  $("hedges").textContent = `${usage.hedges} / 20`;
   const failed = state === "failed" || state === "interrupted";
   $("run-error-banner").hidden = !failed;
   $("run-error-title").textContent = state === "interrupted"

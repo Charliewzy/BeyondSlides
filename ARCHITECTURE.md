@@ -495,8 +495,8 @@ The OpenAI-compatible backend targets an explicitly configured Chat
 Completions endpoint through `genai`; model names are not used to infer a
 provider. JSON mode is requested. The Codex backend instead starts one
 long-lived local `codex app-server` over JSONL stdio and reuses the user's
-cached `codex login` session. Each task runs in an ephemeral thread rooted in
-an empty temporary directory with read-only sandboxing, approval disabled, and
+cached `codex login` session. Each model request runs in an ephemeral thread
+rooted in an empty temporary directory with read-only sandboxing, approval disabled, and
 an explicit structured-output schema. Lecture analysis does not require coding
 tools: built-in tool feature flags and web search are disabled, the model is
 instructed not to use tools, and any tool item nevertheless emitted by Codex is
@@ -519,6 +519,17 @@ epochs recover the constraining gate gradually. Latency helps compare the two
 gates, but is not itself treated as evidence of congestion. Fixed mode keeps
 its configured cap/spacing while still honoring shared cooldowns.
 
+Successful provider latency is learned separately for each workflow and
+request kind. After ten completed responses in one class, a request that
+exceeds three times that class's rolling p80 plus five seconds may launch one
+identical hedged attempt. At most three hedges may be active and at most twenty
+may start across a resumable run. The first successful provider response wins;
+the other attempt is cancelled. Hedge history and its run-wide budget are
+restored from model traces. Hedging is deliberately separate from ordinary
+admission: latency does not lower the learned concurrency limit, while the
+small exceptional hedge allowance prevents a slow request from waiting behind
+the queue it is intended to escape.
+
 All retries, repairs, and tool follow-ups acquire the same cancellation-safe
 attempt guard. Waiting and retry sleeps hold no HTTP slot, and pacing slots are
 committed only at admission. The CLI shares the scheduler across sequential
@@ -536,11 +547,13 @@ an editorial restoration pass disable expensive reasoning while semantic
 annotation retains it.
 
 Every provider attempt appends typed JSONL events for request, response,
-provider error, validation, or processing failure. Records correlate an
-exchange with workflow, zero-based work-item index, conversation turn, and
-request kind. The trace's legacy `window_index` field is a transcript-window
-index for restoration and window-owned passage preparation, a batch index for
-boundary classification, and a batch-plan index for comparative workflows.
+provider error, cancellation, validation, or processing failure. Records
+correlate an exchange with workflow, zero-based work-item index, conversation
+turn, request kind, and—when applicable—the logical request and hedge that
+caused the attempt. The trace's legacy `window_index` field is a
+transcript-window index for restoration and window-owned passage preparation,
+a batch index for boundary classification, and a batch-plan index for
+comparative workflows.
 API keys and authorization headers are never recorded.
 Complete records are flushed individually. On resume, a malformed
 non-newline-terminated crash tail is truncated; corruption in any completed

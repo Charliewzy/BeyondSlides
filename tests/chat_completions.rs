@@ -1,17 +1,21 @@
 use std::{
     collections::VecDeque,
     error::Error,
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 use beyond_slides::{
     AnalysisAssemblyError, ChatCompletionsConfig, ChatCompletionsError, ModelExchangeTrace,
-    ModelRequestKind, ModelTraceEvent, RestoredTranscript, RestoredTranscriptSpan, SearchError,
-    Slide, SlideDeck, SlideId, SlideScore, SlideScorer, Transcript, TranscriptSegment,
-    TranscriptSegmentId, TranscriptWindowTask, ValidatedSources, ValidationError, WindowingConfig,
-    build_annotation_tasks, build_restoration_tasks, build_restored_annotation_tasks,
-    build_restored_windows, build_windows, read_model_trace,
+    ModelRequestKind, ModelTraceEvent, ModelTraceRecord, ModelWorkflow, RequestScheduler,
+    RestoredTranscript, RestoredTranscriptSpan, SearchError, Slide, SlideDeck, SlideId, SlideScore,
+    SlideScorer, Transcript, TranscriptSegment, TranscriptSegmentId, TranscriptWindowTask,
+    ValidatedSources, ValidationError, WindowingConfig, build_annotation_tasks,
+    build_restoration_tasks, build_restored_annotation_tasks, build_restored_windows,
+    build_windows, read_model_trace,
 };
 use serde_json::{Value, json};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate, matchers::any};
@@ -891,6 +895,71 @@ async fn clients_share_admission_and_retry_backoff_releases_capacity() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_learned_straggler_is_hedged_and_the_loser_is_cancelled_in_the_trace()
+-> Result<(), Box<dyn Error>> {
+    let api = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(SlowOnceThenFast {
+            calls: AtomicUsize::new(0),
+            response: final_response("ok", restoration_json()),
+        })
+        .mount(&api)
+        .await;
+    let scheduler =
+        RequestScheduler::fixed(std::num::NonZeroUsize::new(4).unwrap(), Duration::ZERO);
+    let history: Vec<_> = (0..10)
+        .map(|event_index| ModelTraceRecord {
+            format_version: beyond_slides::MODEL_TRACE_FORMAT_VERSION,
+            event_index,
+            timestamp_unix_ms: 0,
+            exchange_id: event_index,
+            workflow: ModelWorkflow::Restoration,
+            window_index: event_index as usize,
+            conversation_turn: 0,
+            request_kind: ModelRequestKind::Initial,
+            event: ModelTraceEvent::Response {
+                provider_attempt: 0,
+                elapsed_ms: 1,
+                response: json!({}),
+                raw_response: None,
+            },
+        })
+        .collect();
+    scheduler.restore_hedging_history(&history);
+    let directory = tempfile::tempdir()?;
+    let trace_path = directory.path().join("model-trace.jsonl");
+    let client = beyond_slides::ChatCompletionsClient::new(
+        ChatCompletionsConfig::new(base_url(&api), "test-key", "test-model")?
+            .with_request_scheduler(scheduler.clone())
+            .with_model_trace(ModelExchangeTrace::open(&trace_path)?),
+    );
+    let sources = sources()?;
+    let windows = build_windows(
+        &sources,
+        WindowingConfig::new(100, Duration::from_secs(60), 20)?,
+    );
+    let task = build_restoration_tasks(&windows).remove(0);
+
+    client.restore_window(&task).await?;
+
+    assert_eq!(scheduler.snapshot().hedges_started, 1);
+    assert_eq!(api.received_requests().await.unwrap().len(), 2);
+    let records = read_model_trace(&trace_path)?;
+    assert!(records.iter().any(|record| {
+        matches!(
+            record.event,
+            ModelTraceEvent::Request { hedge: Some(_), .. }
+        )
+    }));
+    assert!(
+        records
+            .iter()
+            .any(|record| { matches!(record.event, ModelTraceEvent::Cancelled { .. }) })
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn construction_performs_no_model_discovery() -> Result<(), Box<dyn Error>> {
     let api = mock_api(vec![]).await;
     let _client = beyond_slides::ChatCompletionsClient::new(ChatCompletionsConfig::new(
@@ -1248,6 +1317,24 @@ impl Respond for FailOnceThenRespond {
 struct RateLimitOnceThenRespond {
     failed: Mutex<bool>,
     response: Value,
+}
+
+struct SlowOnceThenFast {
+    calls: AtomicUsize,
+    response: Value,
+}
+
+impl Respond for SlowOnceThenFast {
+    fn respond(&self, _request: &Request) -> ResponseTemplate {
+        let delay = if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            Duration::from_secs(6)
+        } else {
+            Duration::from_millis(1)
+        };
+        ResponseTemplate::new(200)
+            .set_delay(delay)
+            .set_body_json(&self.response)
+    }
 }
 
 impl Respond for RateLimitOnceThenRespond {

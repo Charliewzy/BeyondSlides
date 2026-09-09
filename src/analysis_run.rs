@@ -120,7 +120,10 @@ pub async fn run_complete(
     let lexical = LexicalSlideScorer::new(&sources);
     let dense = DenseSlideScorer::try_new(&sources)?;
     let hybrid = HybridSlideScorer::new(&lexical, &dense);
-    let client = analysis_client(&provider, open_run_model_trace(&run_directory)?)?;
+    let client = analysis_client(
+        &provider,
+        open_run_model_trace(&run_directory, &provider.scheduler())?,
+    )?;
     provider
         .worker
         .progress(crate::worker_control::Stage::Retrieval, 1, Some(1))?;

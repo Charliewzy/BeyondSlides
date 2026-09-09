@@ -31,7 +31,7 @@ use crate::{
         TranscriptWindowAnalysis, TranscriptWindowTask, validate_window_analysis,
     },
     comparative_ranking::{ComparativeRankingTask, ProposedComparativeRanking},
-    model_trace::{ModelProviderFailure, ModelTraceContext},
+    model_trace::{ModelProviderFailure, ModelRequestAttempt, ModelTraceContext},
     request_scheduling::RequestFeedback,
     restoration::{
         RestorationError, TranscriptRestorationTask, TranscriptWindowRestoration,
@@ -50,6 +50,11 @@ const DEFAULT_MAX_FRESH_COMPARISON_RETRIES: usize = 5;
 const DEFAULT_MAX_SEARCH_RESULTS: usize = 5;
 const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 4096;
 const MAX_PROVIDER_ERROR_CHARACTERS: usize = 2_000;
+
+enum ChatAttemptError {
+    Provider(genai::Error),
+    Trace(io::Error),
+}
 
 /// Configuration for one OpenAI-compatible Chat Completions endpoint.
 ///
@@ -688,76 +693,113 @@ impl ChatCompletionsClient {
         };
         let mut retries = 0;
         loop {
-            let permit = self.request_scheduler.acquire().await;
             let provider_attempt = retries;
-            let exchange_id = self
-                .model_trace
-                .as_ref()
-                .map(|trace| {
-                    trace.record_request(
-                        trace_context,
-                        provider_attempt,
-                        &self.endpoint,
-                        &self.model,
-                        &request,
-                        &options,
-                    )
-                })
-                .transpose()
-                .map_err(ChatCompletionsError::ModelTrace)?;
-            let started = Instant::now();
-            match self
-                .transport
-                .exec_chat(self.target.clone(), request.clone(), Some(&options))
-                .await
-            {
-                Ok(response) => {
-                    permit.finish(RequestFeedback::Success);
-                    if let (Some(trace), Some(exchange_id)) = (&self.model_trace, exchange_id) {
-                        trace
-                            .record_response(
-                                exchange_id,
-                                trace_context,
-                                provider_attempt,
-                                started.elapsed(),
-                                &response,
-                                response.captured_raw_body.clone(),
-                            )
-                            .map_err(ChatCompletionsError::ModelTrace)?;
+            let attempt = self
+                .request_scheduler
+                .run_with_hedge(trace_context, |permit| {
+                    let request = request.clone();
+                    let options = options.clone();
+                    async move {
+                        let metadata = permit.metadata();
+                        let exchange_id = self
+                            .model_trace
+                            .as_ref()
+                            .map(|trace| {
+                                trace.record_request_attempt(
+                                    trace_context,
+                                    ModelRequestAttempt {
+                                        provider_attempt,
+                                        endpoint: &self.endpoint,
+                                        model: &self.model,
+                                        request: &request,
+                                        options: &options,
+                                        scheduling: metadata,
+                                    },
+                                )
+                            })
+                            .transpose()
+                            .map_err(ChatAttemptError::Trace)?;
+                        let cancellation = self.model_trace.as_ref().and_then(|trace| {
+                            exchange_id.map(|exchange_id| {
+                                trace.cancellation_guard(exchange_id, trace_context)
+                            })
+                        });
+                        let started = Instant::now();
+                        match self
+                            .transport
+                            .exec_chat(self.target.clone(), request, Some(&options))
+                            .await
+                        {
+                            Ok(response) => {
+                                permit.finish(RequestFeedback::Success);
+                                if let (Some(trace), Some(exchange_id)) =
+                                    (&self.model_trace, exchange_id)
+                                {
+                                    trace
+                                        .record_response(
+                                            exchange_id,
+                                            trace_context,
+                                            provider_attempt,
+                                            started.elapsed(),
+                                            &response,
+                                            response.captured_raw_body.clone(),
+                                        )
+                                        .map_err(ChatAttemptError::Trace)?;
+                                }
+                                if let Some(cancellation) = cancellation {
+                                    cancellation.complete();
+                                }
+                                Ok((response, exchange_id))
+                            }
+                            Err(error) => {
+                                let retryable = is_retryable_provider_error(&error);
+                                let retry_delay = provider_retry_delay(&error, retries + 1);
+                                let feedback = if provider_error_status(&error) == Some(429) {
+                                    RequestFeedback::RateLimited {
+                                        retry_after: retry_delay,
+                                    }
+                                } else {
+                                    RequestFeedback::Failed {
+                                        retry_after: retry_after_delay(&error),
+                                    }
+                                };
+                                permit.finish(feedback);
+                                if let (Some(trace), Some(exchange_id)) =
+                                    (&self.model_trace, exchange_id)
+                                {
+                                    trace
+                                        .record_provider_error(
+                                            exchange_id,
+                                            trace_context,
+                                            ModelProviderFailure {
+                                                provider_attempt,
+                                                elapsed: started.elapsed(),
+                                                retryable,
+                                                will_retry: retries < self.max_provider_retries
+                                                    && retryable,
+                                                error: model_provider_error(&error),
+                                            },
+                                        )
+                                        .map_err(ChatAttemptError::Trace)?;
+                                }
+                                if let Some(cancellation) = cancellation {
+                                    cancellation.complete();
+                                }
+                                Err(ChatAttemptError::Provider(error))
+                            }
+                        }
                     }
-                    return Ok((response, retries, exchange_id));
+                })
+                .await;
+            match attempt {
+                Ok((response, exchange_id)) => return Ok((response, retries, exchange_id)),
+                Err(ChatAttemptError::Trace(error)) => {
+                    return Err(ChatCompletionsError::ModelTrace(error));
                 }
-                Err(error) => {
+                Err(ChatAttemptError::Provider(error)) => {
                     let retryable = is_retryable_provider_error(&error);
                     let will_retry = retries < self.max_provider_retries && retryable;
                     let retry_delay = provider_retry_delay(&error, retries + 1);
-                    let feedback = if provider_error_status(&error) == Some(429) {
-                        RequestFeedback::RateLimited {
-                            retry_after: retry_delay,
-                        }
-                    } else {
-                        RequestFeedback::Failed {
-                            retry_after: retry_after_delay(&error),
-                        }
-                    };
-                    // Release admission before recording/backoff; sleeping
-                    // retries must not occupy an in-flight HTTP slot.
-                    permit.finish(feedback);
-                    if let (Some(trace), Some(exchange_id)) = (&self.model_trace, exchange_id) {
-                        trace
-                            .record_provider_error(
-                                exchange_id,
-                                trace_context,
-                                ModelProviderFailure {
-                                    provider_attempt,
-                                    elapsed: started.elapsed(),
-                                    retryable,
-                                    will_retry,
-                                    error: model_provider_error(&error),
-                                },
-                            )
-                            .map_err(ChatCompletionsError::ModelTrace)?;
-                    }
                     if !will_retry {
                         return Err(provider_error(error, &self.api_key));
                     }

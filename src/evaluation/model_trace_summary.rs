@@ -17,6 +17,7 @@ pub struct ModelTraceSummary {
     pub response_count: usize,
     pub provider_error_count: usize,
     pub scheduled_retry_count: usize,
+    pub hedge_count: usize,
     pub incomplete_exchange_count: usize,
     pub accepted_validation_count: usize,
     pub rejected_validation_count: usize,
@@ -33,6 +34,7 @@ pub struct WorkflowTraceSummary {
     pub request_count: usize,
     pub response_count: usize,
     pub provider_error_count: usize,
+    pub hedge_count: usize,
     pub validation_failure_count: usize,
     pub processing_error_count: usize,
 }
@@ -100,11 +102,12 @@ pub fn render_model_trace_summary(summary: &ModelTraceSummary) -> String {
         summary.malformed_lines.len()
     ));
     output.push_str(&format!(
-        "Provider attempts: {} requests, {} responses, {} errors, {} scheduled retries, {} incomplete exchanges\n",
+        "Provider attempts: {} requests, {} responses, {} errors, {} scheduled retries, {} hedges, {} incomplete exchanges\n",
         summary.request_count,
         summary.response_count,
         summary.provider_error_count,
         summary.scheduled_retry_count,
+        summary.hedge_count,
         summary.incomplete_exchange_count
     ));
     output.push_str(&format!(
@@ -119,10 +122,11 @@ pub fn render_model_trace_summary(summary: &ModelTraceSummary) -> String {
         output.push_str("\nBy workflow:\n");
         for (workflow, counts) in &summary.workflows {
             output.push_str(&format!(
-                "  {workflow}: {} requests, {} responses, {} provider errors, {} validation failures, {} processing errors\n",
+                "  {workflow}: {} requests, {} responses, {} provider errors, {} hedges, {} validation failures, {} processing errors\n",
                 counts.request_count,
                 counts.response_count,
                 counts.provider_error_count,
+                counts.hedge_count,
                 counts.validation_failure_count,
                 counts.processing_error_count
             ));
@@ -172,6 +176,7 @@ struct SummaryAccumulator {
     response_count: usize,
     provider_error_count: usize,
     scheduled_retry_count: usize,
+    hedge_count: usize,
     accepted_validation_count: usize,
     rejected_validation_count: usize,
     request_exchanges: HashSet<u64>,
@@ -193,9 +198,18 @@ impl SummaryAccumulator {
         }
         let workflow_counts = self.workflows.entry(workflow.clone()).or_default();
         match record.event {
-            ModelTraceEvent::Request { .. } => {
+            ModelTraceEvent::Request {
+                provider_attempt,
+                hedge,
+                ..
+            } => {
                 self.request_count += 1;
                 workflow_counts.request_count += 1;
+                self.scheduled_retry_count += usize::from(provider_attempt > 0 && hedge.is_none());
+                if hedge.is_some() {
+                    self.hedge_count += 1;
+                    workflow_counts.hedge_count += 1;
+                }
                 self.request_exchanges.insert(record.exchange_id);
                 if record.request_kind == ModelRequestKind::Repair {
                     self.repair_turns.insert((
@@ -210,15 +224,10 @@ impl SummaryAccumulator {
                 workflow_counts.response_count += 1;
                 self.completed_exchanges.insert(record.exchange_id);
             }
-            ModelTraceEvent::ProviderError {
-                will_retry, error, ..
-            } => {
+            ModelTraceEvent::ProviderError { error, .. } => {
                 self.provider_error_count += 1;
                 workflow_counts.provider_error_count += 1;
                 self.completed_exchanges.insert(record.exchange_id);
-                if will_retry {
-                    self.scheduled_retry_count += 1;
-                }
                 self.increment_failure(&format!("provider:{}", error.kind), Some(window));
             }
             ModelTraceEvent::Validation {
@@ -238,6 +247,9 @@ impl SummaryAccumulator {
             ModelTraceEvent::ProcessingError { category, .. } => {
                 workflow_counts.processing_error_count += 1;
                 self.increment_failure(&category, Some(window));
+            }
+            ModelTraceEvent::Cancelled { .. } => {
+                self.completed_exchanges.insert(record.exchange_id);
             }
         }
     }
@@ -284,6 +296,7 @@ impl SummaryAccumulator {
             response_count: self.response_count,
             provider_error_count: self.provider_error_count,
             scheduled_retry_count: self.scheduled_retry_count,
+            hedge_count: self.hedge_count,
             incomplete_exchange_count,
             accepted_validation_count: self.accepted_validation_count,
             rejected_validation_count: self.rejected_validation_count,
@@ -347,6 +360,8 @@ mod tests {
                     model: "model".into(),
                     request: serde_json::json!({}),
                     options: serde_json::json!({}),
+                    logical_request_id: None,
+                    hedge: None,
                 },
             ),
             record(
@@ -374,6 +389,8 @@ mod tests {
                     model: "model".into(),
                     request: serde_json::json!({}),
                     options: serde_json::json!({}),
+                    logical_request_id: None,
+                    hedge: None,
                 },
             ),
             record(

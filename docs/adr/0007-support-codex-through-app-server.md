@@ -7,10 +7,12 @@ app-server adapter. The lecture pipeline depends on validated operations
 provider's message or tool-call representation.
 
 Codex is launched once, lazily, as `codex app-server --listen stdio://` and its
-newline-delimited protocol is multiplexed across ephemeral task threads. It
+newline-delimited protocol is multiplexed across ephemeral request threads. It
 reuses the user's cached `codex login` authentication, so BeyondSlides neither
-asks for nor stores a ChatGPT credential. Each turn supplies a JSON Schema and
-the same deterministic validation and repair loop used by other backends.
+asks for nor stores a ChatGPT credential. Repairs reconstruct the complete task
+and previous invalid response in a fresh thread, allowing an independent thread
+to hedge a slow request safely. Each turn supplies a JSON Schema and the same
+deterministic validation and repair loop used by other backends.
 Usage notifications feed the existing token diagnostics; requests and
 responses use the existing redacted model trace.
 

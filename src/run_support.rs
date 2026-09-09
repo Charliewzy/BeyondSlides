@@ -8,7 +8,7 @@ use std::{
 
 use beyond_slides::{
     ChatCompletionsConfig, ChatCompletionsConfigError, CodexAppServerConfig, LectureModelBackend,
-    ModelExchangeTrace, RequestScheduler,
+    ModelExchangeTrace, RequestScheduler, read_model_trace,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -291,8 +291,12 @@ impl ProviderSettings {
     pub(crate) fn progress_message(&self, task: &str) -> String {
         let snapshot = self.scheduler.snapshot();
         format!(
-            "{task} · model {}/{} · {} ms spacing",
-            snapshot.effective_concurrency, snapshot.max_concurrency, snapshot.request_interval_ms
+            "{task} · model {}/{} · {} ms spacing · hedges {}/{}",
+            snapshot.effective_concurrency,
+            snapshot.max_concurrency,
+            snapshot.request_interval_ms,
+            snapshot.hedges_started,
+            snapshot.max_hedges_per_run,
         )
     }
 
@@ -440,8 +444,14 @@ pub(crate) fn checkpoint_path(run_directory: &Path, window_number: usize) -> Pat
     run_directory.join(format!("window-{window_number:04}.json"))
 }
 
-pub(crate) fn open_run_model_trace(run_directory: &Path) -> Result<ModelExchangeTrace, io::Error> {
-    ModelExchangeTrace::open(model_trace_path(run_directory))
+pub(crate) fn open_run_model_trace(
+    run_directory: &Path,
+    scheduler: &RequestScheduler,
+) -> Result<ModelExchangeTrace, io::Error> {
+    let path = model_trace_path(run_directory);
+    let trace = ModelExchangeTrace::open(&path)?;
+    scheduler.restore_hedging_history(&read_model_trace(&path)?);
+    Ok(trace)
 }
 
 pub(crate) fn model_trace_path(run_directory: &Path) -> PathBuf {

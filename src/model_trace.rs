@@ -9,6 +9,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::request_scheduling::RequestAttemptMetadata;
+
 pub const MODEL_TRACE_FORMAT_VERSION: u32 = 1;
 
 pub(crate) fn redact_credential(mut text: String, secret: &str) -> String {
@@ -53,6 +55,15 @@ struct TraceState {
     file: File,
     next_event_index: u64,
     next_exchange_id: u64,
+}
+
+pub(crate) struct ModelRequestAttempt<'a, Request, Options> {
+    pub(crate) provider_attempt: usize,
+    pub(crate) endpoint: &'a str,
+    pub(crate) model: &'a str,
+    pub(crate) request: &'a Request,
+    pub(crate) options: &'a Options,
+    pub(crate) scheduling: RequestAttemptMetadata,
 }
 
 impl ModelExchangeTrace {
@@ -159,6 +170,7 @@ impl ModelExchangeTrace {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn record_request(
         &self,
         context: ModelTraceContext,
@@ -167,6 +179,58 @@ impl ModelExchangeTrace {
         model: &str,
         request: &impl Serialize,
         options: &impl Serialize,
+    ) -> Result<u64, io::Error> {
+        self.record_request_with_hedge(
+            context,
+            provider_attempt,
+            endpoint,
+            model,
+            request,
+            options,
+            None,
+            None,
+        )
+    }
+
+    pub(crate) fn record_request_attempt<Request: Serialize, Options: Serialize>(
+        &self,
+        context: ModelTraceContext,
+        attempt: ModelRequestAttempt<'_, Request, Options>,
+    ) -> Result<u64, io::Error> {
+        let hedge = attempt
+            .scheduling
+            .hedge_number
+            .map(|hedge_number| ModelHedgeMetadata {
+                logical_request_id: attempt.scheduling.logical_request_id,
+                hedge_number,
+                threshold_ms: duration_milliseconds(
+                    attempt.scheduling.threshold.unwrap_or_default(),
+                ),
+                p80_ms: duration_milliseconds(attempt.scheduling.p80.unwrap_or_default()),
+            });
+        self.record_request_with_hedge(
+            context,
+            attempt.provider_attempt,
+            attempt.endpoint,
+            attempt.model,
+            attempt.request,
+            attempt.options,
+            Some(attempt.scheduling.logical_request_id),
+            hedge,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_request_with_hedge(
+        &self,
+        context: ModelTraceContext,
+        provider_attempt: usize,
+        endpoint: &str,
+        model: &str,
+        request: &impl Serialize,
+        options: &impl Serialize,
+        logical_request_id: Option<u64>,
+        hedge: Option<ModelHedgeMetadata>,
     ) -> Result<u64, io::Error> {
         let request = to_value(request, "model request")?;
         let options = to_value(options, "model request options")?;
@@ -183,9 +247,39 @@ impl ModelExchangeTrace {
                 model: model.into(),
                 request,
                 options,
+                logical_request_id,
+                hedge,
             },
         )?;
         Ok(exchange_id)
+    }
+
+    pub(crate) fn record_cancellation(
+        &self,
+        exchange_id: u64,
+        context: ModelTraceContext,
+        reason: &str,
+    ) -> Result<(), io::Error> {
+        self.append(
+            exchange_id,
+            context,
+            ModelTraceEvent::Cancelled {
+                reason: reason.into(),
+            },
+        )
+    }
+
+    pub(crate) fn cancellation_guard(
+        &self,
+        exchange_id: u64,
+        context: ModelTraceContext,
+    ) -> ModelExchangeCancellation {
+        ModelExchangeCancellation {
+            trace: self.clone(),
+            exchange_id,
+            context,
+            completed: false,
+        }
     }
 
     pub(crate) fn record_response(
@@ -333,6 +427,33 @@ impl ModelExchangeTrace {
     }
 }
 
+pub(crate) struct ModelExchangeCancellation {
+    trace: ModelExchangeTrace,
+    exchange_id: u64,
+    context: ModelTraceContext,
+    completed: bool,
+}
+
+impl ModelExchangeCancellation {
+    pub(crate) fn complete(mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for ModelExchangeCancellation {
+    fn drop(&mut self) {
+        if !self.completed
+            && let Err(error) = self.trace.record_cancellation(
+                self.exchange_id,
+                self.context,
+                "request future cancelled before completion",
+            )
+        {
+            eprintln!("Could not record cancelled model exchange: {error}");
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ModelTraceContext {
     pub workflow: ModelWorkflow,
@@ -350,6 +471,14 @@ pub(crate) struct ModelProviderFailure {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ModelHedgeMetadata {
+    pub logical_request_id: u64,
+    pub hedge_number: u64,
+    pub threshold_ms: u64,
+    pub p80_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelWorkflow {
     PassageBoundaries,
@@ -359,7 +488,7 @@ pub enum ModelWorkflow {
     NoveltyComparison,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelRequestKind {
     Initial,
@@ -390,6 +519,10 @@ pub enum ModelTraceEvent {
         model: String,
         request: Value,
         options: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logical_request_id: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hedge: Option<ModelHedgeMetadata>,
     },
     Response {
         provider_attempt: usize,
@@ -412,6 +545,9 @@ pub enum ModelTraceEvent {
     ProcessingError {
         category: String,
         error: String,
+    },
+    Cancelled {
+        reason: String,
     },
 }
 

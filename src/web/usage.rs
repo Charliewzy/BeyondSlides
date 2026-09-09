@@ -14,6 +14,7 @@ pub(super) struct Usage {
     pub responses: u64,
     pub provider_errors: u64,
     pub retries: u64,
+    pub hedges: u64,
     pub active_requests: usize,
     pub known_input_tokens: u64,
     pub known_output_tokens: u64,
@@ -66,8 +67,14 @@ impl TraceCursor {
 
     fn record(&mut self, record: ModelTraceRecord, attempt_started_ms: u64) {
         match record.event {
-            ModelTraceEvent::Request { .. } => {
+            ModelTraceEvent::Request {
+                provider_attempt,
+                hedge,
+                ..
+            } => {
                 self.usage.requests += 1;
+                self.usage.hedges += u64::from(hedge.is_some());
+                self.usage.retries += u64::from(provider_attempt > 0 && hedge.is_none());
                 if record.timestamp_unix_ms >= attempt_started_ms {
                     self.active.insert(record.exchange_id);
                 }
@@ -90,10 +97,12 @@ impl TraceCursor {
                     None => self.usage.missing_output_usage += 1,
                 }
             }
-            ModelTraceEvent::ProviderError { will_retry, .. } => {
+            ModelTraceEvent::ProviderError { .. } => {
                 self.active.remove(&record.exchange_id);
                 self.usage.provider_errors += 1;
-                self.usage.retries += u64::from(will_retry);
+            }
+            ModelTraceEvent::Cancelled { .. } => {
+                self.active.remove(&record.exchange_id);
             }
             _ => {}
         }
@@ -106,6 +115,7 @@ impl Usage {
         self.responses += other.responses;
         self.provider_errors += other.provider_errors;
         self.retries += other.retries;
+        self.hedges += other.hedges;
         self.active_requests += other.active_requests;
         self.known_input_tokens += other.known_input_tokens;
         self.known_output_tokens += other.known_output_tokens;
@@ -155,6 +165,44 @@ mod tests {
         assert_eq!(usage.known_input_tokens, 12);
         assert_eq!(usage.missing_output_usage, 1);
         assert_eq!(cursor.poll(file.path(), 90, true)?.known_input_tokens, 12);
+        Ok(())
+    }
+
+    #[test]
+    fn hedges_are_counted_separately_and_cancellation_clears_activity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut file = tempfile::NamedTempFile::new()?;
+        file.write_all(&record(
+            json!({
+                "event": "request",
+                "provider_attempt": 0,
+                "endpoint": "test",
+                "model": "test",
+                "request": {},
+                "options": {},
+                "logical_request_id": 7,
+                "hedge": {
+                    "logical_request_id": 7,
+                    "hedge_number": 1,
+                    "threshold_ms": 8_000,
+                    "p80_ms": 1_000
+                }
+            }),
+            0,
+        ))?;
+        let mut cursor = TraceCursor::default();
+        let usage = cursor.poll(file.path(), 90, true)?;
+        assert_eq!(usage.hedges, 1);
+        assert_eq!(usage.retries, 0);
+        assert_eq!(usage.active_requests, 1);
+
+        file.write_all(&record(
+            json!({"event":"cancelled", "reason":"hedge won"}),
+            1,
+        ))?;
+        let usage = cursor.poll(file.path(), 90, true)?;
+        assert_eq!(usage.active_requests, 0);
+        assert_eq!(usage.hedges, 1);
         Ok(())
     }
 }

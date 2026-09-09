@@ -62,8 +62,8 @@ pub use domain::{
 };
 pub use model_backend::LectureModelBackend;
 pub use model_trace::{
-    MODEL_TRACE_FORMAT_VERSION, ModelExchangeTrace, ModelProviderError, ModelRequestKind,
-    ModelTraceEvent, ModelTraceRecord, ModelWorkflow, read_model_trace,
+    MODEL_TRACE_FORMAT_VERSION, ModelExchangeTrace, ModelHedgeMetadata, ModelProviderError,
+    ModelRequestKind, ModelTraceEvent, ModelTraceRecord, ModelWorkflow, read_model_trace,
 };
 pub use orchestration::{
     LectureAnalysisConfig, LectureAnalysisConfigError, LectureAnalysisError,

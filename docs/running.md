@@ -38,11 +38,23 @@ mandatory preflight.
 
 Initial and maximum concurrency must be positive, and the initial value cannot
 exceed the ceiling; the interval must be a nonnegative integer in milliseconds.
-Initial calls, tool follow-ups, repairs, and retries share the
-same gate. The CLI shares learned state across its sequential stages, but not
-across processes or later invocations. Successful checkpoint reuse is unaffected
-by scheduling. Your shell's existing `BEYOND_SLIDES_MAX_CONCURRENCY=2` remains
-a hard ceiling unless you change or unset it.
+Initial calls, tool follow-ups, repairs, and retries share the same gate. The
+CLI shares learned state across its sequential stages, but not across unrelated
+runs. Successful checkpoint reuse is unaffected by scheduling. Your shell's
+existing `BEYOND_SLIDES_MAX_CONCURRENCY=2` remains a hard ceiling unless you
+change or unset it.
+
+Slow-tail hedging is automatic and intentionally conservative. Latency is
+tracked separately for every workflow/request-kind class. Nothing is hedged
+until that class has ten successful responses, so a model that normally takes
+five minutes is not mistaken for a stalled model during warm-up. Thereafter,
+one identical backup attempt may start when the original exceeds
+`3 × rolling p80 + 5 seconds`. The first successful provider response wins;
+the other attempt is cancelled. At most three backup attempts may be active at
+once and at most twenty may start during one resumable run. These exceptional
+attempts can temporarily exceed ordinary concurrency by three so they do not
+wait behind the same busy queue. Existing model traces restore the latency
+samples and consumed hedge budget when a run resumes.
 
 For predictable manual limits:
 
@@ -68,14 +80,16 @@ Retry-After accepts seconds or HTTP dates; long valid advice is not clipped.
 Retry jitter helps stagger independent clients, and absent advice uses bounded
 backoff.
 
-The progress message shows the effective HTTP cap/ceiling and current spacing
-after each completed work item. `request-scheduling.json` records a cumulative
-snapshot for this invocation at checkpoints and stage completion/interruption:
-effective settings, peak in-flight requests, HTTP successes/failures/429s,
-cancellations, and total admission wait. HTTP success is not semantic validation.
-Admission wait is summed across concurrent requests, not additional wall time.
-The main run's final snapshot includes restoration when that stage made requests.
-Snapshots are overwritten on resume; model traces retain individual attempts.
+The progress message shows the effective HTTP cap/ceiling, current spacing,
+and consumed hedge budget after each completed work item. The web interface
+also reports hedges separately from provider retries. `request-scheduling.json`
+records a cumulative snapshot for this invocation at checkpoints and stage
+completion/interruption: effective settings, peak in-flight requests, HTTP
+successes/failures/429s, cancellations, hedges, and total admission wait. HTTP
+success is not semantic validation. Admission wait is summed across concurrent
+requests, not additional wall time. The main run's final snapshot includes
+restoration when that stage made requests. Snapshots are overwritten on resume;
+model traces retain individual attempts and restore the hedging history.
 
 Provider-specific fields remain optional. For the current GLM-5 proxy run:
 

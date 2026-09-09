@@ -52,7 +52,10 @@ pub async fn run_complete(
         RestorationRunManifest::compatible,
     )?;
     provider.record_execution_settings(&run_directory)?;
-    let client = restoration_client(&provider, open_run_model_trace(&run_directory)?)?;
+    let client = restoration_client(
+        &provider,
+        open_run_model_trace(&run_directory, &provider.scheduler())?,
+    )?;
     let mut session = TranscriptRestorationSession::prepare(
         client.as_ref(),
         transcript,

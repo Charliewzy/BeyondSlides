@@ -3,7 +3,20 @@ set -euo pipefail
 
 application_directory=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 application="$application_directory/beyond-slides"
-browser=${BEYOND_SLIDES_BROWSER_EXECUTABLE:-"$application_directory/chromium/ungoogled-chromium.AppImage"}
+if [[ -n ${BEYOND_SLIDES_BROWSER_EXECUTABLE:-} ]]; then
+    browser=$BEYOND_SLIDES_BROWSER_EXECUTABLE
+    if [[ $browser == *.AppImage ]]; then
+        browser_is_appimage=true
+    else
+        browser_is_appimage=false
+    fi
+elif [[ -x $application_directory/chromium/chrome ]]; then
+    browser="$application_directory/chromium/chrome"
+    browser_is_appimage=false
+else
+    browser="$application_directory/chromium/ungoogled-chromium.AppImage"
+    browser_is_appimage=true
+fi
 port=${BEYOND_SLIDES_PORT:-7842}
 
 if [[ ! -x $application || ! -x $browser ]]; then
@@ -88,7 +101,11 @@ if [[ -n ${BEYOND_SLIDES_BROWSER_EXTRA_ARGS:-} ]]; then
     browser_arguments+=("${extra_arguments[@]}")
 fi
 
-if ! run_browser "$browser" "${browser_arguments[@]}"; then
-    echo "Portable Chromium could not mount directly; retrying in extract-and-run mode." >&2
-    run_browser env APPIMAGE_EXTRACT_AND_RUN=1 "$browser" "${browser_arguments[@]}"
+if [[ $browser_is_appimage == true ]]; then
+    if ! run_browser "$browser" "${browser_arguments[@]}"; then
+        echo "Portable Chromium exited; retrying in extract-and-run mode in case AppImage mounting failed." >&2
+        run_browser env APPIMAGE_EXTRACT_AND_RUN=1 "$browser" "${browser_arguments[@]}"
+    fi
+else
+    run_browser "$browser" "${browser_arguments[@]}"
 fi

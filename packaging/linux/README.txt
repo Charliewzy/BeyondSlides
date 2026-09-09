@@ -22,3 +22,8 @@ mode remains optional and requires an installed, authenticated Codex CLI.
 Target: a contemporary x86-64 Linux desktop with glibc and a graphical session.
 The Chromium AppImage normally uses FUSE and automatically falls back to its
 slower extract-and-run mode when direct mounting is unavailable.
+
+Ubuntu 24.04 and later may block this portable browser through its AppArmor
+user-namespace policy. Use the project's Ubuntu .deb package on those systems;
+it installs the same verified browser at a stable path and applies a narrowly
+scoped AppArmor profile without disabling Chromium's sandbox.

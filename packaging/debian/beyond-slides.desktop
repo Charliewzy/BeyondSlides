@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=BeyondSlides
+Comment=Discover what a lecturer adds beyond the slides
+Exec=/opt/beyond-slides/BeyondSlides
+Icon=beyond-slides
+Terminal=false
+Categories=Education;AudioVideo;
+StartupNotify=true

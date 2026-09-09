@@ -1,0 +1,11 @@
+BeyondSlides for Ubuntu
+-----------------------
+
+This package targets Ubuntu 24.04 or later on amd64. It installs a verified,
+fixed Chromium build under /opt/beyond-slides and a path-scoped AppArmor
+profile that permits Chromium to create its renderer sandbox user namespace.
+It does not disable Ubuntu's global user-namespace restriction and does not use
+Chromium's --no-sandbox option.
+
+Lecture data, checkpoints, login state, and downloaded models remain in each
+user's normal data directory and are not removed with the package.

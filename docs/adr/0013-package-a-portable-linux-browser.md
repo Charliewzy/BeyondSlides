@@ -47,3 +47,5 @@ CLI remains an optional external integration.
   and checkpoints remain in place, but there is no automatic updater.
 - The package still assumes a modern glibc Linux graphical environment. Windows
   and macOS require their own browser assets, launchers, and native verification.
+- Ubuntu hosts that restrict user namespaces through AppArmor should use the
+  installed package defined by ADR 0014 instead of this relocatable archive.

@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = purge ] && [ ! -e /etc/apparmor.d/opt.beyond-slides.chromium.chrome ]; then
+    rm -f /etc/apparmor.d/disable/opt.beyond-slides.chromium.chrome || true
+    rm -f /etc/apparmor.d/force-complain/opt.beyond-slides.chromium.chrome || true
+    rm -f /etc/apparmor.d/local/opt.beyond-slides.chromium.chrome || true
+    rm -f /var/cache/apparmor/*/opt.beyond-slides.chromium.chrome || true
+    rmdir /etc/apparmor.d/disable 2>/dev/null || true
+    rmdir /etc/apparmor.d/local 2>/dev/null || true
+fi

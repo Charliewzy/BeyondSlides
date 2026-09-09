@@ -8,6 +8,50 @@ weights, which retain the application's verified first-use download behavior.
 The optional Codex backend still requires an installed, authenticated Codex
 CLI; OpenAI-compatible endpoints need no additional local program.
 
+For Ubuntu 24.04 and later, prefer the `.deb` package below. Ubuntu's AppArmor
+policy can deny the user namespace needed by Chromium inside a relocatable
+AppImage. The installed package gives Chromium a stable executable path and
+grants that path only the namespace permission needed by Chromium's own
+sandbox. It does not use `--no-sandbox` or relax the global host policy.
+
+## Ubuntu package
+
+Build the package from an x86-64 Linux checkout with `dpkg-deb` installed:
+
+```sh
+scripts/package_deb_linux.sh
+```
+
+The result is `dist/beyond-slides_0.1.0-1_amd64.deb`. Install or update it with:
+
+```sh
+sudo apt install ./dist/beyond-slides_0.1.0-1_amd64.deb
+```
+
+Launch **BeyondSlides** from the desktop application menu, or run
+`/opt/beyond-slides/BeyondSlides`. Lecture data remains under
+`${XDG_DATA_HOME:-~/.local/share}/beyond-slides` and survives package upgrades
+and removal. `sudo apt remove beyond-slides` removes the program;
+`sudo apt purge beyond-slides` also removes its local AppArmor override file,
+but never deletes user lecture data.
+
+The current package is approximately 211 MiB to download and 949 MiB installed.
+Unlike the portable archive, it expands Chromium under `/opt` so Ubuntu can
+apply a fixed, path-scoped AppArmor profile. It targets Ubuntu 24.04 or later
+on amd64 and declares the browser's ordinary desktop-library dependencies.
+
+Verify a built package without installing it on the host:
+
+```sh
+scripts/verify_deb_linux.sh dist/beyond-slides_0.1.0-1_amd64.deb
+```
+
+The verifier checks ownership, metadata, the parsed AppArmor profile, browser,
+managed runtimes, launcher lifecycle, and Rain Classroom browser integration.
+The package has also been installed and exercised in a clean Ubuntu 24.04
+container. A machine where AppArmor enforcement is active is still required to
+confirm the original Ubuntu desktop sandbox failure is resolved.
+
 ## Build
 
 From the repository root:
@@ -79,4 +123,5 @@ analysis model.
 The portable browser avoids a separate Chrome installation but cannot remove
 the ordinary baseline requirements of a Linux graphical application: a
 supported kernel, glibc, display server, and working desktop graphics stack.
-The package is not a macOS or Windows build.
+On Ubuntu 24.04 or later, use the `.deb` package if the portable AppImage reports
+`No usable sandbox`. The package is not a macOS or Windows build.

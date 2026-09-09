@@ -25,7 +25,24 @@
 
 ## 安装与启动
 
-目前主要在 **Linux / WSL** 上开发和验证。仓库可以生成一个 Linux x86-64 独立预览包；macOS、原生 Windows 的完整流程尚未验证。
+目前主要在 **Linux / WSL** 上开发和验证。仓库可以生成 Ubuntu 24.04+
+的 `.deb` 安装包和一个 Linux x86-64 便携预览包；macOS、原生 Windows 的完整流程尚未验证。
+
+### Ubuntu 24.04+ 安装包（推荐）
+
+Ubuntu 24.04 及以后版本可能通过 AppArmor 阻止便携 AppImage 中的 Chromium
+创建沙箱。项目的 `.deb` 将同一份已校验 Chromium 安装到固定路径，并只为该
+路径授予建立 Chromium 沙箱所需的 user namespace 权限；不会使用
+`--no-sandbox`，也不会关闭系统的全局保护。
+
+```sh
+scripts/package_deb_linux.sh
+sudo apt install ./dist/beyond-slides_0.1.0-1_amd64.deb
+```
+
+安装后从应用菜单打开 **BeyondSlides**。当前包约 **211 MiB**，安装后约
+**949 MiB**；课程、检查点、登录状态和模型仍保存在用户数据目录，升级或卸载
+程序不会删除它们。构建、验证和卸载说明见 [独立应用说明](docs/standalone.md)。
 
 ### Linux 独立预览包
 
@@ -38,7 +55,7 @@ scripts/package_standalone_linux.sh
 解压 `dist/beyond-slides-linux-x86_64.tar.gz` 后，双击或运行其中的
 `BeyondSlides`。启动器会运行本地服务、用随包附带的 Chromium 打开应用窗口，并在窗口关闭后干净地关闭控制服务。讲座、检查点、登录状态和首次下载的模型默认保存在 `~/.local/share/beyond-slides`，所以以后替换程序目录不会删除数据。
 
-本机验证生成的目录约 **424 MiB**，压缩下载约 **283 MiB**；具体大小会随 Rust 和运行时版本变化。包内含 BeyondSlides、完整的 ungoogled-Chromium AppImage、PDFium、FFmpeg、`ffprobe` 与许可证，不要求另行安装这些组件。OCR、ASR 和嵌入模型仍在第一次需要时校验下载。当前包面向具有图形桌面的现代 glibc Linux x86-64；详情和验证命令见 [独立应用说明](docs/standalone.md)。
+本机验证生成的目录约 **424 MiB**，压缩下载约 **283 MiB**；具体大小会随 Rust 和运行时版本变化。包内含 BeyondSlides、完整的 ungoogled-Chromium AppImage、PDFium、FFmpeg、`ffprobe` 与许可证，不要求另行安装这些组件。OCR、ASR 和嵌入模型仍在第一次需要时校验下载。当前包面向具有图形桌面的现代 glibc Linux x86-64；详情和验证命令见 [独立应用说明](docs/standalone.md)。Ubuntu 24.04+ 若出现 Chromium `No usable sandbox`，请改用上述 `.deb`。
 
 ### 1. 从源码安装
 
@@ -161,6 +178,8 @@ uv run --with playwright python -m playwright install chromium
 uv run scripts/verify_application_browser.py run/release-check
 # 构建独立包后，验证启动、关闭、运行时和雨课堂浏览器：
 scripts/verify_standalone_linux.sh dist/beyond-slides-linux-x86_64
+# 构建 Ubuntu 安装包后，验证布局、AppArmor、运行时和浏览器：
+scripts/verify_deb_linux.sh dist/beyond-slides_0.1.0-1_amd64.deb
 ```
 
 运行验证脚本前先完成构建；不要在脚本运行过程中替换其使用的二进制。端到端验证需要已缓存的中文检索模型；详细要求见 [本地应用说明](docs/local-application.md#verification)。模拟模型测试验证流程，不验证真实模型的判断质量。

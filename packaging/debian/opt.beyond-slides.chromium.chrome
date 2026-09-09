@@ -1,0 +1,11 @@
+abi <abi/4.0>,
+include <tunables/global>
+
+# Chromium supplies the renderer sandbox. This narrowly scoped host profile
+# permits its fixed executable to create the user namespace that sandbox needs
+# on Ubuntu 24.04 and later.
+profile beyond-slides-chromium /opt/beyond-slides/chromium/chrome flags=(unconfined) {
+  userns,
+
+  include if exists <local/opt.beyond-slides.chromium.chrome>
+}

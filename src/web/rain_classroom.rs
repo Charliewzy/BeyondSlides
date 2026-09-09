@@ -137,12 +137,13 @@ impl RainClassroom {
             .user_data_dir(&self.profile)
             .request_timeout(Duration::from_secs(45))
             .launch_timeout(Duration::from_secs(30));
-        if let Some(executable) =
-            beyond_slides::browser_runtime::packaged_chromium_path().map_err(provider_error)?
+        if let Some(browser) =
+            beyond_slides::browser_runtime::packaged_chromium().map_err(provider_error)?
         {
-            config = config
-                .chrome_executable(executable)
-                .env("APPIMAGE_EXTRACT_AND_RUN", "1");
+            config = config.chrome_executable(browser.executable());
+            if browser.is_appimage() {
+                config = config.env("APPIMAGE_EXTRACT_AND_RUN", "1");
+            }
         }
         let config = config.build().map_err(provider_error)?;
         let (browser, mut handler) = Browser::launch(config).await.map_err(provider_error)?;

@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+profile=/etc/apparmor.d/opt.beyond-slides.chromium.chrome
+if [ "$1" = configure ] && [ -f "$profile" ] && aa-enabled --quiet 2>/dev/null; then
+    local_profile=/etc/apparmor.d/local/opt.beyond-slides.chromium.chrome
+    if [ ! -e "$local_profile" ]; then
+        mkdir -p "$(dirname "$local_profile")"
+        install --mode 644 /dev/null "$local_profile"
+    fi
+    apparmor_parser -r -T -W "$profile"
+fi

@@ -9,9 +9,13 @@ use crate::runtime_tools::{self, RuntimeToolError};
 
 pub const CHROMIUM_VERSION: &str = "152.0.7977.82-1";
 const CHROMIUM_FILE_NAME: &str = "ungoogled-chromium.AppImage";
+const EXTRACTED_CHROMIUM_FILE_NAME: &str = "chrome";
 const CHROMIUM_URL: &str = "https://github.com/ungoogled-software/ungoogled-chromium-portablelinux/releases/download/152.0.7977.82-1/ungoogled-chromium-152.0.7977.82-1-x86_64.AppImage";
 const CHROMIUM_BYTES: u64 = 202_156_536;
 const CHROMIUM_SHA256: &str = "b5915d2c380547719498a8186a63fc8dafad61806e5716bc39f12002753822ad";
+const EXTRACTED_CHROMIUM_BYTES: u64 = 515_714_256;
+const EXTRACTED_CHROMIUM_SHA256: &str =
+    "35d642cd0f5a4c4ebe347d687910e0f2e3fd5889d368599045697140f45a3147";
 const PORTABLE_LICENSE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/third_party/ungoogled-chromium-portablelinux.LICENSE"
@@ -21,11 +25,28 @@ const CHROMIUM_LICENSE: &str = include_str!(concat!(
     "/third_party/chromium.LICENSE"
 ));
 
-/// Returns the executable from a standalone layout, if one is present.
+/// One verified browser installed next to the BeyondSlides executable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackagedChromium {
+    executable: PathBuf,
+    appimage: bool,
+}
+
+impl PackagedChromium {
+    pub fn executable(&self) -> &Path {
+        &self.executable
+    }
+
+    pub const fn is_appimage(&self) -> bool {
+        self.appimage
+    }
+}
+
+/// Returns the browser from a packaged layout, if one is present.
 ///
 /// Ordinary source installations continue to use chromiumoxide's system
 /// browser discovery instead of downloading a browser implicitly.
-pub fn packaged_chromium_path() -> Result<Option<PathBuf>, RuntimeToolError> {
+pub fn packaged_chromium() -> Result<Option<PackagedChromium>, RuntimeToolError> {
     if !supports_portable_chromium() {
         return Ok(None);
     }
@@ -33,12 +54,28 @@ pub fn packaged_chromium_path() -> Result<Option<PathBuf>, RuntimeToolError> {
     let Some(parent) = executable.parent() else {
         return Ok(None);
     };
-    let candidate = parent.join("chromium").join(CHROMIUM_FILE_NAME);
-    if !candidate.is_file() {
-        return Ok(None);
+    let chromium_directory = parent.join("chromium");
+    let extracted = chromium_directory.join(EXTRACTED_CHROMIUM_FILE_NAME);
+    if extracted.is_file() {
+        runtime_tools::verify_file(
+            &extracted,
+            EXTRACTED_CHROMIUM_BYTES,
+            EXTRACTED_CHROMIUM_SHA256,
+        )?;
+        return Ok(Some(PackagedChromium {
+            executable: extracted,
+            appimage: false,
+        }));
     }
-    runtime_tools::verify_file(&candidate, CHROMIUM_BYTES, CHROMIUM_SHA256)?;
-    Ok(Some(candidate))
+    let appimage = chromium_directory.join(CHROMIUM_FILE_NAME);
+    if appimage.is_file() {
+        runtime_tools::verify_file(&appimage, CHROMIUM_BYTES, CHROMIUM_SHA256)?;
+        return Ok(Some(PackagedChromium {
+            executable: appimage,
+            appimage: true,
+        }));
+    }
+    Ok(None)
 }
 
 /// Downloads and verifies the complete portable browser used by Linux

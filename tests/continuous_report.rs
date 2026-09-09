@@ -320,6 +320,12 @@ fn report_embeds_score_typography_and_escapes_restored_text() -> Result<(), Box<
     assert!(report.contains("function applyScoreThreshold(input, preserveScrollPosition)"));
     assert!(report.contains("passagePercentile(passage, metric) >= percentileThreshold"));
     assert!(report.contains("cutoffIncludesTie(metric, emphasizedPassages)"));
+    assert!(report.contains("data-export-passages=\"importance\""));
+    assert!(report.contains("data-export-passages=\"novelty\""));
+    assert!(report.contains("function exportPassages(metric)"));
+    assert!(report.contains("passage.classList.contains(`${metric}-emphasized`)"));
+    assert!(report.contains("text/markdown;charset=utf-8"));
+    assert!(report.contains("beyond-slides-${metric}-passages.md"));
     assert!(report.contains("beyond-slides.report-widget.${name}.v1"));
     assert!(!report.contains("legend-card"));
     assert!(!report.contains("href=\"http"));

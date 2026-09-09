@@ -283,6 +283,45 @@ body.reader-layout-dragging { cursor: ew-resize; user-select: none; }
 .threshold-detail { display: flex; justify-content: space-between; color: var(--muted); font-size: .62rem; }
 .threshold-detail [data-threshold-count] { color: var(--ink); font-weight: 700; }
 
+.passage-export-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .45rem;
+  padding-top: .15rem;
+}
+
+.passage-export-actions button {
+  min-width: 0;
+  padding: .48rem .55rem;
+  border: 1px solid rgb(104 43 215 / 28%);
+  border-radius: .5rem;
+  background: rgb(104 43 215 / 7%);
+  color: var(--accent);
+  font: inherit;
+  font-size: .68rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.passage-export-actions button:hover,
+.passage-export-actions button:focus-visible {
+  border-color: var(--accent);
+  background: rgb(104 43 215 / 12%);
+}
+
+.passage-export-actions button:focus-visible {
+  outline: 2px solid rgb(104 43 215 / 22%);
+  outline-offset: 2px;
+}
+
+.passage-export-actions button:disabled {
+  border-color: var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: .65;
+}
+
 .continuous-transcript {
   font-size: clamp(1.12rem, 1.9vw, 1.42rem);
   line-height: 2.05;

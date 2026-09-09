@@ -55,6 +55,10 @@
             <datalist id="score-threshold-stops">
               <option value="0"></option><option value="25"></option><option value="50"></option><option value="75"></option><option value="100"></option>
             </datalist>
+            <div class="passage-export-actions" aria-label="导出当前阅读标记">
+              <button type="button" data-export-passages="importance">导出粗体段落（0）</button>
+              <button type="button" data-export-passages="novelty">导出下划线段落（0）</button>
+            </div>
           </div>
         </aside>
         <div class="continuous-transcript">{% for passage in passages %}<p class="lecture-paragraph"><span class="passage" tabindex="0" data-passage data-source-start="{{ passage.source_start }}" data-source-end="{{ passage.source_end }}" data-time="{{ passage.timestamp }}" data-audio-start-ms="{{ passage.audio_start_ms }}" data-audio-end-ms="{{ passage.audio_end_ms }}" data-audio-basis="{{ passage.audio_basis }}" data-slide-position="{{ passage.slide_position }}" data-slide-number="{{ passage.slide_number }}" data-importance="{{ passage.importance }}" data-novelty="{{ passage.novelty }}" data-importance-percentile="{{ passage.importance_percentile }}" data-novelty-percentile="{{ passage.novelty_percentile }}">{{ passage.text }}</span></p>{% endfor %}</div>

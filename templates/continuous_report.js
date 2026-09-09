@@ -12,6 +12,7 @@
   const audioStatus = document.querySelector("[data-audio-status]");
   const playbackModeButtons = [...document.querySelectorAll("[data-playback-mode]")];
   const scoreThresholds = [...document.querySelectorAll("[data-score-threshold]")];
+  const passageExportButtons = [...document.querySelectorAll("[data-export-passages]")];
   const audioIntervals = passages.map(passage => ({
     passage,
     start: Number(passage.dataset.audioStartMs) / 1000,
@@ -52,6 +53,19 @@
     if (emphasizedPassages.length === 0 || emphasizedPassages.length === passages.length) return false;
     const cutoff = Math.min(...emphasizedPassages.map(passage => passagePercentile(passage, metric)));
     return passages.filter(passage => passagePercentile(passage, metric) === cutoff).length > 1;
+  }
+
+  function emphasizedPassages(metric) {
+    return passages.filter(passage => passage.classList.contains(`${metric}-emphasized`));
+  }
+
+  function updatePassageExportButton(metric) {
+    const button = document.querySelector(`[data-export-passages="${metric}"]`);
+    if (!button) return;
+    const count = emphasizedPassages(metric).length;
+    const marker = metric === "importance" ? "粗体" : "下划线";
+    button.textContent = `导出${marker}段落（${count}）`;
+    button.disabled = count === 0;
   }
 
   function updateScoreWidgetSummary() {
@@ -104,10 +118,58 @@
       `实际 ${emphasizedPassages.length}/${passages.length} 段（${actualPercent.toFixed(1)}%${tieNote}）`;
     input.setAttribute("aria-valuetext", label);
     updateScoreWidgetSummary();
+    updatePassageExportButton(metric);
 
     if (anchor && anchorTop !== undefined) {
       window.scrollBy(0, anchor.getBoundingClientRect().top - anchorTop);
     }
+  }
+
+  function exportPassages(metric) {
+    const input = document.querySelector(`[data-score-threshold="${metric}"]`);
+    if (!input) return;
+    const selected = emphasizedPassages(metric)
+      .map(passage => ({
+        passage,
+        lectureIndex: passages.indexOf(passage),
+        percentile: passagePercentile(passage, metric),
+      }))
+      .sort((left, right) => right.percentile - left.percentile
+        || left.lectureIndex - right.lectureIndex);
+    if (selected.length === 0) return;
+
+    const isImportance = metric === "importance";
+    const dimension = isImportance ? "重要" : "新颖";
+    const marker = isImportance ? "粗体" : "下划线";
+    const lines = [
+      `# BeyondSlides ${dimension}段落`,
+      "",
+      `筛选：当前${marker}范围 ${thresholdLabel(Number(input.value))}（实际 ${selected.length}/${passages.length} 段）`,
+      `顺序：按${dimension}性从高到低；同分按课堂原始顺序。`,
+      "注：各段为独立摘录，不代表相邻课堂内容。",
+    ];
+    selected.forEach(({ passage, percentile }, index) => {
+      const percentileLabel = Number.isInteger(percentile)
+        ? percentile.toFixed(0)
+        : percentile.toFixed(1);
+      lines.push(
+        "",
+        `## ${index + 1} · 全讲百分位 ${percentileLabel}%`,
+        "",
+        passage.textContent.trim(),
+      );
+    });
+    lines.push("");
+
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `beyond-slides-${metric}-passages.md`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
   function setupCollapsibleWidget(widget) {
@@ -368,6 +430,9 @@
   for (const input of scoreThresholds) {
     applyScoreThreshold(input, false);
     input.addEventListener("input", () => applyScoreThreshold(input, true));
+  }
+  for (const button of passageExportButtons) {
+    button.addEventListener("click", () => exportPassages(button.dataset.exportPassages));
   }
   for (const widget of document.querySelectorAll("[data-collapsible-widget]")) {
     setupCollapsibleWidget(widget);

@@ -114,8 +114,49 @@ def main():
                 example.locator('[data-threshold-count="importance"]').inner_text(),
             )
             assert "实际" in example.locator('[data-threshold-count="importance"]').inner_text()
+            example.evaluate("""
+                window.__beyondSlidesTestDownload = undefined;
+                HTMLAnchorElement.prototype.click = function () {
+                    window.__beyondSlidesTestDownload = {
+                        filename: this.download,
+                        url: this.href,
+                    };
+                };
+            """)
+            importance_export = example.locator('[data-export-passages="importance"]')
+            assert importance_export.inner_text() == f"导出粗体段落（{expected_top_five}）"
+            importance_export.click()
+            importance_download = example.evaluate("""
+                async () => ({
+                    filename: window.__beyondSlidesTestDownload.filename,
+                    content: await fetch(window.__beyondSlidesTestDownload.url).then(response => response.text()),
+                })
+            """)
+            assert importance_download["filename"] == "beyond-slides-importance-passages.md"
+            importance_markdown = importance_download["content"]
+            assert importance_markdown.startswith("# BeyondSlides 重要段落\n")
+            assert f"实际 {expected_top_five}/" in importance_markdown
+            assert importance_markdown.count("\n## ") == expected_top_five
+            assert example.locator(".importance-emphasized").first.inner_text() in importance_markdown
+
+            novelty_export = example.locator('[data-export-passages="novelty"]')
+            novelty_count = example.locator(".novelty-emphasized").count()
+            assert novelty_export.inner_text() == f"导出下划线段落（{novelty_count}）"
+            novelty_export.click()
+            novelty_download = example.evaluate("""
+                async () => ({
+                    filename: window.__beyondSlidesTestDownload.filename,
+                    content: await fetch(window.__beyondSlidesTestDownload.url).then(response => response.text()),
+                })
+            """)
+            assert novelty_download["filename"] == "beyond-slides-novelty-passages.md"
+            novelty_markdown = novelty_download["content"]
+            assert novelty_markdown.startswith("# BeyondSlides 新颖段落\n")
+            assert novelty_markdown.count("\n## ") == novelty_count
+
             importance.evaluate("input => { input.value = 0; input.dispatchEvent(new Event('input', {bubbles: true})); }")
             assert example.locator(".importance-emphasized").count() == 0
+            assert importance_export.is_disabled()
             score_widget = example.locator('[data-collapsible-widget="score-controls"]')
             inspector_widget = example.locator('[data-collapsible-widget="passage-inspector"]')
             score_widget.locator("[data-widget-toggle]").click()

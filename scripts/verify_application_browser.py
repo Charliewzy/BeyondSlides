@@ -134,7 +134,17 @@ def main():
                 "output": "$0.000003", "cached_price_assumed": False,
                 "tiered_pricing": False,
             }
-            page.route("**/api/model-pricing?*", lambda route: route.fulfill(json=[pricing_preset]))
+            page.route(
+                "**/api/model-pricing?*",
+                lambda route: route.fulfill(
+                    json={
+                        "results": [pricing_preset],
+                        "total": 1,
+                        "has_more": False,
+                        "next_offset": None,
+                    }
+                ),
+            )
             page.locator("#pricing-search").fill("test model")
             page.get_by_role("option", name="Test Model · Test Provider").wait_for(state="visible")
             page.get_by_role("option", name="Test Model · Test Provider").click()

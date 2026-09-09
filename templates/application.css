@@ -89,6 +89,7 @@ details[open] > summary { margin-bottom: 20px; }
 .pricing-result { display: grid; width: 100%; gap: 3px; padding: 10px 12px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; text-align: left; }
 .pricing-result:last-child { border-bottom: 0; }
 .pricing-result span { font-weight: 400; color: #777385; font-size: 12px; }
+.pricing-more { width: 100%; border: 0; border-radius: 0; color: var(--accent); }
 #pricing-status { margin: -5px 0 14px; }
 .warning, #notice { color: #9d4431; font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; white-space: pre-wrap; }
 #notice { padding: 14px 18px; border-radius: 8px; background: #fff0e7; }

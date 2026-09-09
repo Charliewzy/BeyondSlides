@@ -20,6 +20,7 @@ let desiredCodexReasoningEffort = "";
 let desiredCodexServiceTier = "";
 let pricingSearchTimer;
 let pricingSearchSequence = 0;
+let pricingActiveQuery = "";
 
 function showReviewPage(page, source) {
   $("review-page-title").textContent = `第 ${page.page} 页`;
@@ -197,10 +198,14 @@ function formatPresetPrice(value) {
   const perToken = Number(value.slice(1));
   return Number.isFinite(perToken) ? `$${(perToken * 1_000_000).toLocaleString()} / 百万 token` : value;
 }
-function renderPricingResults(presets) {
+function renderPricingResults(page, append = false) {
   const results = $("pricing-results");
-  results.replaceChildren();
-  for (const preset of presets) {
+  if (!append) {
+    results.replaceChildren();
+  } else {
+    results.querySelector(".pricing-more")?.remove();
+  }
+  for (const preset of page.results) {
     const button = document.createElement("button");
     button.type = "button"; button.className = "pricing-result"; button.setAttribute("role", "option");
     const name = document.createElement("strong");
@@ -222,19 +227,32 @@ function renderPricingResults(presets) {
     });
     results.append(button);
   }
-  results.hidden = presets.length === 0;
+  if (page.has_more) {
+    const more = document.createElement("button");
+    more.type = "button"; more.className = "pricing-more";
+    more.textContent = `显示更多（还剩 ${page.total - (page.next_offset || 0)} 项）`;
+    more.addEventListener("click", () => searchPricing(page.next_offset, true));
+    results.append(more);
+  }
+  results.hidden = page.total === 0;
 }
-async function searchPricing() {
+async function searchPricing(offset = 0, append = false) {
   const query = $("pricing-search").value.trim();
-  const sequence = ++pricingSearchSequence;
-  if (!query) { $("pricing-results").hidden = true; return; }
+  if (append && query !== pricingActiveQuery) return searchPricing();
+  const sequence = append ? pricingSearchSequence : ++pricingSearchSequence;
+  if (!query) {
+    pricingActiveQuery = "";
+    $("pricing-results").hidden = true;
+    return;
+  }
+  if (!append) pricingActiveQuery = query;
   $("pricing-status").textContent = "正在从 Models.dev 查找价格…";
   try {
-    const presets = await api(`/api/model-pricing?query=${encodeURIComponent(query)}`);
+    const page = await api(`/api/model-pricing?query=${encodeURIComponent(query)}&offset=${offset}`);
     if (sequence !== pricingSearchSequence) return;
-    renderPricingResults(presets);
-    $("pricing-status").textContent = presets.length
-      ? "选择一项即可填入美元单价。预设按服务商区分，代理端点价格可能不同。"
+    renderPricingResults(page, append);
+    $("pricing-status").textContent = page.total
+      ? `找到 ${page.total} 项；选择一项即可填入美元单价。预设按服务商区分，代理端点价格可能不同。`
       : "Models.dev 中没有匹配的价格；你仍可手动填写。";
   } catch (error) {
     if (sequence === pricingSearchSequence) {
@@ -885,7 +903,7 @@ $("codex-fast").addEventListener("change", () => {
 });
 $("pricing-search").addEventListener("input", () => {
   clearTimeout(pricingSearchTimer);
-  pricingSearchTimer = setTimeout(searchPricing, 250);
+  pricingSearchTimer = setTimeout(() => searchPricing(), 250);
 });
 $("pricing-search").addEventListener("keydown", event => {
   if (event.key === "Escape") $("pricing-results").hidden = true;

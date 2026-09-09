@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 use super::usage::Usage;
 
 const MODELS_DEV_API: &str = "https://models.dev/api.json";
-const MAX_PRESET_RESULTS: usize = 24;
+const PRESET_PAGE_SIZE: usize = 20;
 const MAX_CATALOG_BYTES: u64 = 16 * 1024 * 1024;
 
 /// User-supplied prices for one token. An absent value means that cost is not
@@ -123,6 +123,14 @@ pub(super) struct PricingPreset {
     tiered_pricing: bool,
 }
 
+#[derive(Debug, Serialize)]
+pub(super) struct PricingSearchPage {
+    results: Vec<PricingPreset>,
+    total: usize,
+    has_more: bool,
+    next_offset: Option<usize>,
+}
+
 #[derive(Debug, Deserialize)]
 struct ProviderRecord {
     id: String,
@@ -166,10 +174,15 @@ impl PricingCatalog {
         })
     }
 
-    pub async fn search(&self, query: &str) -> Result<Vec<PricingPreset>, String> {
+    pub async fn search(&self, query: &str, offset: usize) -> Result<PricingSearchPage, String> {
         let query = query.trim();
         if query.is_empty() {
-            return Ok(Vec::new());
+            return Ok(PricingSearchPage {
+                results: Vec::new(),
+                total: 0,
+                has_more: false,
+                next_offset: None,
+            });
         }
         let mut stored = self.presets.lock().await;
         if stored.is_none() {
@@ -196,7 +209,11 @@ impl PricingCatalog {
             }
             *stored = Some(parse_catalog(&body)?);
         }
-        Ok(search_presets(stored.as_deref().unwrap_or_default(), query))
+        Ok(search_presets(
+            stored.as_deref().unwrap_or_default(),
+            query,
+            offset,
+        ))
     }
 }
 
@@ -248,47 +265,119 @@ fn per_token_usd(per_million_tokens: f64) -> String {
     format!("${value}")
 }
 
-fn search_presets(presets: &[PricingPreset], query: &str) -> Vec<PricingPreset> {
-    let terms: Vec<_> = query
-        .to_lowercase()
-        .split_whitespace()
-        .map(str::to_owned)
-        .collect();
-    let query = query.to_lowercase();
+fn search_presets(presets: &[PricingPreset], query: &str, offset: usize) -> PricingSearchPage {
+    let query = normalize_search_text(query);
+    let terms: Vec<_> = query.split_whitespace().map(str::to_owned).collect();
     let mut matches: Vec<_> = presets
         .iter()
         .filter_map(|preset| {
-            let haystack = format!(
-                "{} {} {} {}",
-                preset.provider_id, preset.provider_name, preset.model_id, preset.model_name
-            )
-            .to_lowercase();
+            let provider_id = normalize_search_text(&preset.provider_id);
+            let provider_name = normalize_search_text(&preset.provider_name);
+            let model_id = normalize_search_text(&preset.model_id);
+            let model_name = normalize_search_text(&preset.model_name);
+            let haystack = format!("{provider_id} {provider_name} {model_id} {model_name}");
             if !terms.iter().all(|term| haystack.contains(term)) {
                 return None;
             }
-            let model_id = preset.model_id.to_lowercase();
-            let model_name = preset.model_name.to_lowercase();
-            let rank = if model_id == query || model_name == query {
-                0
-            } else if model_id.starts_with(&query) || model_name.starts_with(&query) {
-                1
-            } else {
-                2
+            let explicit_provider = [&provider_id, &provider_name]
+                .into_iter()
+                .any(|provider| contains_search_phrase(&query, provider));
+            let model_query = [&provider_id, &provider_name]
+                .into_iter()
+                .find_map(|provider| remove_search_phrase(&query, provider))
+                .filter(|remainder| !remainder.is_empty());
+            let exact_model = [&model_id, &model_name]
+                .into_iter()
+                .any(|model| model == &query || model_query.as_ref() == Some(model));
+            let model_prefix = [&model_id, &model_name]
+                .into_iter()
+                .any(|model| model.starts_with(&query));
+            let model_term_matches = terms
+                .iter()
+                .filter(|term| model_id.contains(*term) || model_name.contains(*term))
+                .count();
+            let provider_term_matches = terms
+                .iter()
+                .filter(|term| provider_id.contains(*term) || provider_name.contains(*term))
+                .count();
+            let relevance = SearchRelevance {
+                exact_model_and_provider: exact_model && explicit_provider,
+                exact_model,
+                explicit_provider,
+                model_prefix,
+                model_term_matches,
+                provider_term_matches,
             };
-            Some((rank, preset))
+            Some((relevance, preset))
         })
         .collect();
     matches.sort_by(|left, right| {
-        left.0
-            .cmp(&right.0)
+        right
+            .0
+            .cmp(&left.0)
             .then_with(|| left.1.provider_name.cmp(&right.1.provider_name))
             .then_with(|| left.1.model_name.cmp(&right.1.model_name))
     });
-    matches
+    let total = matches.len();
+    let results = matches
         .into_iter()
-        .take(MAX_PRESET_RESULTS)
+        .skip(offset)
+        .take(PRESET_PAGE_SIZE)
         .map(|(_, preset)| preset.clone())
-        .collect()
+        .collect::<Vec<_>>();
+    let next = offset.saturating_add(results.len());
+    let has_more = next < total;
+    PricingSearchPage {
+        results,
+        total,
+        has_more,
+        next_offset: has_more.then_some(next),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct SearchRelevance {
+    exact_model_and_provider: bool,
+    exact_model: bool,
+    explicit_provider: bool,
+    model_prefix: bool,
+    model_term_matches: usize,
+    provider_term_matches: usize,
+}
+
+fn contains_search_phrase(haystack: &str, needle: &str) -> bool {
+    !needle.is_empty() && format!(" {haystack} ").contains(&format!(" {needle} "))
+}
+
+fn remove_search_phrase(haystack: &str, needle: &str) -> Option<String> {
+    if !contains_search_phrase(haystack, needle) {
+        return None;
+    }
+    let padded = format!(" {haystack} ");
+    let phrase = format!(" {needle} ");
+    Some(
+        padded
+            .replacen(&phrase, " ", 1)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
+fn normalize_search_text(text: &str) -> String {
+    text.chars()
+        .flat_map(char::to_lowercase)
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -383,9 +472,79 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let found = search_presets(&presets, "glm-5");
-        assert_eq!(found.len(), 2);
-        assert_eq!(found[0].model_id, "glm-5");
-        assert_eq!(search_presets(&presets, "second fast").len(), 1);
+        let found = search_presets(&presets, "glm-5", 0);
+        assert_eq!(found.total, 2);
+        assert_eq!(found.results[0].model_id, "glm-5");
+        assert_eq!(search_presets(&presets, "second fast", 0).total, 1);
+    }
+
+    #[test]
+    fn search_treats_spaces_and_hyphens_as_equivalent_model_separators() {
+        let presets = parse_catalog(
+            br#"{
+              "one": {"id":"one","name":"Provider One","models": {
+                "a": {"id":"model-five","name":"GLM 5","cost":{"input":1,"output":2}},
+                "b": {"id":"model-dash","name":"GLM-5-Air","cost":{"input":1,"output":2}}
+              }}
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            search_presets(&presets, "glm-5", 0).results[0].model_name,
+            "GLM 5"
+        );
+        assert_eq!(
+            search_presets(&presets, "glm 5 air", 0).results[0].model_name,
+            "GLM-5-Air"
+        );
+    }
+
+    #[test]
+    fn search_prioritizes_an_explicit_provider_and_exact_model_pair() {
+        let presets = parse_catalog(
+            br#"{
+              "reseller": {"id":"a-reseller","name":"A Reseller","models": {
+                "a": {"id":"openai/gpt-5.6","name":"GPT 5.6","cost":{"input":1,"output":2}}
+              }},
+              "openai": {"id":"openai","name":"OpenAI","models": {
+                "a": {"id":"gpt-5.6","name":"GPT-5.6","cost":{"input":1,"output":2}}
+              }}
+            }"#,
+        )
+        .unwrap();
+
+        let found = search_presets(&presets, "gpt 5.6 openai", 0);
+        assert_eq!(found.total, 2);
+        assert_eq!(found.results[0].provider_id, "openai");
+    }
+
+    #[test]
+    fn broad_searches_are_paginated_without_hiding_matches() {
+        let presets = (0..25)
+            .map(|index| PricingPreset {
+                provider_id: format!("provider-{index:02}"),
+                provider_name: format!("Provider {index:02}"),
+                model_id: format!("glm-{index:02}"),
+                model_name: format!("GLM {index:02}"),
+                uncached_input: "$0.000001".into(),
+                cached_input: "$0.000001".into(),
+                output: "$0.000002".into(),
+                cached_price_assumed: true,
+                tiered_pricing: false,
+            })
+            .collect::<Vec<_>>();
+
+        let first = search_presets(&presets, "glm", 0);
+        assert_eq!(first.results.len(), PRESET_PAGE_SIZE);
+        assert_eq!(first.total, 25);
+        assert!(first.has_more);
+        assert_eq!(first.next_offset, Some(PRESET_PAGE_SIZE));
+
+        let second = search_presets(&presets, "glm", PRESET_PAGE_SIZE);
+        assert_eq!(second.results.len(), 5);
+        assert_eq!(second.total, 25);
+        assert!(!second.has_more);
+        assert_eq!(second.next_offset, None);
     }
 }

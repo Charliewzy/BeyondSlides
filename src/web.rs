@@ -971,19 +971,21 @@ async fn job_status(
 #[derive(Deserialize)]
 struct PricingQuery {
     query: String,
+    #[serde(default)]
+    offset: usize,
 }
 
 async fn search_model_pricing(
     State(app): State<App>,
     Query(query): Query<PricingQuery>,
-) -> Result<Json<Vec<pricing::PricingPreset>>, AppError> {
+) -> Result<Json<pricing::PricingSearchPage>, AppError> {
     if query.query.chars().count() > 100 {
         return Err(AppError::bad(
             "Model-price search is limited to 100 characters",
         ));
     }
     app.pricing_catalog
-        .search(&query.query)
+        .search(&query.query, query.offset)
         .await
         .map(Json)
         .map_err(|error| AppError(StatusCode::BAD_GATEWAY, error))

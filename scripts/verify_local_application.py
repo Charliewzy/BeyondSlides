@@ -161,18 +161,21 @@ def main():
             assert done["job"]["preview"]["segment_count"] > 0
             assert asr_checkpoint.read_bytes() == asr_before
         assert done["usage"]["known_input_tokens"] == Model.calls * 100
+        assert done["usage"]["known_cached_input_tokens"] == 0
+        assert done["usage"]["missing_cached_input_usage"] == done["usage"]["responses"]
         assert done["usage"]["known_output_tokens"] == Model.calls * 50
         assert done["usage"]["active_requests"] == 0
-        debug = client.get(f"/api/jobs/{job_id}/logs/worker")
+        debug = client.get(f"/api/jobs/{job_id}/logs")
         debug.raise_for_status()
         assert debug.json()["available"] and debug.json()["text"]
         assert "日志记录开始" in debug.json()["text"]
         assert "--- attempt " not in debug.json()["text"]
         assert "local-test-secret" not in debug.text
-        download = client.get(f"/api/jobs/{job_id}/logs/worker/download")
+        download = client.get(f"/api/jobs/{job_id}/logs/download")
         assert download.status_code == 200 and "local-test-secret" not in download.text
         assert download.headers["content-type"].startswith("text/plain")
-        assert client.get(f"/api/jobs/{job_id}/logs/manifest.json").status_code == 400
+        assert client.get(f"/api/jobs/{job_id}/logs/transcription").status_code == 404
+        assert client.get(f"/api/jobs/{job_id}/logs/manifest.json").status_code == 404
         for filename, content in before.items():
             assert (args.output / job_id / "run-0001/analysis/restoration" / filename).read_bytes() == content
         report = client.get(done["report_url"])

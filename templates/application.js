@@ -433,18 +433,18 @@ function render(status) {
 }
 async function pollDebug() {
   if (!currentId || !$("debug-panel").open || debugLoading) return;
-  const id = currentId, kind = $("debug-kind").value;
+  const id = currentId;
   debugLoading = true;
   try {
-    const log = await api(`/api/jobs/${id}/logs/${kind}`);
-    if (id !== currentId || kind !== $("debug-kind").value) return;
-    $("debug-download").href = `/api/jobs/${id}/logs/${kind}/download`;
+    const log = await api(`/api/jobs/${id}/logs`);
+    if (id !== currentId) return;
+    $("debug-download").href = `/api/jobs/${id}/logs/download`;
     $("debug-download").hidden = !log.available;
     if ($("debug-follow").checked || !$("debug-output").textContent) {
       $("debug-output").textContent = readableLog(log.text);
       if ($("debug-follow").checked) $("debug-output").scrollTop = $("debug-output").scrollHeight;
     }
-    $("debug-status").textContent = !log.available ? "尚无此版本捕获的日志。旧日志仅保存在本地；下次启动或恢复后开始捕获。" : !$("debug-follow").checked ? "显示已暂停，后台继续记录。勾选跟随可查看最新输出。" : log.truncated ? "显示最近 128 KiB；更早的输出请下载完整日志。" : "实时更新（约每秒）；后台持续保存日志。";
+    $("debug-status").textContent = !log.available ? "尚无可显示的日志；开始或恢复处理后会在这里捕获。" : !$("debug-follow").checked ? "显示已暂停，后台继续记录。勾选跟随可查看最新输出。" : log.truncated ? "显示最近 128 KiB；更早的输出请下载完整日志。" : "实时更新（约每秒）；后台持续保存日志。";
   } catch (error) { if (id === currentId) $("debug-status").textContent = `日志暂不可用：${error.message}`; }
   finally { debugLoading = false; }
 }
@@ -476,7 +476,6 @@ window.addEventListener("resize", updateReviewArrows);
 for (const [id, direction] of [["review-left", -1], ["review-right", 1]]) {
   $(id).addEventListener("click", () => $("review-strip").scrollBy({ left: direction * $("review-strip").clientWidth * .8, behavior: "smooth" }));
 }
-$("debug-kind").addEventListener("change", () => { $("debug-output").textContent = ""; $("debug-download").hidden = true; pollDebug(); });
 $("debug-follow").addEventListener("change", pollDebug);
 $("debug-output").addEventListener("scroll", () => {
   const output = $("debug-output");

@@ -151,17 +151,8 @@ async fn pump(
     error.map_or(Ok(()), Err)
 }
 
-pub(super) fn path(job: &Path, run: &Path, kind: &str) -> io::Result<std::path::PathBuf> {
-    let path = match kind {
-        "worker" => run.join("worker-debug.log"),
-        "transcription" => job.join("transcription/asr-debug.log"),
-        _ => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Unknown log kind",
-            ));
-        }
-    };
+pub(super) fn path(job: &Path, run: &Path) -> io::Result<std::path::PathBuf> {
+    let path = run.join("worker-debug.log");
     if path.exists()
         && (std::fs::symlink_metadata(&path)?.file_type().is_symlink()
             || !path.canonicalize()?.starts_with(job.canonicalize()?))
@@ -283,13 +274,23 @@ mod tests {
     }
 
     #[test]
-    fn legacy_logs_are_not_used_and_unknown_paths_are_rejected() -> io::Result<()> {
+    fn historical_logs_are_not_exposed() -> io::Result<()> {
         let directory = tempfile::tempdir()?;
         let run = directory.path().join("run-0001");
         std::fs::create_dir(&run)?;
         std::fs::write(run.join("worker.log"), "unfiltered legacy log")?;
-        assert!(!tail(&path(directory.path(), &run, "worker")?)?.available);
-        assert!(path(directory.path(), &run, "../../worker.log").is_err());
+        std::fs::create_dir(directory.path().join("transcription"))?;
+        std::fs::write(
+            directory.path().join("transcription/asr-debug.log"),
+            "historical transcription log",
+        )?;
+        assert!(!tail(&path(directory.path(), &run)?)?.available);
+        assert!(
+            directory
+                .path()
+                .join("transcription/asr-debug.log")
+                .is_file()
+        );
         Ok(())
     }
 

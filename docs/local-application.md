@@ -144,8 +144,7 @@ complete; otherwise playback retains explicitly coarser transcript-segment
 timing.
 
 The **Debug logs and stage timings** panel exposes the processing-worker log,
-including native transcription diagnostics, and retains access to legacy
-Python-transcription logs from old runs. It polls while expanded, displays the most recent
+including native transcription diagnostics. It polls while expanded, displays the most recent
 128 KiB as plain text, and pauses the displayed output when you scroll upward
 or uncheck follow. Full sanitized logs can be downloaded. Model request/response
 traces are not exposed here; logs can still contain lecture content and local
@@ -157,8 +156,8 @@ worker supervisor owns the log pipes independently of the controller, preserving
 processing and log capture across server restarts.
 Workers started by this version also use a separate Unix process group, so a
 terminal Ctrl+C sent to the controller does not interrupt their processing. Old
-raw `worker.log`/`asr.log` files are never served; new captures use
-`worker-debug.log` and `transcription/asr-debug.log`. This is credential filtering,
+raw `worker.log`, `asr.log`, and `transcription/asr-debug.log` files are retained
+on disk but never served; new captures use `worker-debug.log`. This is credential filtering,
 not a guarantee that arbitrary secrets printed by third-party code are removed.
 
 Stage timings include audio extraction, speech detection, recognition, and

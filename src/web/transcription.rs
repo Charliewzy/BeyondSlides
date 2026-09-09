@@ -111,7 +111,7 @@ pub(super) async fn prepare(
             .await
             .map_err(|e| format!("Could not extract audio with ffmpeg: {e}"))?;
         if !status.success() {
-            return Err("Audio extraction failed; see worker.log".into());
+            return Err("Audio extraction failed; see the processing debug log".into());
         }
         let extraction_seconds = extracting.elapsed().as_secs_f64();
         progress

@@ -47,6 +47,8 @@ def main():
             assert example.locator("[data-reader-resizer]").count() == 3
             layout = example.locator("[data-reader-layout]")
             before = layout.bounding_box()
+            transcript_width_before = example.locator(".transcript-card").bounding_box()["width"]
+            slide_width_before = example.locator(".slide-panel").bounding_box()["width"]
             right_resizer = example.locator('[data-reader-resizer="right"]')
             right = right_resizer.bounding_box()
             example.mouse.move(right["x"] + right["width"] / 2, right["y"] + 200)
@@ -54,8 +56,14 @@ def main():
             example.mouse.move(right["x"] + right["width"] / 2 - 70, right["y"] + 200)
             example.mouse.up()
             after_outer = layout.bounding_box()
+            transcript_width_after = example.locator(".transcript-card").bounding_box()["width"]
+            slide_width_after = example.locator(".slide-panel").bounding_box()["width"]
             assert after_outer["width"] < before["width"] - 100
             assert abs((after_outer["x"] + after_outer["width"] / 2) - (before["x"] + before["width"] / 2)) < 2
+            assert abs(
+                transcript_width_after / transcript_width_before
+                - slide_width_after / slide_width_before
+            ) < 0.02
             slide_before = example.locator(".slide-panel").bounding_box()["width"]
             middle_resizer = example.locator('[data-reader-resizer="middle"]')
             middle = middle_resizer.bounding_box()
@@ -110,6 +118,9 @@ def main():
             page.reload()
             page.locator("#open-report").wait_for(state="visible")
             assert page.locator("#run-state").inner_text() == "处理完成"
+            assert page.locator("#input-tokens").inner_text() != "—"
+            assert page.locator("#uncached-input-tokens").inner_text() == "服务商未提供"
+            assert page.locator("#cache-hit-rate").inner_text() == "服务商未提供"
             assert page.locator("#api-key").input_value() == ""
             disclosure = page.locator("#provider-panel .disclosure")
             assert disclosure.locator("strong").is_visible()
@@ -148,7 +159,7 @@ def main():
             # Deterministic UI-only cases: escaping, bounded-tail notice,
             # scrolling pauses display, and follow reconnects to latest output.
             log_text = ["<script>window.logExecuted = true</script>\n" + "debug line\n" * 200]
-            page.route("**/api/jobs/*/logs/worker", lambda route: route.fulfill(json={"text": log_text[0], "truncated": True, "available": True}))
+            page.route("**/api/jobs/*/logs", lambda route: route.fulfill(json={"text": log_text[0], "truncated": True, "available": True}))
             page.wait_for_function("document.getElementById('debug-output').textContent.includes('<script>')")
             assert page.evaluate("window.logExecuted === undefined")
             page.locator("#debug-output").evaluate("element => { element.scrollTop = 0; }")
@@ -159,11 +170,7 @@ def main():
             assert page.locator("#debug-output").inner_text() == frozen
             page.locator("#debug-follow").check()
             page.wait_for_function("document.getElementById('debug-output').textContent.includes('new output after pause')")
-            page.unroute("**/api/jobs/*/logs/worker")
-            page.locator("#debug-kind").select_option("transcription")
-            page.wait_for_timeout(1200)
-            assert page.locator("#debug-status").inner_text()
-            page.locator("#debug-kind").select_option("worker")
+            page.unroute("**/api/jobs/*/logs")
             page.screenshot(path=str(args.workspace / "browser-desktop.png"), full_page=True)
             # Fatal provider and output-token errors remain visible without
             # scrolling, preserve the complete technical message, and route

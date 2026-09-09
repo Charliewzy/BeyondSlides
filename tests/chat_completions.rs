@@ -995,7 +995,30 @@ async fn incomplete_or_invalid_usage_makes_token_totals_unknown() -> Result<(), 
     let result = client.annotate_window(&sources, &scorer, &task).await?;
 
     assert_eq!(result.diagnostics.prompt_tokens, None);
+    assert_eq!(result.diagnostics.cached_prompt_tokens, None);
     assert_eq!(result.diagnostics.completion_tokens, None);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cached_prompt_tokens_distinguish_explicit_zero_from_missing_usage()
+-> Result<(), Box<dyn Error>> {
+    let mut response = final_response("chat-1", analysis_json());
+    response["usage"]["prompt_tokens_details"] = json!({ "cached_tokens": 0 });
+    let api = mock_api(vec![response]).await;
+    let client = beyond_slides::ChatCompletionsClient::new(ChatCompletionsConfig::new(
+        base_url(&api),
+        "test-key",
+        "test-model",
+    )?);
+    let sources = sources()?;
+    let task = task(&sources)?;
+    let scorer = FixedScorer(scores([0.0; 6]));
+
+    let result = client.annotate_window(&sources, &scorer, &task).await?;
+
+    assert_eq!(result.diagnostics.prompt_tokens, Some(20));
+    assert_eq!(result.diagnostics.cached_prompt_tokens, Some(0));
     Ok(())
 }
 

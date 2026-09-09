@@ -20,6 +20,7 @@ fn review_aligns_source_segments_with_restored_spans_and_diagnostics() {
                 provider_retries: 0,
                 final_answer_repairs: 1,
                 prompt_tokens: Some(100),
+                cached_prompt_tokens: Some(0),
                 completion_tokens: Some(20),
                 accepted_json_fence: false,
             },

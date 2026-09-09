@@ -352,6 +352,9 @@ impl CodexAppServerClient {
                                                 "content": turn.content,
                                                 "usage": {
                                                     "prompt_tokens": turn.input_tokens,
+                                                    "prompt_tokens_details": {
+                                                        "cached_tokens": turn.cached_input_tokens,
+                                                    },
                                                     "completion_tokens": turn.output_tokens,
                                                 },
                                             }),
@@ -403,6 +406,8 @@ impl CodexAppServerClient {
                 Ok((turn, exchange_id)) => {
                     diagnostics.prompt_tokens =
                         add_optional(diagnostics.prompt_tokens, turn.input_tokens);
+                    diagnostics.cached_prompt_tokens =
+                        add_optional(diagnostics.cached_prompt_tokens, turn.cached_input_tokens);
                     diagnostics.completion_tokens =
                         add_optional(diagnostics.completion_tokens, turn.output_tokens);
                     match parse(&turn.content) {
@@ -716,12 +721,24 @@ impl LectureModelBackend for CodexAppServerClient {
     }
 }
 
-#[derive(Default)]
 struct CodexDiagnostics {
     final_answer_repairs: usize,
     prompt_tokens: Option<u64>,
+    cached_prompt_tokens: Option<u64>,
     completion_tokens: Option<u64>,
     accepted_json_fence: bool,
+}
+
+impl Default for CodexDiagnostics {
+    fn default() -> Self {
+        Self {
+            final_answer_repairs: 0,
+            prompt_tokens: Some(0),
+            cached_prompt_tokens: Some(0),
+            completion_tokens: Some(0),
+            accepted_json_fence: false,
+        }
+    }
 }
 
 impl CodexDiagnostics {
@@ -731,6 +748,7 @@ impl CodexDiagnostics {
             tool_rounds: 0,
             final_answer_repairs: self.final_answer_repairs,
             prompt_tokens: self.prompt_tokens,
+            cached_prompt_tokens: self.cached_prompt_tokens,
             completion_tokens: self.completion_tokens,
             accepted_json_fence: self.accepted_json_fence,
         }
@@ -741,6 +759,7 @@ impl CodexDiagnostics {
             provider_retries: 0,
             final_answer_repairs: self.final_answer_repairs,
             prompt_tokens: self.prompt_tokens,
+            cached_prompt_tokens: self.cached_prompt_tokens,
             completion_tokens: self.completion_tokens,
             accepted_json_fence: self.accepted_json_fence,
         }
@@ -960,6 +979,7 @@ impl AppServer {
         let wait = async {
             let mut content = None;
             let mut input_tokens = None;
+            let mut cached_input_tokens = None;
             let mut output_tokens = None;
             while let Some(event) = events.recv().await {
                 let event = event?;
@@ -967,10 +987,10 @@ impl AppServer {
                 let params = &event["params"];
                 match method {
                     "thread/tokenUsage/updated" if params["turnId"].as_str() == Some(&turn_id) => {
-                        input_tokens =
-                            nonnegative_u64(params.pointer("/tokenUsage/last/inputTokens"));
-                        output_tokens =
-                            nonnegative_u64(params.pointer("/tokenUsage/last/outputTokens"));
+                        let usage = last_turn_token_usage(params);
+                        input_tokens = usage.input;
+                        cached_input_tokens = usage.cached_input;
+                        output_tokens = usage.output;
                     }
                     "item/started" | "item/completed"
                         if params["turnId"].as_str() == Some(&turn_id) =>
@@ -1007,6 +1027,7 @@ impl AppServer {
                             content: content
                                 .ok_or("Codex completed without a final agent message")?,
                             input_tokens,
+                            cached_input_tokens,
                             output_tokens,
                         });
                     }
@@ -1084,6 +1105,7 @@ impl AppServer {
 struct CodexTurn {
     content: String,
     input_tokens: Option<u64>,
+    cached_input_tokens: Option<u64>,
     output_tokens: Option<u64>,
 }
 
@@ -1221,6 +1243,21 @@ fn nonnegative_u64(value: Option<&Value>) -> Option<u64> {
         .and_then(|value| value.try_into().ok())
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct CodexTurnTokenUsage {
+    input: Option<u64>,
+    cached_input: Option<u64>,
+    output: Option<u64>,
+}
+
+fn last_turn_token_usage(params: &Value) -> CodexTurnTokenUsage {
+    CodexTurnTokenUsage {
+        input: nonnegative_u64(params.pointer("/tokenUsage/last/inputTokens")),
+        cached_input: nonnegative_u64(params.pointer("/tokenUsage/last/cachedInputTokens")),
+        output: nonnegative_u64(params.pointer("/tokenUsage/last/outputTokens")),
+    }
+}
+
 fn add_optional(total: Option<u64>, value: Option<u64>) -> Option<u64> {
     match (total, value) {
         (Some(total), Some(value)) => total.checked_add(value),
@@ -1298,6 +1335,26 @@ mod tests {
         assert_eq!(nonnegative_u64(Some(&json!(42))), Some(42));
         assert_eq!(nonnegative_u64(Some(&json!(-1))), None);
         assert_eq!(nonnegative_u64(Some(&json!("42"))), None);
+    }
+
+    #[test]
+    fn codex_token_usage_includes_cached_input_tokens() {
+        assert_eq!(
+            last_turn_token_usage(&json!({
+                "tokenUsage": {
+                    "last": {
+                        "inputTokens": 120,
+                        "cachedInputTokens": 80,
+                        "outputTokens": 24
+                    }
+                }
+            })),
+            CodexTurnTokenUsage {
+                input: Some(120),
+                cached_input: Some(80),
+                output: Some(24),
+            }
+        );
     }
 
     #[test]

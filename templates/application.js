@@ -323,6 +323,23 @@ function tokenUsage(known, missing, responses) {
   if (missing === responses) return "服务商未提供";
   return `${missing ? "≥ " : ""}${known.toLocaleString()}${missing ? `（${missing}次缺失）` : ""}`;
 }
+function cacheUsage(usage) {
+  if (!usage.responses) return { uncached: "等待响应", hitRate: "等待响应" };
+  if (usage.missing_input_usage || usage.missing_cached_input_usage) {
+    const unavailable = usage.missing_cached_input_usage === usage.responses
+      ? "服务商未提供"
+      : "服务商数据不完整";
+    return { uncached: unavailable, hitRate: unavailable };
+  }
+  if (usage.known_cached_input_tokens > usage.known_input_tokens) {
+    return { uncached: "服务商数据无效", hitRate: "服务商数据无效" };
+  }
+  const uncached = usage.known_input_tokens - usage.known_cached_input_tokens;
+  const percentage = usage.known_input_tokens === 0
+    ? 0
+    : 100 * usage.known_cached_input_tokens / usage.known_input_tokens;
+  return { uncached: uncached.toLocaleString(), hitRate: `${percentage.toFixed(1)}%` };
+}
 const asrPhases = { checking_recording: "检查录音", extracting_audio: "提取音频", downloading_models: "下载语音模型", loading_models: "加载模型", detecting_speech: "检测语音", recognizing: "识别语音", finalizing: "验证并保存", complete: "完成" };
 function transcriptionProgress(row, progress, count, observed, active) {
   const recognizing = observed.phase === "recognizing" && observed.total_speech_ms > 0 && observed.total_regions > 0;
@@ -397,6 +414,9 @@ function render(status) {
     }
   }
   $("input-tokens").textContent = tokenUsage(usage.known_input_tokens, usage.missing_input_usage, usage.responses);
+  const cache = cacheUsage(usage);
+  $("uncached-input-tokens").textContent = cache.uncached;
+  $("cache-hit-rate").textContent = cache.hitRate;
   $("output-tokens").textContent = tokenUsage(usage.known_output_tokens, usage.missing_output_usage, usage.responses);
   $("active-requests").textContent = usage.active_requests; $("retries").textContent = usage.retries;
   $("hedges").textContent = `${usage.hedges} / 20`;

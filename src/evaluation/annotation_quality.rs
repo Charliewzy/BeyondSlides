@@ -164,6 +164,7 @@ mod tests {
             tool_rounds: 0,
             final_answer_repairs,
             prompt_tokens: Some(0),
+            cached_prompt_tokens: Some(0),
             completion_tokens: Some(0),
             accepted_json_fence: false,
         }

@@ -17,8 +17,10 @@ pub(super) struct Usage {
     pub hedges: u64,
     pub active_requests: usize,
     pub known_input_tokens: u64,
+    pub known_cached_input_tokens: u64,
     pub known_output_tokens: u64,
     pub missing_input_usage: u64,
+    pub missing_cached_input_usage: u64,
     pub missing_output_usage: u64,
 }
 
@@ -79,7 +81,11 @@ impl TraceCursor {
                     self.active.insert(record.exchange_id);
                 }
             }
-            ModelTraceEvent::Response { response, .. } => {
+            ModelTraceEvent::Response {
+                response,
+                raw_response,
+                ..
+            } => {
                 self.active.remove(&record.exchange_id);
                 self.usage.responses += 1;
                 match response["usage"]["prompt_tokens"].as_u64() {
@@ -88,6 +94,13 @@ impl TraceCursor {
                             self.usage.known_input_tokens.saturating_add(count)
                     }
                     None => self.usage.missing_input_usage += 1,
+                }
+                match cached_input_tokens(&response, raw_response.as_ref()) {
+                    Some(count) => {
+                        self.usage.known_cached_input_tokens =
+                            self.usage.known_cached_input_tokens.saturating_add(count)
+                    }
+                    None => self.usage.missing_cached_input_usage += 1,
                 }
                 match response["usage"]["completion_tokens"].as_u64() {
                     Some(count) => {
@@ -118,10 +131,26 @@ impl Usage {
         self.hedges += other.hedges;
         self.active_requests += other.active_requests;
         self.known_input_tokens += other.known_input_tokens;
+        self.known_cached_input_tokens += other.known_cached_input_tokens;
         self.known_output_tokens += other.known_output_tokens;
         self.missing_input_usage += other.missing_input_usage;
+        self.missing_cached_input_usage += other.missing_cached_input_usage;
         self.missing_output_usage += other.missing_output_usage;
     }
+}
+
+fn cached_input_tokens(
+    response: &serde_json::Value,
+    raw_response: Option<&serde_json::Value>,
+) -> Option<u64> {
+    response
+        .pointer("/usage/prompt_tokens_details/cached_tokens")
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| {
+            raw_response?
+                .pointer("/usage/prompt_tokens_details/cached_tokens")?
+                .as_u64()
+        })
 }
 
 #[cfg(test)]
@@ -163,8 +192,45 @@ mod tests {
         let usage = cursor.poll(file.path(), 90, true)?;
         assert_eq!(usage.active_requests, 0);
         assert_eq!(usage.known_input_tokens, 12);
+        assert_eq!(usage.missing_cached_input_usage, 1);
         assert_eq!(usage.missing_output_usage, 1);
         assert_eq!(cursor.poll(file.path(), 90, true)?.known_input_tokens, 12);
+        Ok(())
+    }
+
+    #[test]
+    fn cached_input_distinguishes_explicit_zero_from_missing_metadata()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut file = tempfile::NamedTempFile::new()?;
+        file.write_all(&record(
+            json!({
+                "event":"response",
+                "provider_attempt":0,
+                "elapsed_ms":1,
+                "response":{"usage":{"prompt_tokens":10,"completion_tokens":1}},
+                "raw_response":{"usage":{"prompt_tokens_details":{"cached_tokens":0}}}
+            }),
+            0,
+        ))?;
+        let mut cursor = TraceCursor::default();
+        let usage = cursor.poll(file.path(), 90, true)?;
+        assert_eq!(usage.known_input_tokens, 10);
+        assert_eq!(usage.known_cached_input_tokens, 0);
+        assert_eq!(usage.missing_cached_input_usage, 0);
+
+        file.write_all(&record(
+            json!({
+                "event":"response",
+                "provider_attempt":0,
+                "elapsed_ms":1,
+                "response":{"usage":{"prompt_tokens":20,"completion_tokens":1}},
+                "raw_response":null
+            }),
+            1,
+        ))?;
+        let usage = cursor.poll(file.path(), 90, true)?;
+        assert_eq!(usage.known_input_tokens, 30);
+        assert_eq!(usage.missing_cached_input_usage, 1);
         Ok(())
     }
 

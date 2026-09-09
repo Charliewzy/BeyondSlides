@@ -1264,6 +1264,7 @@ struct ConversationDiagnostics {
     tool_rounds: usize,
     final_answer_repairs: usize,
     prompt_tokens: Option<u64>,
+    cached_prompt_tokens: Option<u64>,
     completion_tokens: Option<u64>,
     accepted_json_fence: bool,
 }
@@ -1275,6 +1276,7 @@ impl Default for ConversationDiagnostics {
             tool_rounds: 0,
             final_answer_repairs: 0,
             prompt_tokens: Some(0),
+            cached_prompt_tokens: Some(0),
             completion_tokens: Some(0),
             accepted_json_fence: false,
         }
@@ -1285,6 +1287,10 @@ impl ConversationDiagnostics {
     fn record(&mut self, response: &ChatResponse, provider_retries: usize) {
         self.provider_retries = self.provider_retries.saturating_add(provider_retries);
         self.prompt_tokens = add_token_count(self.prompt_tokens, response.usage.prompt_tokens);
+        self.cached_prompt_tokens = add_u64_token_count(
+            self.cached_prompt_tokens,
+            cached_prompt_token_count(response),
+        );
         self.completion_tokens =
             add_token_count(self.completion_tokens, response.usage.completion_tokens);
     }
@@ -1318,6 +1324,9 @@ pub struct RestorationDiagnostics {
     pub final_answer_repairs: usize,
     /// Sum across every response, or `None` if any prompt-token count was absent or invalid.
     pub prompt_tokens: Option<u64>,
+    /// Cached subset of `prompt_tokens`, or `None` if any response omitted the breakdown.
+    #[serde(default)]
+    pub cached_prompt_tokens: Option<u64>,
     /// Sum across every response, or `None` if any completion-token count was absent or invalid.
     pub completion_tokens: Option<u64>,
     /// True when a whole-response `json` code fence had to be removed.
@@ -1336,6 +1345,7 @@ impl From<ConversationDiagnostics> for RestorationDiagnostics {
             provider_retries: diagnostics.provider_retries,
             final_answer_repairs: diagnostics.final_answer_repairs,
             prompt_tokens: diagnostics.prompt_tokens,
+            cached_prompt_tokens: diagnostics.cached_prompt_tokens,
             completion_tokens: diagnostics.completion_tokens,
             accepted_json_fence: diagnostics.accepted_json_fence,
         }
@@ -1352,6 +1362,9 @@ pub struct AnnotationDiagnostics {
     pub final_answer_repairs: usize,
     /// Sum across every response, or `None` if any prompt-token count was absent or invalid.
     pub prompt_tokens: Option<u64>,
+    /// Cached subset of `prompt_tokens`, or `None` if any response omitted the breakdown.
+    #[serde(default)]
+    pub cached_prompt_tokens: Option<u64>,
     /// Sum across every response, or `None` if any completion-token count was absent or invalid.
     pub completion_tokens: Option<u64>,
     /// True when a whole-response `json` code fence had to be removed.
@@ -1371,6 +1384,7 @@ impl From<ConversationDiagnostics> for AnnotationDiagnostics {
             tool_rounds: diagnostics.tool_rounds,
             final_answer_repairs: diagnostics.final_answer_repairs,
             prompt_tokens: diagnostics.prompt_tokens,
+            cached_prompt_tokens: diagnostics.cached_prompt_tokens,
             completion_tokens: diagnostics.completion_tokens,
             accepted_json_fence: diagnostics.accepted_json_fence,
         }
@@ -1379,6 +1393,28 @@ impl From<ConversationDiagnostics> for AnnotationDiagnostics {
 
 fn add_token_count(total: Option<u64>, count: Option<i32>) -> Option<u64> {
     total?.checked_add(u64::try_from(count?).ok()?)
+}
+
+fn add_u64_token_count(total: Option<u64>, count: Option<u64>) -> Option<u64> {
+    total?.checked_add(count?)
+}
+
+fn cached_prompt_token_count(response: &ChatResponse) -> Option<u64> {
+    response
+        .usage
+        .prompt_tokens_details
+        .as_ref()
+        .and_then(|details| details.cached_tokens)
+        .and_then(|tokens| u64::try_from(tokens).ok())
+        .or_else(|| {
+            // genai normalizes an explicit zero to `None`; retain the raw
+            // distinction between zero cached tokens and an omitted field.
+            response
+                .captured_raw_body
+                .as_ref()?
+                .pointer("/usage/prompt_tokens_details/cached_tokens")?
+                .as_u64()
+        })
 }
 
 #[derive(Debug)]

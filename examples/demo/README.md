@@ -13,10 +13,11 @@ depend on the checkout or the application's job directory at runtime.
 
 This is an archived result from the real-course Rust lecture used during
 development (80 slides), not synthetic scores or a guarantee of model accuracy.
-Source run: `run/real_course/passage-quality-20260906/production/analysis.json`.
-The full recording is deliberately excluded to avoid adding hundreds of
-megabytes to Git. No model traces, credentials or private run configuration
-are bundled. Slides retain their original attribution.
+It was refreshed from local application job
+`672ff94298cb60d180900184eb4a060b`, run 1, on 2026-09-10. The full recording is
+deliberately excluded to avoid adding hundreds of megabytes to Git. No model
+traces, credentials or private run configuration are bundled. Slides retain
+their original attribution.
 
 ## Refreshing the example
 
@@ -24,11 +25,11 @@ With the original development inputs available locally:
 
 ```sh
 cargo run -- render-analysis \
-  run/real_course/transcript.json \
-  run/real_course/slides.json \
-  run/real_course/passage-quality-20260906/production/analysis.json \
+  run/application/672ff94298cb60d180900184eb4a060b/transcript.json \
+  run/application/672ff94298cb60d180900184eb4a060b/slides.json \
+  run/application/672ff94298cb60d180900184eb4a060b/run-0001/analysis/analysis.json \
   run/demo-build/report.html \
-  --slides-pdf data/real_course/slides.pdf
+  --slides-pdf run/application/672ff94298cb60d180900184eb4a060b/slides.pdf
 
 uv run scripts/bundle_example_report.py \
   run/demo-build/report.html examples/demo/report.html

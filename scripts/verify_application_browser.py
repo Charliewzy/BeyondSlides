@@ -143,9 +143,30 @@ def main():
             assert page.locator("#debug-status").inner_text()
             page.locator("#debug-kind").select_option("worker")
             page.screenshot(path=str(args.workspace / "browser-desktop.png"), full_page=True)
+            # Fatal provider and output-token errors remain visible without
+            # scrolling, preserve the complete technical message, and route
+            # the user directly to recovery controls or diagnostics.
+            status = page.request.get(f"{url}/api/jobs/{job}").json()
+            status.update(state="failed", error="model endpoint request failed: 429 quota exhausted")
+            page.route(f"**/api/jobs/{job}", lambda route: route.fulfill(json=status))
+            banner = page.locator("#run-error-banner")
+            banner.wait_for(state="visible")
+            assert banner.get_attribute("role") == "alert"
+            assert page.locator("#run-error-title").inner_text() == "处理失败，已保存完成进度"
+            assert page.locator("#run-error").inner_text() == status["error"]
+            assert banner.evaluate("element => getComputedStyle(element).position") == "fixed"
+            page.screenshot(path=str(args.workspace / "browser-error-banner.png"), full_page=True)
+            page.locator("#run-error-settings").click()
+            page.wait_for_function("document.activeElement === document.getElementById('api-key')")
+            page.locator("#run-error-debug").click()
+            page.wait_for_function("document.getElementById('debug-panel').open")
+            page.wait_for_function("document.activeElement === document.getElementById('debug-output')")
+            status["error"] = "the model exhausted the output-token limit before returning a complete structured response"
+            page.wait_for_function("document.getElementById('run-error').textContent.includes('output-token limit')")
+            status.update(state="complete", error=None)
+            page.wait_for_function("document.getElementById('run-error-banner').hidden")
             # UI-only progress cases: a weighted recognition percentage must
             # not be confused with an overall job percentage or model loading.
-            status = page.request.get(f"{url}/api/jobs/{job}").json()
             observed = dict(observer_version=1, phase="recognizing", attempt_started_ms=0,
                             completed_regions=1, total_regions=3, completed_speech_ms=1000,
                             total_speech_ms=4000, timings_seconds={}, reused=False)
@@ -155,7 +176,6 @@ def main():
             status["progress"]["current"] = "passages"
             status["progress"]["stages"]["passages"] = dict(completed=21, total=147, elapsed_ms=397000, eta_ms=613000, reused=False)
             status["job"]["preview"]["warnings"] = ["SparseText { page: 3, non_whitespace_characters: 5 }", "SparseText { page: 11, non_whitespace_characters: 7 }"]
-            page.route(f"**/api/jobs/{job}", lambda route: route.fulfill(json=status))
             page.wait_for_function("document.getElementById('stage-progress').textContent.includes('识别语音 · 25%')")
             bar = page.get_by_role("progressbar", name="本地 CPU 转写")
             assert bar.get_attribute("value") == "1000"

@@ -399,7 +399,13 @@ function render(status) {
   $("input-tokens").textContent = tokenUsage(usage.known_input_tokens, usage.missing_input_usage, usage.responses);
   $("output-tokens").textContent = tokenUsage(usage.known_output_tokens, usage.missing_output_usage, usage.responses);
   $("active-requests").textContent = usage.active_requests; $("retries").textContent = usage.retries;
-  $("run-error").textContent = [status.error, status.usage_error].filter(Boolean).join("\n");
+  const failed = state === "failed" || state === "interrupted";
+  $("run-error-banner").hidden = !failed;
+  $("run-error-title").textContent = state === "interrupted"
+    ? "处理中断，已保存完成进度"
+    : "处理失败，已保存完成进度";
+  $("run-error").textContent = status.error || "处理进程未提供错误详情，请查看调试日志。";
+  $("usage-error").textContent = status.usage_error || "";
   const timings = status.transcription?.timings_seconds || {};
   $("asr-timings").textContent = Object.keys(asrPhases).filter(phase => phase in timings).map(phase => `${asrPhases[phase]}：${timings[phase].toFixed(2)} 秒`).join(" · ");
   if (status.transcription?.reused) $("asr-timings").textContent += "（模型阶段耗时来自复用的转写结果）";
@@ -430,6 +436,16 @@ async function poll() {
   if (id === currentId) { clearTimeout(pollingTimer); pollingTimer = setTimeout(poll, 1000); }
 }
 $("debug-panel").addEventListener("toggle", pollDebug);
+$("run-error-settings").addEventListener("click", () => {
+  $("provider-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+  const target = $("model-backend").value === "codex" ? $("start-button") : $("api-key");
+  requestAnimationFrame(() => target.focus({ preventScroll: true }));
+});
+$("run-error-debug").addEventListener("click", () => {
+  $("debug-panel").open = true;
+  $("debug-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+  requestAnimationFrame(() => $("debug-output").focus({ preventScroll: true }));
+});
 $("source-preview").addEventListener("toggle", () => { loadSlideReview(); updateReviewArrows(); });
 $("review-retry").addEventListener("click", () => { reviewLoaded = false; loadSlideReview(); });
 $("review-close").addEventListener("click", () => $("review-dialog").close());

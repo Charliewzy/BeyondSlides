@@ -78,6 +78,13 @@ configured OpenAI-compatible endpoint and a local Codex app-server using the
 user's cached ChatGPT sign-in.
 _Avoid_: Provider (when referring to our adapter), model endpoint (for Codex)
 
+**Token pricing**:
+Optional user-selected per-token rates for uncached input, cached input, and
+output. They estimate cost from provider-reported usage and do not affect model
+requests or checkpoint identity. A missing price is unknown, while an explicit
+zero is free.
+_Avoid_: Model price (when the rate actually belongs to a particular provider)
+
 **Cut cost**:
 An ordinal `0..5` judgment of how much semantic or grammatical damage would be
 caused by dividing restored transcript text at one candidate gap. Zero is a

@@ -18,6 +18,8 @@ let codexStatusPromise;
 let desiredCodexModel = "";
 let desiredCodexReasoningEffort = "";
 let desiredCodexServiceTier = "";
+let pricingSearchTimer;
+let pricingSearchSequence = 0;
 
 function showReviewPage(page, source) {
   $("review-page-title").textContent = `第 ${page.page} 页`;
@@ -174,7 +176,72 @@ function setSettings(settings) {
   $("initial-concurrency").value = settings.initial_concurrency ?? Math.min(2, settings.max_concurrency);
   syncConcurrencyLimits(); $("spacing").value = settings.request_interval_ms;
   $("adaptive").checked = settings.adaptive;
+  const pricing = settings.pricing || {};
+  $("uncached-input-price").value = pricing.uncached_input || "";
+  $("cached-input-price").value = pricing.cached_input || "";
+  $("output-price").value = pricing.output || "";
   syncModelBackend();
+}
+function configuredPricing() {
+  const pricing = {
+    uncached_input: $("uncached-input-price").value.trim(),
+    cached_input: $("cached-input-price").value.trim(),
+    output: $("output-price").value.trim(),
+  };
+  const filled = Object.values(pricing).filter(Boolean).length;
+  if (!filled) return null;
+  if (filled !== 3) throw new Error("请填写全部三个 token 价格，或将它们全部留空");
+  return pricing;
+}
+function formatPresetPrice(value) {
+  const perToken = Number(value.slice(1));
+  return Number.isFinite(perToken) ? `$${(perToken * 1_000_000).toLocaleString()} / 百万 token` : value;
+}
+function renderPricingResults(presets) {
+  const results = $("pricing-results");
+  results.replaceChildren();
+  for (const preset of presets) {
+    const button = document.createElement("button");
+    button.type = "button"; button.className = "pricing-result"; button.setAttribute("role", "option");
+    const name = document.createElement("strong");
+    name.textContent = `${preset.model_name} · ${preset.provider_name}`;
+    const prices = document.createElement("span");
+    prices.textContent = `输入 ${formatPresetPrice(preset.uncached_input)} · 缓存 ${formatPresetPrice(preset.cached_input)} · 输出 ${formatPresetPrice(preset.output)}`;
+    button.append(name, prices);
+    button.addEventListener("click", () => {
+      $("uncached-input-price").value = preset.uncached_input;
+      $("cached-input-price").value = preset.cached_input;
+      $("output-price").value = preset.output;
+      $("pricing-search").value = `${preset.model_name} · ${preset.provider_name}`;
+      results.hidden = true;
+      const caveats = [
+        preset.cached_price_assumed ? "该预设未发布缓存读取价，已保守地按未缓存输入价填写" : "",
+        preset.tiered_pricing ? "该模型另有分级价格，请按你的实际请求核对" : "",
+      ].filter(Boolean);
+      $("pricing-status").textContent = `已应用 Models.dev 的美元单价；${caveats.length ? caveats.join("；") : "请核对你的实际服务商价格"}。`;
+    });
+    results.append(button);
+  }
+  results.hidden = presets.length === 0;
+}
+async function searchPricing() {
+  const query = $("pricing-search").value.trim();
+  const sequence = ++pricingSearchSequence;
+  if (!query) { $("pricing-results").hidden = true; return; }
+  $("pricing-status").textContent = "正在从 Models.dev 查找价格…";
+  try {
+    const presets = await api(`/api/model-pricing?query=${encodeURIComponent(query)}`);
+    if (sequence !== pricingSearchSequence) return;
+    renderPricingResults(presets);
+    $("pricing-status").textContent = presets.length
+      ? "选择一项即可填入美元单价。预设按服务商区分，代理端点价格可能不同。"
+      : "Models.dev 中没有匹配的价格；你仍可手动填写。";
+  } catch (error) {
+    if (sequence === pricingSearchSequence) {
+      $("pricing-results").hidden = true;
+      $("pricing-status").textContent = `${error.message}；你仍可手动填写价格。`;
+    }
+  }
 }
 function selectedCodexModel() {
   const model = $("codex-model").selectedOptions[0];
@@ -340,6 +407,13 @@ function cacheUsage(usage) {
     : 100 * usage.known_cached_input_tokens / usage.known_input_tokens;
   return { uncached: uncached.toLocaleString(), hitRate: `${percentage.toFixed(1)}%` };
 }
+function costEstimate(estimate) {
+  if (!estimate) return "未配置";
+  const amount = estimate.amount;
+  const digits = amount >= 100 ? 2 : amount >= 1 ? 3 : amount >= 0.01 ? 4 : 6;
+  const formatted = amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: digits });
+  return `${estimate.currency}${formatted}${estimate.incomplete_usage ? "（用量不完整）" : ""}`;
+}
 const asrPhases = { checking_recording: "检查录音", extracting_audio: "提取音频", downloading_models: "下载语音模型", loading_models: "加载模型", detecting_speech: "检测语音", recognizing: "识别语音", finalizing: "验证并保存", complete: "完成" };
 function transcriptionProgress(row, progress, count, observed, active) {
   const recognizing = observed.phase === "recognizing" && observed.total_speech_ms > 0 && observed.total_regions > 0;
@@ -418,6 +492,7 @@ function render(status) {
   $("uncached-input-tokens").textContent = cache.uncached;
   $("cache-hit-rate").textContent = cache.hitRate;
   $("output-tokens").textContent = tokenUsage(usage.known_output_tokens, usage.missing_output_usage, usage.responses);
+  $("estimated-cost").textContent = costEstimate(status.estimated_cost);
   $("active-requests").textContent = usage.active_requests; $("retries").textContent = usage.retries;
   $("hedges").textContent = `${usage.hedges} / 20`;
   const failed = state === "failed" || state === "interrupted";
@@ -772,6 +847,7 @@ $("start-form").addEventListener("submit", async (event) => {
         codex_reasoning_effort: codex ? ($("codex-reasoning-effort").value || null) : null,
         codex_service_tier: codexServiceTier || null,
         extra_body: codex ? null : ($("extra-body").value.trim() ? JSON.parse($("extra-body").value) : null),
+        pricing: configuredPricing(),
         initial_concurrency: Number($("initial-concurrency").value), max_concurrency: Number($("concurrency").value),
         request_interval_ms: Number($("spacing").value), adaptive: $("adaptive").checked },
       api_key: codex ? "" : $("api-key").value,
@@ -806,6 +882,16 @@ $("codex-reasoning-effort").addEventListener("change", () => {
 });
 $("codex-fast").addEventListener("change", () => {
   desiredCodexServiceTier = $("codex-fast").checked ? $("codex-fast").dataset.serviceTier : "";
+});
+$("pricing-search").addEventListener("input", () => {
+  clearTimeout(pricingSearchTimer);
+  pricingSearchTimer = setTimeout(searchPricing, 250);
+});
+$("pricing-search").addEventListener("keydown", event => {
+  if (event.key === "Escape") $("pricing-results").hidden = true;
+});
+document.addEventListener("click", event => {
+  if (!(event.target instanceof Element) || !event.target.closest(".pricing-search")) $("pricing-results").hidden = true;
 });
 syncModelBackend();
 refreshLibrary().then(() => {

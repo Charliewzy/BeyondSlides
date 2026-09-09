@@ -16,6 +16,7 @@ use beyond_slides::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::pricing::TokenPricing;
 use crate::run_support::{ModelBackendKind, read_json, write_json_atomically};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +56,8 @@ pub(super) struct Settings {
     pub codex_service_tier: Option<String>,
     pub extra_body: Option<Value>,
     #[serde(default)]
+    pub pricing: Option<TokenPricing>,
+    #[serde(default)]
     pub initial_concurrency: Option<usize>,
     pub max_concurrency: usize,
     pub request_interval_ms: u64,
@@ -77,6 +80,9 @@ impl Settings {
     pub fn validate(&self, key: &str) -> Result<(), String> {
         if self.model.trim().is_empty() {
             return Err("Model name cannot be empty".into());
+        }
+        if let Some(pricing) = &self.pricing {
+            pricing.validate()?;
         }
         if self.backend == ModelBackendKind::Codex {
             if self
@@ -436,6 +442,7 @@ mod tests {
             codex_reasoning_effort: None,
             codex_service_tier: None,
             extra_body: None,
+            pricing: None,
             initial_concurrency: Some(2),
             max_concurrency: 2,
             request_interval_ms: 0,
@@ -474,6 +481,19 @@ mod tests {
         assert!(left.same_restoration(&right));
         right.codex_reasoning_effort = Some("high".into());
         assert!(!left.same_restoration(&right));
+    }
+
+    #[test]
+    fn pricing_changes_do_not_invalidate_model_checkpoints() {
+        let left = settings(ModelBackendKind::OpenAiCompatible);
+        let mut right = left.clone();
+        right.pricing = Some(TokenPricing {
+            uncached_input: "$0.000001".into(),
+            cached_input: "$0.0000002".into(),
+            output: "$0.000003".into(),
+        });
+        assert!(left.same_restoration(&right));
+        assert!(left.same_analysis(&right));
     }
 
     #[test]
@@ -516,6 +536,7 @@ mod tests {
         }))
         .expect("legacy settings deserialize");
         assert_eq!(settings.backend, ModelBackendKind::OpenAiCompatible);
+        assert!(settings.pricing.is_none());
         assert!(settings.legacy_boundary_passages);
     }
 
@@ -588,6 +609,7 @@ mod tests {
                 codex_reasoning_effort: None,
                 codex_service_tier: None,
                 extra_body: None,
+                pricing: None,
                 initial_concurrency: Some(2),
                 max_concurrency: 2,
                 request_interval_ms: 0,

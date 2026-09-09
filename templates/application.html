@@ -113,6 +113,19 @@
             <label>推理强度<select id="codex-reasoning-effort" disabled><option value="">模型默认</option></select><small id="codex-reasoning-description"></small></label>
             <label class="codex-speed-control"><span>响应速度</span><span class="check"><input id="codex-fast" type="checkbox" disabled> Fast 模式</span><small id="codex-fast-description">所选模型不提供 Fast 模式。</small></label>
           </div>
+          <section class="pricing-settings" aria-labelledby="pricing-title">
+            <div class="section-heading"><h3 id="pricing-title">模型价格（可选）</h3><small>用于实时估算本次分析费用</small></div>
+            <div class="pricing-search">
+              <label>搜索价格预设<input id="pricing-search" type="search" autocomplete="off" placeholder="输入模型或服务商，例如 GLM-5、OpenAI"></label>
+              <div id="pricing-results" class="pricing-results" role="listbox" aria-label="模型价格预设" hidden></div>
+            </div>
+            <div class="pricing-grid">
+              <label>未缓存输入价格 / token<input id="uncached-input-price" inputmode="decimal" placeholder="$0.000001"></label>
+              <label>缓存输入价格 / token<input id="cached-input-price" inputmode="decimal" placeholder="$0.0000002"></label>
+              <label>输出价格 / token<input id="output-price" inputmode="decimal" placeholder="$0.000003"></label>
+            </div>
+            <p id="pricing-status" class="muted">三个价格应全部留空，或全部填写并使用同一种货币。支持 $、￥ 和 ¥；预设为可编辑的美元估算值。</p>
+          </section>
           <details><summary>高级设置</summary>
             <div class="provider-grid">
               <label>起始并发数（自动调整时）<input id="initial-concurrency" type="number" min="1" max="32" value="2" required></label>
@@ -130,8 +143,8 @@
         <div class="section-heading"><h2 id="run-state">处理进度</h2><span id="elapsed" class="muted"></span></div>
         <p class="muted" id="run-description">关闭或刷新这个页面不会停止后端处理。</p>
         <div id="stage-progress"></div>
-        <div class="usage-grid"><div><small>总输入 token</small><strong id="input-tokens">—</strong></div><div><small>未缓存输入</small><strong id="uncached-input-tokens">—</strong></div><div><small>缓存命中率</small><strong id="cache-hit-rate">—</strong></div><div><small>输出 token</small><strong id="output-tokens">—</strong></div><div><small>正在请求</small><strong id="active-requests">0</strong></div><div><small>已安排重试</small><strong id="retries">0</strong></div><div><small>备用请求</small><strong id="hedges">0 / 20</strong></div></div>
-        <p class="muted">用量随模型响应到达而更新，包含本次运行历史中已记录的响应，不是未完成请求的实时生成计数。缺失用量不会当作零。</p>
+        <div class="usage-grid"><div><small>总输入 token</small><strong id="input-tokens">—</strong></div><div><small>未缓存输入</small><strong id="uncached-input-tokens">—</strong></div><div><small>缓存命中率</small><strong id="cache-hit-rate">—</strong></div><div><small>输出 token</small><strong id="output-tokens">—</strong></div><div><small>预计模型费用</small><strong id="estimated-cost">未配置</strong></div><div><small>正在请求</small><strong id="active-requests">0</strong></div><div><small>已安排重试</small><strong id="retries">0</strong></div><div><small>备用请求</small><strong id="hedges">0 / 20</strong></div></div>
+        <p class="muted">用量与费用随模型响应到达而更新，包含本次运行历史中已记录的响应，不是未完成请求的实时生成计数。费用按你填写的价格估算；缺失用量不会当作零。</p>
         <p id="usage-error" class="warning"></p>
         <details id="debug-panel">
           <summary>调试日志与阶段耗时</summary>

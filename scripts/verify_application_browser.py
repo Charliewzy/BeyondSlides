@@ -127,6 +127,21 @@ def main():
             assert "建议尝试关闭模型的思考模式" in disclosure.locator("strong").inner_text()
             assert "GLM-5" in disclosure.inner_text()
             assert json.loads(disclosure.locator("code").inner_text()) == {"thinking": {"type": "disabled"}}
+            pricing_preset = {
+                "provider_id": "test-provider", "provider_name": "Test Provider",
+                "model_id": "test-model", "model_name": "Test Model",
+                "uncached_input": "$0.000001", "cached_input": "$0.0000002",
+                "output": "$0.000003", "cached_price_assumed": False,
+                "tiered_pricing": False,
+            }
+            page.route("**/api/model-pricing?*", lambda route: route.fulfill(json=[pricing_preset]))
+            page.locator("#pricing-search").fill("test model")
+            page.get_by_role("option", name="Test Model · Test Provider").wait_for(state="visible")
+            page.get_by_role("option", name="Test Model · Test Provider").click()
+            assert page.locator("#uncached-input-price").input_value() == "$0.000001"
+            assert page.locator("#cached-input-price").input_value() == "$0.0000002"
+            assert page.locator("#output-price").input_value() == "$0.000003"
+            page.unroute("**/api/model-pricing?*")
             assert not page.locator("#start-form details").evaluate("element => element.open")
             page.reload()
             page.locator("#open-report").wait_for(state="visible")
@@ -176,8 +191,12 @@ def main():
             # scrolling, preserve the complete technical message, and route
             # the user directly to recovery controls or diagnostics.
             status = page.request.get(f"{url}/api/jobs/{job}").json()
-            status.update(state="failed", error="model endpoint request failed: 429 quota exhausted")
+            status["estimated_cost"] = {
+                "currency": "￥", "amount": 12.34567, "incomplete_usage": False,
+            }
             page.route(f"**/api/jobs/{job}", lambda route: route.fulfill(json=status))
+            page.wait_for_function("document.getElementById('estimated-cost').textContent === '￥12.346'")
+            status.update(state="failed", error="model endpoint request failed: 429 quota exhausted")
             banner = page.locator("#run-error-banner")
             banner.wait_for(state="visible")
             assert banner.get_attribute("role") == "alert"

@@ -2,6 +2,7 @@ mod export;
 mod jobs;
 mod logs;
 mod model_assets;
+mod pricing;
 mod rain_classroom;
 mod recognition_eta;
 mod slide_ocr;
@@ -62,6 +63,7 @@ struct App {
     preview_renders: Arc<tokio::sync::Semaphore>,
     recognition_estimators: Arc<Mutex<HashMap<String, recognition_eta::RecognitionEstimator>>>,
     rain_classroom: Arc<rain_classroom::RainClassroom>,
+    pricing_catalog: Arc<pricing::PricingCatalog>,
 }
 
 pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>> {
@@ -76,6 +78,7 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
     let listener = tokio::net::TcpListener::bind(SocketAddr::new(bind_address, port)).await?;
     let port = listener.local_addr()?.port();
     let rain_classroom = Arc::new(rain_classroom::RainClassroom::new(&root));
+    let pricing_catalog = Arc::new(pricing::PricingCatalog::new()?);
     let app = App {
         root,
         request_policy: Arc::new(request_policy),
@@ -84,6 +87,7 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
         preview_renders: Arc::new(tokio::sync::Semaphore::new(2)),
         recognition_estimators: Arc::default(),
         rain_classroom,
+        pricing_catalog,
     };
     let rain_classroom = app.rain_classroom.clone();
     let router = Router::new()
@@ -122,6 +126,7 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
         )
         .route("/api/jobs", get(list_jobs).post(upload))
         .route("/api/codex/status", get(codex_status))
+        .route("/api/model-pricing", get(search_model_pricing))
         .route("/api/rain-classroom/connect", post(connect_rain_classroom))
         .route("/api/rain-classroom/logout", post(logout_rain_classroom))
         .route(
@@ -380,6 +385,7 @@ mod tests {
             preview_renders: Arc::new(tokio::sync::Semaphore::new(2)),
             recognition_estimators: Arc::default(),
             rain_classroom: Arc::new(rain_classroom::RainClassroom::new(root)),
+            pricing_catalog: Arc::new(pricing::PricingCatalog::new().unwrap()),
         }
     }
 
@@ -852,6 +858,7 @@ struct Status {
     state: String,
     progress: WorkerProgress,
     usage: Usage,
+    estimated_cost: Option<pricing::CostEstimate>,
     usage_error: Option<String>,
     error: Option<String>,
     elapsed_ms: u64,
@@ -870,6 +877,7 @@ async fn job_status(
         state: "ready".into(),
         progress: WorkerProgress::default(),
         usage: Usage::default(),
+        estimated_cost: None,
         usage_error: None,
         error: None,
         elapsed_ms: 0,
@@ -948,11 +956,37 @@ async fn job_status(
                 }
             }
         }
+        status.estimated_cost = run
+            .settings
+            .pricing
+            .as_ref()
+            .and_then(|pricing| pricing.estimate(&status.usage).ok());
         if status.state == "complete" && path.join("analysis/report.html").is_file() {
             status.report_url = Some(format!("/reports/{id}/report.html"));
         }
     }
     Ok(Json(status))
+}
+
+#[derive(Deserialize)]
+struct PricingQuery {
+    query: String,
+}
+
+async fn search_model_pricing(
+    State(app): State<App>,
+    Query(query): Query<PricingQuery>,
+) -> Result<Json<Vec<pricing::PricingPreset>>, AppError> {
+    if query.query.chars().count() > 100 {
+        return Err(AppError::bad(
+            "Model-price search is limited to 100 characters",
+        ));
+    }
+    app.pricing_catalog
+        .search(&query.query)
+        .await
+        .map(Json)
+        .map_err(|error| AppError(StatusCode::BAD_GATEWAY, error))
 }
 
 #[derive(Deserialize)]

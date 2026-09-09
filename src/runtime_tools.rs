@@ -11,7 +11,7 @@ use std::{
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 
-const RUNTIME_DIRECTORY_ENV: &str = "BEYOND_SLIDES_RUNTIME_TOOLS_DIR";
+pub const RUNTIME_TOOLS_DIRECTORY_ENV: &str = "BEYOND_SLIDES_RUNTIME_TOOLS_DIR";
 // This is the immutable ffmpeg-static release revision. Its executables report
 // FFmpeg 7.0.2; the bundle revision is kept in paths so upstream replacement is
 // always explicit.
@@ -143,7 +143,7 @@ fn resolve_media_tool(tool: MediaTool) -> Result<PathBuf, RuntimeToolError> {
 
 fn packaged_roots() -> Result<Vec<PathBuf>, RuntimeToolError> {
     let mut roots = Vec::new();
-    if let Some(configured) = std::env::var_os(RUNTIME_DIRECTORY_ENV) {
+    if let Some(configured) = std::env::var_os(RUNTIME_TOOLS_DIRECTORY_ENV) {
         roots.push(PathBuf::from(configured));
     }
     let executable = std::env::current_exe().map_err(RuntimeToolError::CurrentExecutable)?;

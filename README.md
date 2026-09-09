@@ -62,6 +62,22 @@ cargo build --release --locked
 ./target/release/beyond-slides serve run/my-lectures 7842
 ```
 
+### Docker
+
+Docker 镜像同样从仓库源码编译，并预装项目锁定版本的 PDFium、FFmpeg 和
+`ffprobe`；运行镜像不通过系统包管理器安装 FFmpeg 或 Poppler：
+
+```sh
+docker build --pull=false -t beyond-slides .
+docker volume create beyond-slides-data
+docker run --rm --name beyond-slides \
+  -p 127.0.0.1:80:7842 \
+  -v beyond-slides-data:/data \
+  beyond-slides
+```
+
+打开 **http://127.0.0.1/**。容器内监听 `0.0.0.0:7842`，因此宿主端口可以任意映射；上例特意验证了 `80:7842`，并只向宿主 loopback 发布。模型、登录资料、讲座与检查点都保存在命名卷中。完整的端口、可信来源及冒烟测试说明见 [部署说明](docs/deployment.md)。默认镜像不含可选的 Chromium，因此雨课堂导入在该镜像中不可用。
+
 ### 2. 可选：启用本地录音转写
 
 **已有转写文件时可以跳过这一节。** 录音 / 视频转写由 Rust 内的 sherpa-onnx、INT8 SenseVoiceSmall 和 Silero VAD 在本机 CPU 上完成，不需要 Python、PyTorch、GPU 或系统安装的 FFmpeg。BeyondSlides 使用经过完整性校验的托管 FFmpeg 提取 16 kHz 单声道音频。
@@ -108,7 +124,7 @@ API base URL: https://lab.cs.tsinghua.edu.cn/ai-platform/api/v1
 - API key 不写入讲座配置或浏览器持久存储，但会传给本地后台进程。调试日志有凭据过滤，不等于自动清除所有敏感内容。
 - 本地检查点、模型请求 / 响应 traces 和日志可能包含完整课程文本。默认 `run/`、`data/` 被 Git 忽略；不要把自己的数据目录提交到仓库。
 - 新写入的模型 traces 和服务商错误会过滤配置的 API key（含 JSON / URL 编码形式）。修复前的 traces 不会自动清理；不要分享原始 traces。过滤不保证识别任意混淆方式或其他秘密。
-- 服务仅绑定 loopback，没有多用户鉴权。**不要直接通过反向代理或端口转发将它公开到互联网。**
+- 源码启动默认只绑定 loopback；Docker 镜像在容器内绑定 `0.0.0.0`，但示例只向宿主 loopback 发布。服务没有多用户鉴权，**不要直接通过反向代理或端口转发将它公开到互联网。**
 - 本地上传的 PDF 目前仍依赖可提取文字；PP-OCRv5 只自动处理雨课堂导入的逐页图片。检查警告与 OCR 都不能保证提取内容完整。
 - ASR、文本恢复、分段、排名和幻灯片对齐都可能出错；音频定位可能退回较粗的转写区间。请对重要内容回看原始讲义 / 录音。
 - 软件使用 [MIT 许可证](LICENSE)。托管的 FFmpeg/ffprobe 是独立的 GPLv3 程序，预装包会同时保留上游许可证与构建说明；PDFium 包也保留其上游许可证。内置示例的课程文字和幻灯片不在 MIT 授权范围内；按项目所有者决定，为当前课程提交保留。公开发布前仍需确认授权或替换示例，见 [NOTICE](NOTICE)。
@@ -137,6 +153,7 @@ uv run scripts/verify_application_browser.py run/release-check
 ## 项目导航
 
 - [本地应用：配置、数据与恢复机制](docs/local-application.md)
+- [Docker 与网络部署](docs/deployment.md)
 - [命令行分析与检查点说明](docs/running.md)
 - [架构](ARCHITECTURE.md)、[领域词汇](CONTEXT.md)、[架构决策](docs/adr/)
 - [实验与评估记录](docs/evaluation/)

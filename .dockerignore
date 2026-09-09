@@ -1,0 +1,7 @@
+.git
+.venv
+data
+run
+target
+**/__pycache__
+**/*.pyc

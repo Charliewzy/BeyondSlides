@@ -27,11 +27,12 @@ executable with `beyond-slides install-runtime-tools <directory>`. The expected
 directory name is `runtime-tools` when it is executable-adjacent; normal source
 runs use the operating-system cache automatically.
 
-Open `http://127.0.0.1:7842`. The server binds only to loopback; this is not a
-multi-user hosted deployment. Pinned PDFium, FFmpeg, and `ffprobe` assets are
-resolved beside the executable, from the user cache, or downloaded with SHA-256
-verification on first use. Dense-retrieval and Rain Classroom OCR models may
-also download on first use.
+Open `http://127.0.0.1:7842`. Source runs bind to loopback by default; this is
+not a multi-user hosted deployment. Docker and reverse-proxy configuration are
+documented separately in [deployment.md](deployment.md). Pinned PDFium, FFmpeg,
+and `ffprobe` assets are resolved beside the executable, from the user cache,
+or downloaded with SHA-256 verification on first use. Dense-retrieval and Rain
+Classroom OCR models may also download on first use.
 
 1. Choose the written source: upload a slides PDF (up to 100 MiB), or select a
    Rain Classroom course, lecture, and presentation. Choose the lecture source

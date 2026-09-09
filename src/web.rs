@@ -16,8 +16,10 @@ use std::{
     error::Error,
     ffi::OsStr,
     fs, io,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Component, Path as FsPath, PathBuf},
     process::Stdio,
+    str::FromStr,
     sync::Arc,
 };
 
@@ -48,11 +50,13 @@ const EXAMPLE_REPORT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/examples/demo/report.html"
 ));
+const BIND_ADDRESS_ENV: &str = "BEYOND_SLIDES_BIND_ADDRESS";
+const TRUSTED_ORIGINS_ENV: &str = "BEYOND_SLIDES_TRUSTED_ORIGINS";
 
 #[derive(Clone)]
 struct App {
     root: PathBuf,
-    port: u16,
+    request_policy: Arc<RequestPolicy>,
     launching: Arc<Mutex<HashSet<String>>>,
     cursors: Arc<Mutex<HashMap<PathBuf, TraceCursor>>>,
     preview_renders: Arc<tokio::sync::Semaphore>,
@@ -67,12 +71,14 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
     let lock = jobs::worker_lock(&root)?;
     lock.try_lock()
         .map_err(|e| format!("another application is using {}: {e}", root.display()))?;
-    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
+    let bind_address = bind_address_from_environment()?;
+    let request_policy = RequestPolicy::from_environment()?;
+    let listener = tokio::net::TcpListener::bind(SocketAddr::new(bind_address, port)).await?;
     let port = listener.local_addr()?.port();
     let rain_classroom = Arc::new(rain_classroom::RainClassroom::new(&root));
     let app = App {
         root,
-        port,
+        request_policy: Arc::new(request_policy),
         launching: Arc::default(),
         cursors: Arc::default(),
         preview_renders: Arc::new(tokio::sync::Semaphore::new(2)),
@@ -154,7 +160,7 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
         .layer(DefaultBodyLimit::max(4 * 1024 * 1024 * 1024_usize))
         .layer(middleware::from_fn_with_state(app.clone(), local_only))
         .with_state(app);
-    println!("BeyondSlides application: http://127.0.0.1:{port}");
+    println!("BeyondSlides application: http://{bind_address}:{port}");
     let result = axum::serve(listener, router)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
@@ -165,22 +171,156 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
+fn bind_address_from_environment() -> Result<IpAddr, String> {
+    let Some(configured) = std::env::var_os(BIND_ADDRESS_ENV) else {
+        return Ok(Ipv4Addr::LOCALHOST.into());
+    };
+    configured
+        .to_str()
+        .ok_or_else(|| format!("{BIND_ADDRESS_ENV} must be valid UTF-8"))?
+        .parse()
+        .map_err(|error| format!("invalid {BIND_ADDRESS_ENV}: {error}"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RequestPolicy {
+    trusted_origins: HashSet<TrustedOrigin>,
+}
+
+impl RequestPolicy {
+    fn from_environment() -> Result<Self, String> {
+        let configured = match std::env::var(TRUSTED_ORIGINS_ENV) {
+            Ok(configured) => configured,
+            Err(std::env::VarError::NotPresent) => String::new(),
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(format!("{TRUSTED_ORIGINS_ENV} must be valid UTF-8"));
+            }
+        };
+        Self::parse(&configured)
+    }
+
+    fn parse(configured: &str) -> Result<Self, String> {
+        let trusted_origins = configured
+            .split(',')
+            .map(str::trim)
+            .filter(|origin| !origin.is_empty())
+            .map(TrustedOrigin::parse)
+            .collect::<Result<_, _>>()?;
+        Ok(Self { trusted_origins })
+    }
+
+    fn allows(&self, host: &str, origin: Option<&str>) -> bool {
+        let Some(authority) = RequestAuthority::parse(host) else {
+            return false;
+        };
+        let host_is_trusted = authority.is_loopback()
+            || self
+                .trusted_origins
+                .iter()
+                .any(|trusted| trusted.matches_authority(&authority));
+        if !host_is_trusted {
+            return false;
+        }
+        let Some(origin) = origin else {
+            return true;
+        };
+        let Ok(origin) = TrustedOrigin::parse(origin) else {
+            return false;
+        };
+        if !origin.matches_authority(&authority) {
+            return false;
+        }
+        origin.is_loopback() || self.trusted_origins.contains(&origin)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TrustedOrigin {
+    serialized: String,
+    host: String,
+    port: u16,
+}
+
+impl TrustedOrigin {
+    fn parse(value: &str) -> Result<Self, String> {
+        let url = url::Url::parse(value)
+            .map_err(|error| format!("invalid trusted origin {value:?}: {error}"))?;
+        if !matches!(url.scheme(), "http" | "https")
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.path() != "/"
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(format!(
+                "trusted origin {value:?} must contain only an http(s) scheme, host, and optional port"
+            ));
+        }
+        let host = url
+            .host_str()
+            .ok_or_else(|| format!("trusted origin {value:?} has no host"))?
+            .trim_matches(['[', ']'])
+            .to_ascii_lowercase();
+        let port = url
+            .port_or_known_default()
+            .ok_or_else(|| format!("trusted origin {value:?} has no usable port"))?;
+        Ok(Self {
+            serialized: url.origin().ascii_serialization(),
+            host,
+            port,
+        })
+    }
+
+    fn is_loopback(&self) -> bool {
+        is_loopback_host(&self.host)
+    }
+
+    fn matches_authority(&self, authority: &RequestAuthority) -> bool {
+        self.host == authority.host && authority.port.is_none_or(|port| port == self.port)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RequestAuthority {
+    host: String,
+    port: Option<u16>,
+}
+
+impl RequestAuthority {
+    fn parse(value: &str) -> Option<Self> {
+        let authority = axum::http::uri::Authority::from_str(value).ok()?;
+        Some(Self {
+            host: authority
+                .host()
+                .trim_matches(['[', ']'])
+                .to_ascii_lowercase(),
+            port: authority.port_u16(),
+        })
+    }
+
+    fn is_loopback(&self) -> bool {
+        is_loopback_host(&self.host)
+    }
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
+}
+
 async fn local_only(State(app): State<App>, request: Request, next: Next) -> Response {
     let host = request
         .headers()
         .get(header::HOST)
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
-    let allowed = [
-        format!("127.0.0.1:{}", app.port),
-        format!("localhost:{}", app.port),
-    ];
-    if !allowed.iter().any(|h| h == host) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    if let Some(origin) = request.headers().get(header::ORIGIN)
-        && origin.to_str().ok() != Some(format!("http://{host}").as_str())
-    {
+    let origin = request
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|origin| origin.to_str().ok());
+    if !app.request_policy.allows(host, origin) {
         return StatusCode::FORBIDDEN.into_response();
     }
     if request.method() != axum::http::Method::GET
@@ -234,12 +374,46 @@ mod tests {
     fn test_app(root: &FsPath) -> App {
         App {
             root: root.into(),
-            port: 0,
+            request_policy: Arc::new(RequestPolicy::parse("").unwrap()),
             launching: Arc::default(),
             cursors: Arc::default(),
             preview_renders: Arc::new(tokio::sync::Semaphore::new(2)),
             recognition_estimators: Arc::default(),
             rain_classroom: Arc::new(rain_classroom::RainClassroom::new(root)),
+        }
+    }
+
+    #[test]
+    fn loopback_requests_accept_arbitrary_external_ports_but_not_cross_origin_ports() {
+        let policy = RequestPolicy::parse("").unwrap();
+
+        assert!(policy.allows("127.0.0.1:80", None));
+        assert!(policy.allows("127.0.0.1:8080", Some("http://127.0.0.1:8080")));
+        assert!(policy.allows("[::1]:49152", Some("http://[::1]:49152")));
+        assert!(!policy.allows("127.0.0.1:7842", Some("http://127.0.0.1:80")));
+        assert!(!policy.allows("example.com:7842", None));
+    }
+
+    #[test]
+    fn configured_origins_authorize_their_host_and_exact_browser_origin() {
+        let policy =
+            RequestPolicy::parse("https://reader.example:8443, http://lecture.internal:8080/")
+                .unwrap();
+
+        assert!(policy.allows("reader.example:8443", Some("https://reader.example:8443")));
+        assert!(policy.allows("lecture.internal:8080", None));
+        assert!(!policy.allows("reader.example:8443", Some("https://reader.example:9443")));
+        assert!(!policy.allows("reader.example:80", None));
+    }
+
+    #[test]
+    fn trusted_origin_configuration_rejects_paths_credentials_and_non_http_schemes() {
+        for invalid in [
+            "https://reader.example/path",
+            "https://user@reader.example",
+            "file:///tmp/report",
+        ] {
+            assert!(RequestPolicy::parse(invalid).is_err(), "accepted {invalid}");
         }
     }
 
@@ -897,6 +1071,8 @@ async fn start(
         .create(true)
         .append(true)
         .open(path.join("worker.log"))?;
+    let runtime_tools_directory =
+        std::env::var_os(beyond_slides::runtime_tools::RUNTIME_TOOLS_DIRECTORY_ENV);
     let mut command = tokio::process::Command::new(std::env::current_exe()?);
     command
         .arg("application-worker")
@@ -935,6 +1111,12 @@ async fn start(
             },
         )
         .env("BEYOND_SLIDES_WORKER_CONTROL", path.join("control"));
+    if let Some(runtime_tools_directory) = runtime_tools_directory {
+        command.env(
+            beyond_slides::runtime_tools::RUNTIME_TOOLS_DIRECTORY_ENV,
+            runtime_tools_directory,
+        );
+    }
     if let Some(initial_concurrency) = run.settings.initial_concurrency {
         command.env(
             "BEYOND_SLIDES_INITIAL_CONCURRENCY",

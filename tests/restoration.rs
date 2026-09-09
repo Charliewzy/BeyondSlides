@@ -36,6 +36,12 @@ fn restoration_uses_context_across_window_edges_without_claiming_it() -> Result<
             .instructions
             .contains("不要为了让当前窗口看起来完整而强行加句号")
     );
+    assert!(
+        message
+            .instructions
+            .contains("默认删除不承载实质含义、仅用于维持语流或寻求附和的确认性口头禅")
+    );
+    assert!(message.instructions.contains("真正要求听众回答的问题"));
     assert!(input.get("window_index").is_none());
     assert_eq!(
         json_source_ids(&input["output_contract"]["required_source_ids"]),

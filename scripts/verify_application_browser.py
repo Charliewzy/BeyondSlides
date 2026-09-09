@@ -66,8 +66,30 @@ def main():
             slide_after = example.locator(".slide-panel").bounding_box()["width"]
             assert slide_after < slide_before - 35
             assert example.evaluate("localStorage.getItem('beyond-slides.reader-layout.v1') !== null")
+            persisted_reader_width = after_outer["width"]
+            persisted_slide_width = slide_after
+            example.reload()
+            example.locator("[data-minimap-prototype]").wait_for(state="visible")
+            example.wait_for_function("document.querySelector('[data-reader-layout]').style.getPropertyValue('--reader-width') !== ''")
+            assert abs(layout.bounding_box()["width"] - persisted_reader_width) < 2
+            assert abs(example.locator(".slide-panel").bounding_box()["width"] - persisted_slide_width) < 2
             right_resizer.dblclick()
             assert example.evaluate("localStorage.getItem('beyond-slides.reader-layout.v1') === null")
+            before_left = layout.bounding_box()
+            left_resizer = example.locator('[data-reader-resizer="left"]')
+            left = left_resizer.bounding_box()
+            example.mouse.move(left["x"] + left["width"] / 2, left["y"] + 200)
+            example.mouse.down()
+            example.mouse.move(left["x"] + left["width"] / 2 + 50, left["y"] + 200)
+            example.mouse.up()
+            after_left = layout.bounding_box()
+            assert after_left["width"] < before_left["width"] - 75
+            assert abs((after_left["x"] + after_left["width"] / 2) - (before_left["x"] + before_left["width"] / 2)) < 2
+            left_resizer.dblclick()
+            example.set_viewport_size({"width": 390, "height": 844})
+            for resizer in example.locator("[data-reader-resizer]").all():
+                assert resizer.is_hidden()
+            example.set_viewport_size({"width": 1440, "height": 1000})
             assert example.locator("[data-slide] img").first.evaluate("image => image.naturalWidth > 0 && image.src.startsWith('data:image/png;base64,')")
             example.locator("#importance-threshold").evaluate("input => { input.value = 6; input.dispatchEvent(new Event('input', {bubbles: true})); }")
             assert example.locator(".importance-emphasized").count() == 0

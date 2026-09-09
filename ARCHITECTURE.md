@@ -232,10 +232,10 @@ restoration, annotation, or source provenance.
 
 Transcript adapters normalize JSON, SRT, WebVTT, and UTF-8 plain text into
 zero-based transcript segments without inventing missing timestamps. The PDF
-adapter uses Poppler `pdftotext` in raw reading order, preserves one slide per
-page, and removes only rigorously detected repeated page furniture. Rain
+adapter uses one process-wide thread-safe PDFium binding, preserves one slide
+per page, and removes only rigorously detected repeated page furniture. Rain
 Classroom page images additionally pass through native CPU PP-OCRv5; OCR text
-replaces `pdftotext` output only on sparse pages, without changing page order or
+replaces embedded PDF text only on sparse pages, without changing page order or
 slide IDs. Pages that remain sparse, and pages with suspicious glyphs, are
 reported for human review.
 
@@ -244,8 +244,8 @@ interval as a timed transcript token. Chinese tokens are commonly individual
 characters; consumers must not assume that tokens are linguistic words. This
 timing supplements rather than replaces the coarser normalized transcript.
 
-The original video is not required by the product. When available, FFmpeg,
-Poppler, and MSSIM can build a visual slide/time reference for evaluating
+The original video is not required by the product. When available, managed
+FFmpeg, PDFium, and MSSIM can build a visual slide/time reference for evaluating
 semantic alignment; that reference is not an input to production alignment.
 
 ### 5.2 Restoration windowing
@@ -453,9 +453,9 @@ less than a 60% normalized character match. These playback intervals remain
 presentation data, so adding or improving the timing sidecar does not
 invalidate `analysis.json`.
 
-An optional PDF presentation adapter invokes Poppler once at rendering time and
-writes one ordered PNG per normalized slide beneath a report-local asset
-directory. The slide count must exactly match the normalized slide deck. The
+An optional PDF presentation adapter renders pages through the shared PDFium
+binding and writes one ordered PNG per normalized slide beneath a report-local
+asset directory. The slide count must exactly match the normalized slide deck. The
 HTML references only those local images and embeds no remote assets. Alignment
 and browsing remain separate interaction states: passage selection controls the
 persistent blue aligned-page marker, while scrolling controls which centered

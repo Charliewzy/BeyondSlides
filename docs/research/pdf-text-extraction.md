@@ -1,5 +1,9 @@
 # PDF text extraction backend
 
+> Historical evaluation: the implementation decision below was superseded by
+> [ADR 0011](../adr/0011-manage-native-media-and-pdf-runtimes.md), which uses
+> managed PDFium for both extraction and rendering.
+
 Date: 2026-08-29
 
 ## Recommendation

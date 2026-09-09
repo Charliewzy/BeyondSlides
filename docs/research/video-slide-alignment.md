@@ -1,5 +1,9 @@
 # Video-to-slide alignment
 
+> Historical research: the current implementation uses managed FFmpeg and
+> PDFium rather than system Poppler; see
+> [ADR 0011](../adr/0011-manage-native-media-and-pdf-runtimes.md).
+
 Date: 2026-08-29
 
 ## Recommendation

@@ -22,9 +22,16 @@ cargo run --release -- serve
 cargo run --release -- serve run/application 7842
 ```
 
+For an offline release layout, preinstall the verified native tools beside the
+executable with `beyond-slides install-runtime-tools <directory>`. The expected
+directory name is `runtime-tools` when it is executable-adjacent; normal source
+runs use the operating-system cache automatically.
+
 Open `http://127.0.0.1:7842`. The server binds only to loopback; this is not a
-multi-user hosted deployment. Poppler's `pdftotext` and `pdftoppm` must be on PATH,
-and the dense-retrieval and Rain Classroom OCR models may download on first use.
+multi-user hosted deployment. Pinned PDFium, FFmpeg, and `ffprobe` assets are
+resolved beside the executable, from the user cache, or downloaded with SHA-256
+verification on first use. Dense-retrieval and Rain Classroom OCR models may
+also download on first use.
 
 1. Choose the written source: upload a slides PDF (up to 100 MiB), or select a
    Rain Classroom course, lecture, and presentation. Choose the lecture source
@@ -42,7 +49,7 @@ and the dense-retrieval and Rain Classroom OCR models may download on first use.
    of the UI or job model.
    Selected courseware pages are downloaded in provider order and assembled
    into the canonical `slides.pdf`. Native PP-OCRv5 recognizes the original
-   page images on CPU, after which the unchanged `pdftotext` importer retains
+   page images on CPU, after which the PDFium importer retains
    extracted text where available and fills only sparse pages from OCR. The
    model cache is shared across lectures; no Python, PaddlePaddle, GPU, or OCR
    service is required.
@@ -56,7 +63,7 @@ and the dense-retrieval and Rain Classroom OCR models may download on first use.
    browsing. Review is optional and never blocks analysis. Existing imports
    use the same warning checks against saved slide text; no migration or model
    call is required. Only requested flagged pages are rendered, with two
-   concurrent Poppler renders at most and a 30-second rendering timeout.
+   concurrent in-process PDFium renders at most.
    Preview PNGs live in a separate per-job `slide-review/` cache, not report
    assets or analysis checkpoints. Preview failures leave analysis available.
 3. Choose either an OpenAI-compatible endpoint (base URL, exact model name,
@@ -100,7 +107,8 @@ private web interface and may require maintenance when the site changes.
 
 ## Local CPU transcription setup
 
-`ffmpeg` and `ffprobe` are the only external media tools. The Rust worker uses
+Managed `ffmpeg` and `ffprobe` executables handle media conversion and probing.
+The Rust worker uses
 the sherpa-onnx runtime with INT8 SenseVoiceSmall and Silero VAD directly; it
 does not require Python, PyTorch, FunASR, or a GPU.
 
@@ -237,7 +245,7 @@ exercises the actual built `target/debug/beyond-slides` server and workers using
 a deterministic local mock provider. It checks import, graceful stopping,
 checkpoint-preserving resume, restarting the controller while work continues,
 token totals, settings-change confirmation, report/media serving, and local
-request restrictions. It requires Poppler and the cached dense model; it does
+request restrictions. It requires the managed native runtimes and cached dense model; it does
 not make paid model requests. Its synthetic decisions test plumbing, not model
 quality. The fixture recording is only a playback-resource smoke test, not
 aligned lecture evidence.

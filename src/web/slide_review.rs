@@ -2,7 +2,6 @@
 use std::{
     io,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use beyond_slides::{
@@ -82,33 +81,23 @@ pub(super) async fn image(directory: &Path, page: u32, renders: &Semaphore) -> i
         return tokio::fs::read(contained(&cache, &filename)?).await;
     }
     let temporary = tempfile::tempdir_in(&cache)?;
-    let prefix = temporary.path().join("page");
-    let mut command = tokio::process::Command::new("pdftoppm");
-    command
-        .args([
-            "-f",
-            &page.to_string(),
-            "-l",
-            &page.to_string(),
-            "-singlefile",
-            "-png",
-            "-scale-to",
-            "1200",
-        ])
-        .arg(contained(directory, "slides.pdf")?)
-        .arg(&prefix)
-        .kill_on_drop(true);
-    let output = tokio::time::timeout(Duration::from_secs(30), command.output())
-        .await
-        .map_err(|_| {
-            io::Error::new(io::ErrorKind::TimedOut, "Slide preview rendering timed out")
-        })??;
-    if !output.status.success() {
-        return Err(io::Error::other(
-            "Could not render slide preview; check that the PDF is readable",
-        ));
-    }
-    tokio::fs::rename(prefix.with_extension("png"), &target).await?;
+    let staged = temporary.path().join("page.png");
+    let pdf = contained(directory, "slides.pdf")?;
+    tokio::task::spawn_blocking(move || {
+        let image = beyond_slides::ingestion::pdf::render_page_to_fit(
+            &pdf,
+            usize::try_from(page - 1).map_err(io::Error::other)?,
+            1200,
+        )
+        .map_err(io::Error::other)?;
+        image
+            .save_with_format(&staged, image::ImageFormat::Png)
+            .map_err(io::Error::other)?;
+        Ok::<_, io::Error>(staged)
+    })
+    .await
+    .map_err(io::Error::other)??;
+    tokio::fs::rename(temporary.path().join("page.png"), &target).await?;
     tokio::fs::read(target).await
 }
 

@@ -4,7 +4,7 @@
 # ///
 """Exercise the actual local server/worker using a deterministic local model.
 
-Requires a built binary, Poppler, and the already-cached dense retrieval model.
+Requires a built binary, managed native runtimes, and the cached dense retrieval model.
 No paid model endpoint is used. Artifacts are retained for browser inspection.
 """
 import argparse

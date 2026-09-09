@@ -1,5 +1,8 @@
 # Rain Classroom slide import
 
+> Historical research: references to the former `pdftotext` ingestion path are
+> superseded by [ADR 0011](../adr/0011-manage-native-media-and-pdf-runtimes.md).
+
 Research checked against Rain Classroom's authenticated first-party web APIs
 and frontend bundle on 2026-09-08. This is an implementation probe, not a
 stable provider contract: the endpoints are private and undocumented. The

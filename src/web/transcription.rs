@@ -8,7 +8,7 @@ use crate::{
     run_support::{read_json, write_json_atomically},
     worker_control::{Stage, WorkerControl},
 };
-use beyond_slides::{SlideDeck, TimedTranscript, Transcript, ValidatedSources};
+use beyond_slides::{SlideDeck, TimedTranscript, Transcript, ValidatedSources, runtime_tools};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]
@@ -100,7 +100,9 @@ pub(super) async fn prepare(
         publish_progress(run, &progress)?;
         let extracting = Instant::now();
         let audio = asr_directory.join("audio.wav");
-        let status = tokio::process::Command::new("ffmpeg")
+        let ffmpeg = runtime_tools::ffmpeg_path()
+            .map_err(|error| format!("Could not prepare FFmpeg: {error}"))?;
+        let status = tokio::process::Command::new(ffmpeg)
             .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i"])
             .arg(&recording)
             .args(["-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le"])

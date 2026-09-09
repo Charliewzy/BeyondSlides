@@ -42,6 +42,14 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
             web::serve(directory, port).await
         }
         [command, directory] if command == OsStr::new("application-worker") => web::worker::run(directory).await,
+        [command, directory] if command == OsStr::new("install-runtime-tools") => {
+            beyond_slides::runtime_tools::install_all(Path::new(directory))?;
+            println!(
+                "Installed verified runtime tools in {}",
+                Path::new(directory).display()
+            );
+            Ok(())
+        }
         [command, trace_path] if command == OsStr::new("summarize-trace") => {
             trace_summary_run::run(trace_path)
         }
@@ -95,6 +103,7 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "usage: beyond-slides serve [<application-directory> <port>]\n\
+             or:    beyond-slides install-runtime-tools <directory>\n\
              or:    beyond-slides <transcript.json> <slides.json> <annotations.json> <result.html>\n\
              or:    beyond-slides summarize-trace <model-trace.jsonl>\n\
              or:    beyond-slides analyze <transcript.json> <slides.json> <run-directory> [--slides-pdf <slides.pdf>] [--audio <recording> --timed-tokens <timing.json>]\n\

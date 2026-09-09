@@ -46,4 +46,5 @@ the built BeyondSlides executable directly.
 - Recognition output can differ from the previous FunASR pipeline because the
   VAD implementation and model export differ. The five-minute real-course smoke
   test is retained as an ignored, opt-in regression test rather than CI data.
-- FFmpeg and ffprobe remain external runtime dependencies.
+- FFmpeg and ffprobe remain responsible for media conversion and inspection;
+  their provisioning is superseded by ADR 0011.

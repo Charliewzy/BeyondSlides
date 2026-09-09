@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use beyond_slides::runtime_tools;
 use chromiumoxide::cdp::browser_protocol::page::{CaptureScreenshotFormat, PrintToPdfParams};
 use chromiumoxide::{Browser, Page, browser::BrowserConfig, page::ScreenshotParams};
 use futures::StreamExt;
@@ -455,7 +456,9 @@ impl RainClassroom {
             tokio::fs::write(parts.join("concat.txt"), manifest)
                 .await
                 .map_err(io_error)?;
-            let output = tokio::process::Command::new("ffmpeg")
+            let ffmpeg = runtime_tools::ffmpeg_path()
+                .map_err(|error| format!("Could not prepare FFmpeg: {error}"))?;
+            let output = tokio::process::Command::new(ffmpeg)
                 .current_dir(&parts)
                 .args([
                     "-v",

@@ -2,12 +2,11 @@ use std::{
     ffi::OsStr,
     fs, io,
     path::{Path, PathBuf},
-    process::Command,
 };
 
-use beyond_slides::{ReportAudio, ReportSlideImage};
+use beyond_slides::{ReportAudio, ReportSlideImage, ingestion::pdf};
 
-const SLIDE_IMAGE_WIDTH: &str = "960";
+const SLIDE_IMAGE_WIDTH: u32 = 960;
 const AUDIO_ASSET_STEM: &str = "lecture-audio";
 
 /// Makes a recording available beside the report without duplicating it when
@@ -108,72 +107,35 @@ pub fn render_pdf_slides(
         )
     })?;
 
-    let rendered_pages = tempfile::tempdir()?;
-    let output_prefix = rendered_pages.path().join("slide");
-    let output = Command::new("pdftoppm")
-        .args([
-            OsStr::new("-png"),
-            OsStr::new("-scale-to-x"),
-            OsStr::new(SLIDE_IMAGE_WIDTH),
-            OsStr::new("-scale-to-y"),
-            OsStr::new("-1"),
-        ])
-        .arg(pdf_path)
-        .arg(&output_prefix)
-        .output()
-        .map_err(|source| {
-            io::Error::new(source.kind(), format!("could not start pdftoppm: {source}"))
-        })?;
-    if !output.status.success() {
-        return Err(io::Error::other(format!(
-            "pdftoppm failed for {} with {}: {}",
-            pdf_path.display(),
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-
-    let mut rendered_paths: Vec<_> = fs::read_dir(rendered_pages.path())?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
-        })
-        .collect();
-    rendered_paths.sort_by_key(|path| rendered_page_number(path).unwrap_or(usize::MAX));
-    if rendered_paths.len() != expected_slide_count {
+    let rendered_pages =
+        pdf::render_pages_to_width(pdf_path, SLIDE_IMAGE_WIDTH).map_err(io::Error::other)?;
+    if rendered_pages.len() != expected_slide_count {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
                 "slide PDF contains {} pages but the normalized slide deck contains {expected_slide_count} slides",
-                rendered_paths.len()
+                rendered_pages.len()
             ),
         ));
     }
 
-    let mut images = Vec::with_capacity(rendered_paths.len());
-    for (index, rendered_path) in rendered_paths.into_iter().enumerate() {
+    let mut images = Vec::with_capacity(rendered_pages.len());
+    for (index, rendered_page) in rendered_pages.into_iter().enumerate() {
         let file_name = format!("slide-{:04}.png", index + 1);
         let target = slide_directory.join(&file_name);
-        fs::copy(&rendered_path, &target).map_err(|source| {
-            io::Error::new(
-                source.kind(),
-                format!(
-                    "could not copy rendered slide to {}: {source}",
-                    target.display()
-                ),
-            )
-        })?;
-        let (width, height) = image::image_dimensions(&target).map_err(|source| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "could not read rendered slide {}: {source}",
-                    target.display()
-                ),
-            )
-        })?;
+        let width = rendered_page.width();
+        let height = rendered_page.height();
+        rendered_page
+            .save_with_format(&target, image::ImageFormat::Png)
+            .map_err(|source| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "could not save rendered slide {}: {source}",
+                        target.display()
+                    ),
+                )
+            })?;
         let relative_source = PathBuf::from(&asset_directory_name)
             .join("slides")
             .join(file_name)

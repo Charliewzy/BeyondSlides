@@ -11,6 +11,7 @@ use beyond_slides::{
         pdf,
         transcript::{TranscriptFormat, import},
     },
+    runtime_tools,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -368,7 +369,9 @@ fn import_warnings(warnings: &[pdf::ImportWarning]) -> Vec<String> {
 }
 
 fn probe_recording(path: &Path, require_audio: bool) -> Result<u64, String> {
-    let output = std::process::Command::new("ffprobe")
+    let ffprobe = runtime_tools::ffprobe_path()
+        .map_err(|error| format!("Could not prepare ffprobe: {error}"))?;
+    let output = std::process::Command::new(ffprobe)
         .args([
             "-v",
             "error",

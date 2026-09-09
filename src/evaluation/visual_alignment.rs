@@ -2,19 +2,16 @@
 
 use std::{
     error::Error,
-    ffi::OsStr,
-    fmt, fs,
+    fmt,
     io::{self, Read},
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, ExitStatus, Stdio},
 };
 
+use crate::SlideId;
 use image::GrayImage;
 use image_compare::Algorithm;
 use serde::{Deserialize, Serialize};
-use tempfile::TempDir;
-
-use crate::SlideId;
 
 const FRAME_WIDTH: u32 = 320;
 const FRAME_HEIGHT: u32 = 180;
@@ -75,13 +72,18 @@ fn align_video_to_slides_impl(
     slide_pdf_path: &Path,
     progress: Option<(&mut dyn FnMut(VisualAlignmentProgress), u64)>,
 ) -> Result<VisualAlignment, VisualAlignmentError> {
-    let rendered_pages = TempDir::new().map_err(VisualAlignmentError::TemporaryDirectory)?;
-    let slides = render_slides(slide_pdf_path, rendered_pages.path())?;
+    let slides = render_slides(slide_pdf_path)?;
     match_video_frames(video_path, &slides, progress)
 }
 
 fn video_duration_ms(video_path: &Path) -> Result<u64, VisualAlignmentError> {
-    let output = Command::new("ffprobe")
+    let ffprobe = crate::runtime_tools::ffprobe_path().map_err(|source| {
+        VisualAlignmentError::RuntimeTool {
+            program: "ffprobe",
+            source,
+        }
+    })?;
+    let output = Command::new(ffprobe)
         .args([
             "-v",
             "error",
@@ -114,63 +116,19 @@ fn video_duration_ms(video_path: &Path) -> Result<u64, VisualAlignmentError> {
     Ok((duration * 1_000.0).round() as u64)
 }
 
-fn render_slides(
-    slide_pdf_path: &Path,
-    output_directory: &Path,
-) -> Result<Vec<RenderedSlide>, VisualAlignmentError> {
-    let output_prefix = output_directory.join("slide");
-    let output = Command::new("pdftoppm")
-        .args([
-            OsStr::new("-png"),
-            OsStr::new("-scale-to-x"),
-            OsStr::new("320"),
-            OsStr::new("-scale-to-y"),
-            OsStr::new("180"),
-        ])
-        .arg(slide_pdf_path)
-        .arg(&output_prefix)
-        .output()
-        .map_err(|source| VisualAlignmentError::CouldNotStart {
-            program: "pdftoppm",
-            source,
-        })?;
-    if !output.status.success() {
-        return Err(VisualAlignmentError::CommandFailed {
-            program: "pdftoppm",
-            status: output.status,
-            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        });
-    }
-
-    let mut page_paths: Vec<PathBuf> = fs::read_dir(output_directory)
-        .map_err(VisualAlignmentError::ReadRenderedPages)?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "png"))
-        .collect();
-    page_paths.sort();
-    if page_paths.is_empty() {
-        return Err(VisualAlignmentError::NoRenderedPages);
-    }
-
-    page_paths
+fn render_slides(slide_pdf_path: &Path) -> Result<Vec<RenderedSlide>, VisualAlignmentError> {
+    crate::ingestion::pdf::render_pages_exact(slide_pdf_path, FRAME_WIDTH, FRAME_HEIGHT)
+        .map_err(VisualAlignmentError::Pdf)?
         .into_iter()
         .enumerate()
-        .map(|(position, path)| {
+        .map(|(position, image)| {
             let id = u32::try_from(position)
                 .map(SlideId)
                 .map_err(|_| VisualAlignmentError::TooManySlides)?;
-            let image = image::open(&path)
-                .map_err(|source| VisualAlignmentError::ReadRenderedPage { path, source })?
-                .into_luma8();
-            if image.dimensions() != (FRAME_WIDTH, FRAME_HEIGHT) {
-                return Err(VisualAlignmentError::UnexpectedPageDimensions {
-                    slide_id: id,
-                    width: image.width(),
-                    height: image.height(),
-                });
-            }
-            Ok(RenderedSlide { id, image })
+            Ok(RenderedSlide {
+                id,
+                image: image.into_luma8(),
+            })
         })
         .collect()
 }
@@ -180,7 +138,13 @@ fn match_video_frames(
     slides: &[RenderedSlide],
     mut progress: Option<(&mut dyn FnMut(VisualAlignmentProgress), u64)>,
 ) -> Result<VisualAlignment, VisualAlignmentError> {
-    let mut child = Command::new("ffmpeg")
+    let ffmpeg = crate::runtime_tools::ffmpeg_path().map_err(|source| {
+        VisualAlignmentError::RuntimeTool {
+            program: "ffmpeg",
+            source,
+        }
+    })?;
+    let mut child = Command::new(ffmpeg)
         .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-i"])
         .arg(video_path)
         .args([
@@ -301,7 +265,11 @@ struct RenderedSlide {
 
 #[derive(Debug)]
 pub enum VisualAlignmentError {
-    TemporaryDirectory(io::Error),
+    Pdf(crate::ingestion::pdf::ImportError),
+    RuntimeTool {
+        program: &'static str,
+        source: crate::runtime_tools::RuntimeToolError,
+    },
     CouldNotStart {
         program: &'static str,
         source: io::Error,
@@ -311,18 +279,8 @@ pub enum VisualAlignmentError {
         status: ExitStatus,
         stderr: String,
     },
-    ReadRenderedPages(io::Error),
-    ReadRenderedPage {
-        path: PathBuf,
-        source: image::ImageError,
-    },
     NoRenderedPages,
     TooManySlides,
-    UnexpectedPageDimensions {
-        slide_id: SlideId,
-        width: u32,
-        height: u32,
-    },
     MissingFfmpegOutput,
     ReadFrame(io::Error),
     TruncatedFrame {
@@ -340,11 +298,9 @@ pub enum VisualAlignmentError {
 impl fmt::Display for VisualAlignmentError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TemporaryDirectory(error) => {
-                write!(
-                    formatter,
-                    "could not create temporary slide directory: {error}"
-                )
+            Self::Pdf(error) => write!(formatter, "could not render slide PDF: {error}"),
+            Self::RuntimeTool { program, source } => {
+                write!(formatter, "could not prepare {program}: {source}")
             }
             Self::CouldNotStart { program, source } => {
                 write!(formatter, "could not start {program}: {source}")
@@ -354,27 +310,8 @@ impl fmt::Display for VisualAlignmentError {
                 status,
                 stderr,
             } => write!(formatter, "{program} failed with {status}: {stderr}"),
-            Self::ReadRenderedPages(error) => {
-                write!(formatter, "could not list rendered PDF pages: {error}")
-            }
-            Self::ReadRenderedPage { path, source } => {
-                write!(
-                    formatter,
-                    "could not read rendered page {}: {source}",
-                    path.display()
-                )
-            }
-            Self::NoRenderedPages => write!(formatter, "pdftoppm rendered no PDF pages"),
+            Self::NoRenderedPages => write!(formatter, "PDF contains no pages"),
             Self::TooManySlides => write!(formatter, "PDF has more pages than can be assigned IDs"),
-            Self::UnexpectedPageDimensions {
-                slide_id,
-                width,
-                height,
-            } => write!(
-                formatter,
-                "rendered slide {} is {width}x{height}, expected {FRAME_WIDTH}x{FRAME_HEIGHT}",
-                u64::from(slide_id.0) + 1
-            ),
             Self::MissingFfmpegOutput => write!(formatter, "ffmpeg did not expose frame output"),
             Self::ReadFrame(error) => write!(formatter, "could not read an ffmpeg frame: {error}"),
             Self::TruncatedFrame {
@@ -408,18 +345,16 @@ impl fmt::Display for VisualAlignmentError {
 impl Error for VisualAlignmentError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::TemporaryDirectory(error)
-            | Self::ReadRenderedPages(error)
-            | Self::ReadFrame(error)
-            | Self::ReadFfmpegError(error)
-            | Self::WaitForFfmpeg(error) => Some(error),
+            Self::ReadFrame(error) | Self::ReadFfmpegError(error) | Self::WaitForFfmpeg(error) => {
+                Some(error)
+            }
+            Self::Pdf(error) => Some(error),
             Self::CouldNotStart { source, .. } => Some(source),
-            Self::ReadRenderedPage { source, .. } => Some(source),
+            Self::RuntimeTool { source, .. } => Some(source),
             Self::CompareImages(error) => Some(error),
             Self::CommandFailed { .. }
             | Self::NoRenderedPages
             | Self::TooManySlides
-            | Self::UnexpectedPageDimensions { .. }
             | Self::MissingFfmpegOutput
             | Self::TruncatedFrame { .. }
             | Self::InvalidFrameDimensions

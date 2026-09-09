@@ -29,20 +29,29 @@
 
 ### 1. 安装基础依赖
 
-需要 Rust / Cargo、C/C++ 构建工具，以及 Poppler。附带录音或从视频转写时还需要 FFmpeg（包含 `ffprobe`）。Ubuntu / Debian 示例：
+从源码构建只需要 Rust / Cargo 和 C/C++ 构建工具。PDFium、FFmpeg 与
+`ffprobe` 由 BeyondSlides 按固定版本管理，不需要通过系统包管理器安装。
+Ubuntu / Debian 示例：
 
 ```sh
 sudo apt-get update
-sudo apt-get install build-essential pkg-config libssl-dev poppler-utils ffmpeg
+sudo apt-get install build-essential pkg-config
 ```
 
-Rust 可通过 [rustup](https://rustup.rs/) 安装；最低支持版本与 CI 使用的版本为 1.94.0。首次构建会下载 Rust 依赖和 ONNX Runtime；首次分析还可能下载本地中文检索模型 `BAAI/bge-small-zh-v1.5`。首次导入雨课堂课件会下载并校验约 21 MiB 的 PP-OCRv5 模型，之后直接复用。
+Rust 可通过 [rustup](https://rustup.rs/) 安装；最低支持版本与 CI 使用的版本为 1.94.0。首次处理 PDF 或媒体时，会下载并校验约 63 MiB 的 PDFium、FFmpeg 和 `ffprobe` 压缩资源，解压后缓存约 167 MiB。首次构建会下载 Rust 依赖和 ONNX Runtime；首次分析还可能下载本地中文检索模型 `BAAI/bge-small-zh-v1.5`。首次导入雨课堂课件会下载并校验约 21 MiB 的 PP-OCRv5 模型，之后直接复用。
 
 ```sh
 git clone https://github.com/Charliewzy/BeyondSlides.git
 cd BeyondSlides
 cargo build --release --locked
 ./target/release/beyond-slides serve
+```
+
+默认情况下，托管运行时写入操作系统缓存。制作离线包时可提前安装到
+可执行文件旁边；应用会优先使用该目录：
+
+```sh
+./target/release/beyond-slides install-runtime-tools target/release/runtime-tools
 ```
 
 打开 **http://127.0.0.1:7842**。请从仓库目录启动；默认数据目录是当前目录下的 `run/application/`。
@@ -55,7 +64,7 @@ cargo build --release --locked
 
 ### 2. 可选：启用本地录音转写
 
-**已有转写文件时可以跳过这一节。** 录音 / 视频转写由 Rust 内的 sherpa-onnx、INT8 SenseVoiceSmall 和 Silero VAD 在本机 CPU 上完成，不需要 Python、PyTorch 或 GPU。系统仍需安装 `ffmpeg`，用于从媒体文件提取 16 kHz 单声道音频。
+**已有转写文件时可以跳过这一节。** 录音 / 视频转写由 Rust 内的 sherpa-onnx、INT8 SenseVoiceSmall 和 Silero VAD 在本机 CPU 上完成，不需要 Python、PyTorch、GPU 或系统安装的 FFmpeg。BeyondSlides 使用经过完整性校验的托管 FFmpeg 提取 16 kHz 单声道音频。
 
 首次转写会自动下载并校验约 156 MiB 的压缩模型资源；解压后的模型缓存约 230 MiB，位于应用数据目录的 `models/` 下，之后的讲座会直接复用。速度取决于 CPU、录音长度和模型加载情况；LLM 分析还受服务商速度、限流和思考模式影响，不保证固定完成时间。
 
@@ -102,7 +111,7 @@ API base URL: https://lab.cs.tsinghua.edu.cn/ai-platform/api/v1
 - 服务仅绑定 loopback，没有多用户鉴权。**不要直接通过反向代理或端口转发将它公开到互联网。**
 - 本地上传的 PDF 目前仍依赖可提取文字；PP-OCRv5 只自动处理雨课堂导入的逐页图片。检查警告与 OCR 都不能保证提取内容完整。
 - ASR、文本恢复、分段、排名和幻灯片对齐都可能出错；音频定位可能退回较粗的转写区间。请对重要内容回看原始讲义 / 录音。
-- 软件使用 [MIT 许可证](LICENSE)。内置示例的课程文字和幻灯片不在 MIT 授权范围内；按项目所有者决定，为当前课程提交保留。公开发布前仍需确认授权或替换示例，见 [NOTICE](NOTICE)。
+- 软件使用 [MIT 许可证](LICENSE)。托管的 FFmpeg/ffprobe 是独立的 GPLv3 程序，预装包会同时保留上游许可证与构建说明；PDFium 包也保留其上游许可证。内置示例的课程文字和幻灯片不在 MIT 授权范围内；按项目所有者决定，为当前课程提交保留。公开发布前仍需确认授权或替换示例，见 [NOTICE](NOTICE)。
 
 ## 开发与验证
 
@@ -113,7 +122,7 @@ cargo test --locked --all-targets --all-features -- --test-threads=1
 uv run --isolated --python 3.11 --with-requirements scripts/tests/requirements.txt python -m unittest discover -s scripts/tests
 ```
 
-GitHub Actions 在 `main` 推送和 pull request 上运行上述四项检查，也支持手动触发。CI 不运行付费模型、完整 ASR 或浏览器测试。PDF / 视频相关测试需要 Poppler 和 FFmpeg；下载中文检索模型的测试默认忽略，可单独运行 `cargo test --test retrieval -- --ignored`。浏览器与本地应用端到端检查使用真实服务器 / worker 和本地模拟模型，不产生付费 API 请求：
+GitHub Actions 在 `main` 推送和 pull request 上运行上述四项检查，也支持手动触发。CI 不运行付费模型、完整 ASR 或浏览器测试。PDF / 视频测试会使用与应用相同的托管 PDFium、FFmpeg 和 `ffprobe`；下载中文检索模型的测试默认忽略，可单独运行 `cargo test --test retrieval -- --ignored`。浏览器与本地应用端到端检查使用真实服务器 / worker 和本地模拟模型，不产生付费 API 请求：
 
 ```sh
 cargo build --locked

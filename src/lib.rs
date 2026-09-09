@@ -21,6 +21,7 @@ mod request_scheduling;
 mod restoration;
 mod restored_annotation;
 mod retrieval;
+pub mod runtime_tools;
 mod validation;
 mod windowing;
 

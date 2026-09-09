@@ -16,7 +16,9 @@ axum = { version = "0.8", features = ["multipart"] }
 bzip2 = "0.6"
 chromiumoxide = "0.9.1"
 colorous = "1"
+dirs = "6"
 fastembed = { version = "6.0.2", default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries-rustls-tls"] }
+flate2 = "1"
 fs2 = "0.4"
 futures = "0.3"
 fastrand = "2"
@@ -26,7 +28,9 @@ indicatif = "0.18"
 genai = "0.6.5"
 httpdate = "1"
 jieba-rs = "0.10"
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
+once_cell = "1"
+pdfium-render = { version = "0.9.4", default-features = false, features = ["image_025", "pdfium_7881", "thread_safe"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "stream"] }
 rapidocr-core = { version = "0.2.2", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

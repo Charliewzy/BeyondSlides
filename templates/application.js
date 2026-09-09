@@ -178,25 +178,40 @@ function setSettings(settings) {
   syncConcurrencyLimits(); $("spacing").value = settings.request_interval_ms;
   $("adaptive").checked = settings.adaptive;
   const pricing = settings.pricing || {};
-  $("uncached-input-price").value = pricing.uncached_input || "";
-  $("cached-input-price").value = pricing.cached_input || "";
-  $("output-price").value = pricing.output || "";
+  $("uncached-input-price").value = displayPrice(pricing.uncached_input || "");
+  $("cached-input-price").value = displayPrice(pricing.cached_input || "");
+  $("output-price").value = displayPrice(pricing.output || "");
   syncModelBackend();
 }
 function configuredPricing() {
-  const pricing = {
+  const displayed = {
     uncached_input: $("uncached-input-price").value.trim(),
     cached_input: $("cached-input-price").value.trim(),
     output: $("output-price").value.trim(),
   };
-  const filled = Object.values(pricing).filter(Boolean).length;
+  const filled = Object.values(displayed).filter(Boolean).length;
   if (!filled) return null;
   if (filled !== 3) throw new Error("请填写全部三个 token 价格，或将它们全部留空");
-  return pricing;
+  return Object.fromEntries(
+    Object.entries(displayed).map(([kind, value]) => [kind, storedPrice(value)]),
+  );
+}
+function scalePrice(value, multiplier) {
+  const match = value.trim().match(/^([$￥¥])\s*(.+)$/u);
+  if (!match) return value;
+  const amount = Number(match[2]);
+  return Number.isFinite(amount)
+    ? `${match[1]}${Number((amount * multiplier).toPrecision(15))}`
+    : value;
+}
+function displayPrice(value) {
+  return scalePrice(value, 1_000_000);
+}
+function storedPrice(value) {
+  return scalePrice(value, 1 / 1_000_000);
 }
 function formatPresetPrice(value) {
-  const perToken = Number(value.slice(1));
-  return Number.isFinite(perToken) ? `$${(perToken * 1_000_000).toLocaleString()} / 百万 token` : value;
+  return `${displayPrice(value)} / 百万 token`;
 }
 function renderPricingResults(page, append = false) {
   const results = $("pricing-results");
@@ -214,9 +229,9 @@ function renderPricingResults(page, append = false) {
     prices.textContent = `输入 ${formatPresetPrice(preset.uncached_input)} · 缓存 ${formatPresetPrice(preset.cached_input)} · 输出 ${formatPresetPrice(preset.output)}`;
     button.append(name, prices);
     button.addEventListener("click", () => {
-      $("uncached-input-price").value = preset.uncached_input;
-      $("cached-input-price").value = preset.cached_input;
-      $("output-price").value = preset.output;
+      $("uncached-input-price").value = displayPrice(preset.uncached_input);
+      $("cached-input-price").value = displayPrice(preset.cached_input);
+      $("output-price").value = displayPrice(preset.output);
       $("pricing-search").value = `${preset.model_name} · ${preset.provider_name}`;
       results.hidden = true;
       const caveats = [

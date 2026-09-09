@@ -85,13 +85,12 @@ Classroom OCR models may also download on first use.
    option is imposed by default. Adaptive scheduling separately exposes its
    starting concurrency and upper limit; changing either remains operational
    and does not invalidate validated checkpoints.
-   Optional token pricing has exactly three per-token rates: uncached input,
-   cached input, and output. All three are either omitted or use the same `$`,
-   `￥`, or `¥` currency. Searchable Models.dev presets are provider-specific
-   editable suggestions; their USD-per-million rates are converted to per-token
-   values. When no cache-read rate is published, the preset conservatively uses
-   the uncached-input rate and says so. Pricing never changes a model request or
-   invalidates a checkpoint.
+   Optional token pricing has exactly three rates per million tokens: uncached
+   input, cached input, and output. All three are either omitted or use the same
+   `$`, `￥`, or `¥` currency. Searchable Models.dev presets are provider-specific
+   editable suggestions in the same per-million-token unit. When no cache-read
+   rate is published, the preset conservatively uses the uncached-input rate and
+   says so. Pricing never changes a model request or invalidates a checkpoint.
 4. Start, monitor, stop after current work, or resume. Input/output token totals
    and the configured-price estimate update on completed provider responses;
    partial availability is labeled rather than treated as zero.

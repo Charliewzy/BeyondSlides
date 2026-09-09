@@ -175,9 +175,14 @@ def main():
             page.locator("#pricing-search").fill("test model")
             page.get_by_role("option", name="Test Model · Test Provider").wait_for(state="visible")
             page.get_by_role("option", name="Test Model · Test Provider").click()
-            assert page.locator("#uncached-input-price").input_value() == "$0.000001"
-            assert page.locator("#cached-input-price").input_value() == "$0.0000002"
-            assert page.locator("#output-price").input_value() == "$0.000003"
+            assert page.locator("#uncached-input-price").input_value() == "$1"
+            assert page.locator("#cached-input-price").input_value() == "$0.2"
+            assert page.locator("#output-price").input_value() == "$3"
+            assert page.evaluate("configuredPricing()") == {
+                "uncached_input": "$0.000001",
+                "cached_input": "$2e-7",
+                "output": "$0.000003",
+            }
             page.unroute("**/api/model-pricing?*")
             assert not page.locator("#start-form details").evaluate("element => element.open")
             page.reload()

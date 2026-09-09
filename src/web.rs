@@ -25,7 +25,7 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Multipart, Path, Request, State},
+    extract::{DefaultBodyLimit, Multipart, Path, Query, Request, State},
     http::{StatusCode, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
@@ -563,9 +563,19 @@ async fn delete_job(
 
 async fn connect_rain_classroom(
     State(app): State<App>,
+    Query(request): Query<RainClassroomConnection>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    app.rain_classroom.connect().await.map_err(AppError::bad)?;
+    app.rain_classroom
+        .connect(request.server)
+        .await
+        .map_err(AppError::bad)?;
     Ok(Json(json!({"opened": true})))
+}
+
+#[derive(Deserialize)]
+struct RainClassroomConnection {
+    #[serde(default)]
+    server: rain_classroom::RainClassroomServer,
 }
 
 async fn logout_rain_classroom(

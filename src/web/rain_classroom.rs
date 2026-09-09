@@ -13,7 +13,26 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{io::AsyncWriteExt, sync::Mutex, task::JoinHandle};
 
-const HOME_URL: &str = "https://pro.yuketang.cn/v2/web/index";
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RainClassroomServer {
+    Public,
+    #[default]
+    Lotus,
+    Yangtze,
+    YellowRiver,
+}
+
+impl RainClassroomServer {
+    const fn home_url(self) -> &'static str {
+        match self {
+            Self::Public => "https://www.yuketang.cn/v2/web/index",
+            Self::Lotus => "https://pro.yuketang.cn/v2/web/index",
+            Self::Yangtze => "https://changjiang.yuketang.cn/v2/web/index",
+            Self::YellowRiver => "https://huanghe.yuketang.cn/v2/web/index",
+        }
+    }
+}
 
 /// The stable identity selected by the user. Replay URLs are intentionally not
 /// accepted from the browser because Rain Classroom signs them for a limited
@@ -95,6 +114,7 @@ struct BrowserSession {
     browser: Browser,
     page: Page,
     handler: JoinHandle<()>,
+    server: RainClassroomServer,
     authenticated: bool,
 }
 
@@ -118,13 +138,16 @@ impl RainClassroom {
 
     /// Opens a dedicated headless browser. Its profile is retained locally so
     /// a user normally needs to scan the QR code only once.
-    pub async fn connect(&self) -> Result<(), String> {
+    pub async fn connect(&self, server: RainClassroomServer) -> Result<(), String> {
         let mut session = self.session.lock().await;
-        if let Some(current) = session.as_ref() {
-            if current.page.bring_to_front().await.is_ok() {
-                return Ok(());
-            }
-            *session = None;
+        if let Some(current) = session.as_ref()
+            && current.server == server
+            && current.page.bring_to_front().await.is_ok()
+        {
+            return Ok(());
+        }
+        if let Some(previous) = session.take() {
+            close_browser_session(previous).await;
         }
 
         tokio::fs::create_dir_all(&self.profile)
@@ -154,11 +177,15 @@ impl RainClassroom {
                 }
             }
         });
-        let page = browser.new_page(HOME_URL).await.map_err(provider_error)?;
+        let page = browser
+            .new_page(server.home_url())
+            .await
+            .map_err(provider_error)?;
         *session = Some(BrowserSession {
             browser,
             page,
             handler,
+            server,
             authenticated: false,
         });
         Ok(())
@@ -192,16 +219,10 @@ impl RainClassroom {
     }
 
     async fn close_browser(&self) {
-        let Some(mut session) = self.session.lock().await.take() else {
+        let Some(session) = self.session.lock().await.take() else {
             return;
         };
-        let closed = tokio::time::timeout(Duration::from_secs(5), session.browser.close()).await;
-        if closed.is_err() || closed.is_ok_and(|result| result.is_err()) {
-            let _ = session.browser.kill().await;
-        } else {
-            let _ = tokio::time::timeout(Duration::from_secs(5), session.browser.wait()).await;
-        }
-        session.handler.abort();
+        close_browser_session(session).await;
     }
 
     pub async fn login_view(&self) -> Result<Vec<u8>, String> {
@@ -804,6 +825,16 @@ impl RainClassroom {
     }
 }
 
+async fn close_browser_session(mut session: BrowserSession) {
+    let closed = tokio::time::timeout(Duration::from_secs(5), session.browser.close()).await;
+    if closed.is_err() || closed.is_ok_and(|result| result.is_err()) {
+        let _ = session.browser.kill().await;
+    } else {
+        let _ = tokio::time::timeout(Duration::from_secs(5), session.browser.wait()).await;
+    }
+    session.handler.abort();
+}
+
 async fn request_download(
     client: &reqwest::Client,
     url: &str,
@@ -995,6 +1026,21 @@ fn default_slide_height() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_names_select_the_four_documented_origins() {
+        let cases = [
+            ("public", "https://www.yuketang.cn/v2/web/index"),
+            ("lotus", "https://pro.yuketang.cn/v2/web/index"),
+            ("yangtze", "https://changjiang.yuketang.cn/v2/web/index"),
+            ("yellow_river", "https://huanghe.yuketang.cn/v2/web/index"),
+        ];
+
+        for (name, expected_url) in cases {
+            let server: RainClassroomServer = serde_json::from_str(&format!("\"{name}\"")).unwrap();
+            assert_eq!(server.home_url(), expected_url);
+        }
+    }
 
     #[tokio::test]
     async fn logout_removes_only_the_dedicated_profile() {

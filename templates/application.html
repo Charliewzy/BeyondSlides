@@ -52,7 +52,13 @@
         </div>
         <section id="rain-classroom-import" class="provider-import" hidden>
           <h3>雨课堂连接</h3>
-          <p class="muted">扫码登录一次后，选择同一讲次的雨课堂课件和课堂录像。</p>
+          <p class="muted">选择学校使用的服务器；扫码登录一次后，选择同一讲次的雨课堂课件和课堂录像。</p>
+          <label>服务器<select id="rain-server">
+            <option value="public">雨课堂（公共服务器）</option>
+            <option value="lotus" selected>荷塘雨课堂</option>
+            <option value="yangtze">长江雨课堂</option>
+            <option value="yellow_river">黄河雨课堂</option>
+          </select></label>
           <div class="actions">
             <span id="rain-authenticated" class="session-status" hidden>● 已登录雨课堂</span>
             <button type="button" id="rain-logout" class="compact" hidden>退出登录</button>

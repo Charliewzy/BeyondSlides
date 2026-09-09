@@ -473,6 +473,10 @@ function syncImportSources() {
 $("slides-source-mode").addEventListener("change", syncImportSources);
 $("lecture-source-mode").addEventListener("change", syncImportSources);
 function setRainAuthenticated(authenticated) {
+  if (authenticated) {
+    const server = $("rain-server").selectedOptions[0]?.textContent || "雨课堂";
+    $("rain-authenticated").textContent = `● 已登录${server}`;
+  }
   $("rain-authenticated").hidden = !authenticated;
   $("rain-logout").hidden = !authenticated;
   $("rain-connect").hidden = authenticated;
@@ -514,10 +518,15 @@ function showRainCourses(courses) {
 function refreshRainLoginView() {
   $("rain-login-view").src = `/api/rain-classroom/login-view?t=${Date.now()}`;
 }
-async function pollRainLogin() {
-  if (!$("rain-login-dialog").open) return;
+function selectedRainServer() { return $("rain-server").value; }
+function connectRainClassroom(server) {
+  return api(`/api/rain-classroom/connect?server=${encodeURIComponent(server)}`, { method: "POST" });
+}
+async function pollRainLogin(server) {
+  if (!$("rain-login-dialog").open || selectedRainServer() !== server) return;
   try {
     const courses = await api("/api/rain-classroom/courses");
+    if (selectedRainServer() !== server) return;
     showRainCourses(courses);
     $("rain-login-status").textContent = "登录成功。";
     $("rain-login-dialog").close();
@@ -526,27 +535,40 @@ async function pollRainLogin() {
     $("rain-login-status").textContent = "等待扫码并在手机上确认…";
     refreshRainLoginView();
   }
-  rainLoginTimer = setTimeout(pollRainLogin, 1500);
+  rainLoginTimer = setTimeout(() => pollRainLogin(server), 1500);
 }
 async function checkRainSession() {
+  const server = selectedRainServer();
   rainSessionChecked = true;
-  $("rain-connect").disabled = true; $("rain-status").textContent = "正在检查雨课堂登录状态…";
+  $("rain-connect").disabled = true; $("rain-server").disabled = true;
+  $("rain-status").textContent = "正在检查雨课堂登录状态…";
   try {
-    await api("/api/rain-classroom/connect", { method: "POST" });
-    showRainCourses(await api("/api/rain-classroom/courses"));
+    await connectRainClassroom(server);
+    const courses = await api("/api/rain-classroom/courses");
+    if (selectedRainServer() !== server) return;
+    showRainCourses(courses);
   } catch (_) {
+    if (selectedRainServer() !== server) return;
     setRainAuthenticated(false);
     $("rain-status").textContent = "尚未登录，请扫码后继续。";
-  } finally { $("rain-connect").disabled = false; }
+  } finally {
+    if (selectedRainServer() === server) {
+      $("rain-connect").disabled = false; $("rain-server").disabled = false;
+    }
+  }
 }
 $("rain-connect").addEventListener("click", async () => {
-  $("rain-connect").disabled = true; $("rain-status").textContent = "正在准备雨课堂登录…";
+  const server = selectedRainServer();
+  $("rain-connect").disabled = true; $("rain-server").disabled = true;
+  $("rain-status").textContent = "正在准备雨课堂登录…";
   try {
-    await api("/api/rain-classroom/connect", { method: "POST" });
+    await connectRainClassroom(server);
+    if (selectedRainServer() !== server) return;
+    $("rain-login-title").textContent = `扫码登录${$("rain-server").selectedOptions[0].textContent}`;
     $("rain-login-status").textContent = "等待扫码并在手机上确认…";
-    refreshRainLoginView(); $("rain-login-dialog").showModal(); pollRainLogin();
+    refreshRainLoginView(); $("rain-login-dialog").showModal(); pollRainLogin(server);
   } catch (error) { $("rain-status").textContent = error.message; }
-  finally { $("rain-connect").disabled = false; }
+  finally { $("rain-connect").disabled = false; $("rain-server").disabled = false; }
 });
 $("rain-logout").addEventListener("click", async () => {
   $("rain-logout").disabled = true;
@@ -560,6 +582,13 @@ $("rain-logout").addEventListener("click", async () => {
 });
 $("rain-login-close").addEventListener("click", () => $("rain-login-dialog").close());
 $("rain-login-dialog").addEventListener("close", () => clearTimeout(rainLoginTimer));
+$("rain-server").addEventListener("change", () => {
+  clearTimeout(rainLoginTimer);
+  if ($("rain-login-dialog").open) $("rain-login-dialog").close();
+  clearRainSelections(); setRainAuthenticated(false); rainSessionChecked = false;
+  $("rain-status").textContent = "正在切换雨课堂服务器…";
+  if (!$("rain-classroom-import").hidden) checkRainSession();
+});
 function supportsRainSource(prefix, lecture) {
   return prefix === "rain-slides" ? lecture.presentation_count > 0 : lecture.has_recording;
 }
@@ -665,6 +694,7 @@ $("import-form").addEventListener("submit", async (event) => {
   const slidesFromRain = $("slides-source-mode").value === "rain";
   const recordingFromRain = $("lecture-source-mode").value === "rain";
   const usesRain = slidesFromRain || recordingFromRain;
+  if (usesRain) $("rain-server").disabled = true;
   $("import-status").textContent = usesRain ? "正在导入雨课堂内容并检查文件…" : "正在上传并检查文件…";
   try {
     const form = new FormData(event.target);
@@ -688,7 +718,10 @@ $("import-form").addEventListener("submit", async (event) => {
     const job = await api("/api/jobs", { method: "POST", body: form });
     await refreshLibrary(); await select(job.id); event.target.reset(); syncImportSources();
   } catch (error) { notice(error.message); }
-  finally { stopRainDownloadProgress(); $("import-button").disabled = false; $("import-status").textContent = ""; }
+  finally {
+    stopRainDownloadProgress(); $("rain-server").disabled = false;
+    $("import-button").disabled = false; $("import-status").textContent = "";
+  }
 });
 $("start-form").addEventListener("submit", async (event) => {
   event.preventDefault(); notice(""); $("start-button").disabled = true;

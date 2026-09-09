@@ -180,7 +180,11 @@ def main():
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
             page.screenshot(path=str(args.workspace / "browser-mobile.png"), full_page=True)
             page.locator("#new-lecture").click()
-            page.route("**/api/rain-classroom/connect", lambda route: route.fulfill(json={"opened": True}))
+            rain_connections = []
+            def connect_rain_classroom(route):
+                rain_connections.append(route.request.url)
+                route.fulfill(json={"opened": True})
+            page.route("**/api/rain-classroom/connect*", connect_rain_classroom)
             page.route("**/api/rain-classroom/logout", lambda route: route.fulfill(json={"logged_out": True}))
             page.route("**/api/rain-classroom/courses", lambda route: route.fulfill(json=[
                 {"classroom_id": 3195306, "course_name": "程序设计训练", "classroom_name": "Rust 语言"},
@@ -207,6 +211,15 @@ def main():
             assert not page.locator('[name="transcript"]').is_disabled()
             page.locator("#rain-authenticated").wait_for(state="visible")
             assert page.locator("#rain-connect").is_hidden()
+            assert [option.get_attribute("value") for option in page.locator("#rain-server option").all()] == [
+                "public", "lotus", "yangtze", "yellow_river",
+            ]
+            assert "server=lotus" in rain_connections[-1]
+            page.locator("#rain-server").select_option("yangtze")
+            page.wait_for_function("document.getElementById('rain-authenticated').textContent.includes('长江雨课堂')")
+            assert "server=yangtze" in rain_connections[-1]
+            page.locator("#rain-server").select_option("lotus")
+            page.wait_for_function("document.getElementById('rain-authenticated').textContent.includes('荷塘雨课堂')")
             page.locator("#rain-slides-course").select_option("42")
             page.wait_for_function("document.getElementById('rain-recording-course').value === '42'")
             page.wait_for_function("document.getElementById('rain-recording-lecture').options[0].textContent === '无可导入讲次'")
@@ -246,7 +259,7 @@ def main():
             assert page.locator("#rain-logout").is_hidden()
             assert page.locator("#rain-connect").is_visible()
             assert page.locator("#rain-slides-course").is_disabled()
-            page.unroute("**/api/rain-classroom/connect")
+            page.unroute("**/api/rain-classroom/connect*")
             page.unroute("**/api/rain-classroom/logout")
             page.unroute("**/api/rain-classroom/courses")
             page.unroute("**/api/rain-classroom/courses/42/lectures")

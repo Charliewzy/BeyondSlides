@@ -95,17 +95,20 @@ for _ in {1..100}; do
     fi
     sleep 0.1
 done
-curl --noproxy '*' --fail --silent \
-    --max-time 60 \
-    --header 'X-BeyondSlides: local-ui' \
-    --request POST \
-    "http://127.0.0.1:$rain_port/api/rain-classroom/connect" >/dev/null
-curl --noproxy '*' --fail --silent \
-    --max-time 60 \
-    "http://127.0.0.1:$rain_port/api/rain-classroom/login-view" \
-    >"$temporary/rain-login.png"
-python3 -c 'import pathlib,sys; assert pathlib.Path(sys.argv[1]).read_bytes().startswith(b"\x89PNG\r\n\x1a\n")' \
-    "$temporary/rain-login.png"
+for rain_server in public lotus yangtze yellow_river; do
+    curl --noproxy '*' --fail --silent \
+        --max-time 60 \
+        --header 'X-BeyondSlides: local-ui' \
+        --request POST \
+        "http://127.0.0.1:$rain_port/api/rain-classroom/connect?server=$rain_server" >/dev/null
+    login_view="$temporary/rain-login-$rain_server.png"
+    curl --noproxy '*' --fail --silent \
+        --max-time 60 \
+        "http://127.0.0.1:$rain_port/api/rain-classroom/login-view" \
+        >"$login_view"
+    python3 -c 'import pathlib,sys; assert pathlib.Path(sys.argv[1]).read_bytes().startswith(b"\x89PNG\r\n\x1a\n")' \
+        "$login_view"
+done
 kill -INT "$server_pid"
 wait "$server_pid"
 server_pid=
@@ -117,4 +120,4 @@ else
     exit 1
 fi
 
-echo "Debian layout, AppArmor profile, launcher, runtimes, and Rain Classroom browser smoke tests passed."
+echo "Debian layout, AppArmor profile, launcher, runtimes, and four-server Rain Classroom browser smoke tests passed."

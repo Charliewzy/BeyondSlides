@@ -725,6 +725,23 @@ $("rain-logout").addEventListener("click", async () => {
   finally { $("rain-logout").disabled = false; }
 });
 $("rain-login-close").addEventListener("click", () => $("rain-login-dialog").close());
+$("rain-login-refresh").addEventListener("click", async () => {
+  const server = selectedRainServer();
+  clearTimeout(rainLoginTimer);
+  $("rain-login-refresh").disabled = true;
+  $("rain-login-status").textContent = "正在刷新二维码…";
+  try {
+    await api(`/api/rain-classroom/refresh-login?server=${encodeURIComponent(server)}`, { method: "POST" });
+    if (!$("rain-login-dialog").open || selectedRainServer() !== server) return;
+    refreshRainLoginView();
+    $("rain-login-status").textContent = "二维码已刷新，等待扫码并在手机上确认…";
+    pollRainLogin(server);
+  } catch (error) {
+    $("rain-login-status").textContent = error.message;
+  } finally {
+    $("rain-login-refresh").disabled = false;
+  }
+});
 $("rain-login-dialog").addEventListener("close", () => clearTimeout(rainLoginTimer));
 $("rain-server").addEventListener("change", () => {
   clearTimeout(rainLoginTimer);

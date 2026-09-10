@@ -244,6 +244,22 @@ impl RainClassroom {
             .map_err(provider_error)
     }
 
+    /// Reloads the active login page so Rain Classroom issues a fresh QR code.
+    pub async fn refresh_login(&self, server: RainClassroomServer) -> Result<(), String> {
+        let session = self.session.lock().await;
+        let session = session
+            .as_ref()
+            .ok_or("Start Rain Classroom login before refreshing its QR code")?;
+        if session.server != server {
+            return Err("The active Rain Classroom login uses a different server".into());
+        }
+        if session.authenticated {
+            return Err("Rain Classroom is already authenticated".into());
+        }
+        session.page.reload().await.map_err(provider_error)?;
+        Ok(())
+    }
+
     pub async fn courses(&self) -> Result<Vec<Course>, String> {
         let response: CourseResponse = self
             .evaluate(

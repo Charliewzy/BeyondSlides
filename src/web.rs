@@ -128,6 +128,10 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
         .route("/api/codex/status", get(codex_status))
         .route("/api/model-pricing", get(search_model_pricing))
         .route("/api/rain-classroom/connect", post(connect_rain_classroom))
+        .route(
+            "/api/rain-classroom/refresh-login",
+            post(refresh_rain_classroom_login),
+        )
         .route("/api/rain-classroom/logout", post(logout_rain_classroom))
         .route(
             "/api/rain-classroom/login-view",
@@ -582,6 +586,17 @@ async fn connect_rain_classroom(
 struct RainClassroomConnection {
     #[serde(default)]
     server: rain_classroom::RainClassroomServer,
+}
+
+async fn refresh_rain_classroom_login(
+    State(app): State<App>,
+    Query(request): Query<RainClassroomConnection>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    app.rain_classroom
+        .refresh_login(request.server)
+        .await
+        .map_err(AppError::bad)?;
+    Ok(Json(json!({"refreshed": true})))
 }
 
 async fn logout_rain_classroom(

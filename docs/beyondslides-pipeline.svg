@@ -1,0 +1,245 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1050" viewBox="0 0 1600 1050" role="img" aria-labelledby="title description">
+  <title id="title">BeyondSlides 课程处理流水线</title>
+  <desc id="description">从本地或雨课堂导入幻灯片与课程录制，经文字提取、语音识别、转写恢复、语义分段、幻灯片对齐和比较式评价，最终生成交互式阅读报告。</desc>
+
+  <defs>
+    <linearGradient id="pageBackground" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8f7ff"/>
+      <stop offset="0.55" stop-color="#f5f7fc"/>
+      <stop offset="1" stop-color="#f9f4f7"/>
+    </linearGradient>
+    <linearGradient id="headerGradient" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5031a9"/>
+      <stop offset="0.55" stop-color="#7048cc"/>
+      <stop offset="1" stop-color="#b13f72"/>
+    </linearGradient>
+    <linearGradient id="outputGradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5833b5"/>
+      <stop offset="1" stop-color="#8c3d9c"/>
+    </linearGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="5" stdDeviation="8" flood-color="#271b4b" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#756c91"/>
+    </marker>
+    <marker id="arrowPurple" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6941c6"/>
+    </marker>
+    <style>
+      .canvas-text { font-family: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; fill: #201a33; }
+      .title { font-size: 36px; font-weight: 760; letter-spacing: 0.5px; }
+      .subtitle { font-size: 16px; fill: #716985; }
+      .card { fill: #ffffff; stroke: #ddd8ea; stroke-width: 1.4; filter: url(#shadow); }
+      .card-title { font-size: 21px; font-weight: 720; }
+      .card-subtitle { font-size: 13px; font-weight: 650; letter-spacing: 0.8px; fill: #766e89; }
+      .body { font-size: 15px; fill: #4f485f; }
+      .body-small { font-size: 13px; fill: #696176; }
+      .strong { font-weight: 680; fill: #2c2440; }
+      .number { font-size: 15px; font-weight: 760; fill: #ffffff; text-anchor: middle; dominant-baseline: middle; }
+      .pill-text { font-size: 12px; font-weight: 680; text-anchor: middle; dominant-baseline: middle; }
+      .chip { fill: #f5f2fb; stroke: #ded5f0; stroke-width: 1; }
+      .chip-text { font-size: 13px; font-weight: 620; fill: #4e3a79; text-anchor: middle; dominant-baseline: middle; }
+      .arrow { fill: none; stroke: #756c91; stroke-width: 2.2; marker-end: url(#arrow); }
+      .arrow-purple { fill: none; stroke: #6941c6; stroke-width: 2.4; marker-end: url(#arrowPurple); }
+      .flow-label { font-size: 12px; font-weight: 650; fill: #766e89; text-anchor: middle; }
+      .divider { stroke: #ebe7f2; stroke-width: 1; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1050" fill="url(#pageBackground)"/>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="1600" height="9" fill="url(#headerGradient)"/>
+  <g class="canvas-text">
+    <text x="55" y="63" class="title">Beyond<tspan fill="#7048cc">Slides</tspan> 课程处理流水线</text>
+    <text x="55" y="92" class="subtitle">把课程录制与书面幻灯片转换为可导航、可回听、突出讲授增量的阅读报告</text>
+  </g>
+
+  <!-- Legend -->
+  <g class="canvas-text" transform="translate(1050,48)">
+    <rect x="0" y="-16" width="495" height="46" rx="14" fill="#ffffff" stroke="#e1ddec"/>
+    <circle cx="28" cy="7" r="6" fill="#e28a35"/>
+    <text x="41" y="12" class="body-small">本地工具 / 模型</text>
+    <circle cx="158" cy="7" r="6" fill="#7048cc"/>
+    <text x="171" y="12" class="body-small">LLM</text>
+    <circle cx="237" cy="7" r="6" fill="#3981c6"/>
+    <text x="250" y="12" class="body-small">Rust 算法</text>
+    <circle cx="357" cy="7" r="6" fill="#24966a"/>
+    <text x="370" y="12" class="body-small">领域数据 / 结果</text>
+  </g>
+
+  <!-- Stage 1: import -->
+  <g class="canvas-text">
+    <rect class="card" x="55" y="122" width="1490" height="108" rx="20"/>
+    <circle cx="89" cy="157" r="19" fill="#3981c6"/>
+    <text x="89" y="158" class="number">1</text>
+    <text x="120" y="154" class="card-subtitle">导入课程来源</text>
+    <text x="120" y="184" class="card-title">选择书面来源与课程录制</text>
+
+    <rect class="chip" x="485" y="141" width="132" height="42" rx="12"/>
+    <text x="551" y="163" class="chip-text">本地上传</text>
+    <text x="636" y="167" class="body">或</text>
+    <rect class="chip" x="667" y="141" width="142" height="42" rx="12"/>
+    <text x="738" y="163" class="chip-text">雨课堂导入</text>
+
+    <path d="M 855 140 L 855 205" class="divider"/>
+    <rect x="899" y="140" width="212" height="44" rx="13" fill="#eef6ff" stroke="#c9e1f7"/>
+    <text x="1005" y="162" class="chip-text" fill="#256aa7">PPT / PDF</text>
+    <text x="1129" y="167" class="body">＋</text>
+    <rect x="1166" y="140" width="308" height="44" rx="13" fill="#fff5e9" stroke="#f4d3ae"/>
+    <text x="1320" y="162" class="chip-text" fill="#9a5a1b">视频 / 录音 / 已有转写</text>
+    <text x="1186" y="206" class="body-small">文件仅在本地处理；只有文字会发送给配置的模型后端</text>
+  </g>
+
+  <!-- Split arrows -->
+  <path d="M 800 230 L 800 253 L 415 253 L 415 274" class="arrow"/>
+  <path d="M 800 230 L 800 253 L 1185 253 L 1185 274" class="arrow"/>
+  <text x="415" y="264" class="canvas-text flow-label">书面来源</text>
+  <text x="1185" y="264" class="canvas-text flow-label">课程录制</text>
+
+  <!-- Stage 2: slides -->
+  <g class="canvas-text">
+    <rect class="card" x="55" y="282" width="720" height="203" rx="20"/>
+    <circle cx="89" cy="318" r="19" fill="#e28a35"/>
+    <text x="89" y="319" class="number">2</text>
+    <text x="120" y="314" class="card-subtitle">幻灯片文字提取 · 本地</text>
+    <text x="120" y="344" class="card-title">PDFium 优先，PP-OCRv5 补充</text>
+
+    <rect x="85" y="371" width="270" height="72" rx="14" fill="#f6f9fd" stroke="#d6e3ef"/>
+    <text x="105" y="397" class="body strong">PDFium</text>
+    <text x="105" y="423" class="body-small">逐页提取嵌入文字并渲染页面</text>
+
+    <path d="M 368 407 L 410 407" class="arrow"/>
+    <text x="389" y="394" class="flow-label">文字稀疏</text>
+
+    <rect x="425" y="371" width="310" height="72" rx="14" fill="#fff8ef" stroke="#f1d5b4"/>
+    <text x="445" y="397" class="body strong">PP-OCRv5（ONNX）</text>
+    <text x="445" y="423" class="body-small">仅识别图片页或文字不足的页面</text>
+
+    <rect x="565" y="449" width="170" height="24" rx="12" fill="#eaf7f1"/>
+    <text x="650" y="462" class="pill-text" fill="#1b7d58">SlideDeck：页码＋文字</text>
+  </g>
+
+  <!-- Stage 3: media -->
+  <g class="canvas-text">
+    <rect class="card" x="825" y="282" width="720" height="203" rx="20"/>
+    <circle cx="859" cy="318" r="19" fill="#e28a35"/>
+    <text x="859" y="319" class="number">3</text>
+    <text x="890" y="314" class="card-subtitle">语音识别 · 本地 CPU</text>
+    <text x="890" y="344" class="card-title">从录制中得到带时间的原始文字</text>
+
+    <rect class="chip" x="858" y="373" width="154" height="45" rx="12"/>
+    <text x="935" y="396" class="chip-text">FFmpeg</text>
+    <path d="M 1018 396 L 1050 396" class="arrow"/>
+    <rect class="chip" x="1058" y="373" width="158" height="45" rx="12"/>
+    <text x="1137" y="396" class="chip-text">Silero VAD</text>
+    <path d="M 1222 396 L 1254 396" class="arrow"/>
+    <rect x="1262" y="361" width="248" height="69" rx="12" fill="#fff8ef" stroke="#f1d5b4"/>
+    <text x="1386" y="385" class="chip-text" fill="#92551b">sherpa-onnx</text>
+    <text x="1386" y="408" class="chip-text" fill="#92551b">SenseVoiceSmall INT8</text>
+
+    <text x="858" y="452" class="body-small">16 kHz 单声道音频</text>
+    <text x="1058" y="452" class="body-small">检测语音区域</text>
+    <rect x="1262" y="444" width="248" height="28" rx="14" fill="#eaf7f1"/>
+    <text x="1386" y="459" class="pill-text" fill="#1b7d58">Transcript＋细粒度时间信息</text>
+  </g>
+
+  <!-- slide-data bus -->
+  <path d="M 415 485 L 415 720 L 607 720 L 607 731" class="arrow"/>
+
+  <!-- Stage 4: restoration -->
+  <path d="M 1185 485 L 1185 510" class="arrow-purple"/>
+  <g class="canvas-text">
+    <rect class="card" x="825" y="518" width="720" height="161" rx="20"/>
+    <circle cx="859" cy="554" r="19" fill="#7048cc"/>
+    <text x="859" y="555" class="number">4</text>
+    <text x="890" y="550" class="card-subtitle">恢复课程转写 · LLM</text>
+    <text x="890" y="580" class="card-title">把 ASR 结果变成连贯、可读的课程文字</text>
+
+    <rect x="858" y="605" width="638" height="43" rx="12" fill="#f4f0fd" stroke="#dfd2f7"/>
+    <text x="882" y="632" class="body">添加标点　·　修正专业词汇　·　剔除纯语气词　·　保留来源范围</text>
+    <text x="1496" y="665" class="body-small" text-anchor="end">输出：Restored transcript</text>
+  </g>
+
+  <!-- restoration to segmentation -->
+  <path d="M 825 600 L 794 600 L 794 704 L 230 704 L 230 731" class="arrow-purple"/>
+
+  <!-- Stage 5: segmentation -->
+  <g class="canvas-text">
+    <rect class="card" x="55" y="739" width="350" height="247" rx="20"/>
+    <circle cx="89" cy="775" r="19" fill="#7048cc"/>
+    <text x="89" y="776" class="number">5</text>
+    <text x="120" y="771" class="card-subtitle">语义分段 · LLM ＋ RUST</text>
+    <text x="85" y="815" class="card-title">全局选择自然边界</text>
+    <text x="85" y="849" class="body"><tspan class="strong">①</tspan> 按标点生成候选分割点</text>
+    <text x="85" y="878" class="body"><tspan class="strong">②</tspan> LLM 为每个点给出 cut cost 0–5</text>
+    <text x="85" y="907" class="body"><tspan class="strong">③</tspan> Rust 动态规划，全段不超过 300 字</text>
+    <rect x="84" y="929" width="292" height="37" rx="10" fill="#eef6ff"/>
+    <text x="230" y="949" class="pill-text" fill="#286ca8">依次最少使用 5 → 4 → 3 → 2 → 1 分割点</text>
+  </g>
+
+  <!-- Stage 6: alignment -->
+  <path d="M 405 862 L 430 862" class="arrow"/>
+  <g class="canvas-text">
+    <rect class="card" x="438" y="739" width="384" height="247" rx="20"/>
+    <circle cx="472" cy="775" r="19" fill="#3981c6"/>
+    <text x="472" y="776" class="number">6</text>
+    <text x="503" y="771" class="card-subtitle">段落与幻灯片对齐 · 本地</text>
+    <text x="468" y="815" class="card-title">语义＋词汇的混合检索</text>
+
+    <rect x="468" y="839" width="154" height="60" rx="12" fill="#eef6ff" stroke="#c9e1f7"/>
+    <text x="545" y="860" class="chip-text" fill="#286ca8">BGE-small-zh</text>
+    <text x="545" y="882" class="chip-text" fill="#286ca8">语义相似度</text>
+    <rect x="638" y="839" width="154" height="60" rx="12" fill="#eef6ff" stroke="#c9e1f7"/>
+    <text x="715" y="860" class="chip-text" fill="#286ca8">Jieba＋BM25</text>
+    <text x="715" y="882" class="chip-text" fill="#286ca8">词汇相似度</text>
+
+    <text x="630" y="928" class="body" text-anchor="middle">RRF 融合分数 → 序列动态规划</text>
+    <text x="630" y="954" class="body-small" text-anchor="middle">惩罚相邻段落的幻灯片页码剧烈跳跃</text>
+    <rect x="683" y="961" width="109" height="18" rx="9" fill="#eaf7f1"/>
+    <text x="737" y="971" class="pill-text" font-size="10" fill="#1b7d58">Slide position</text>
+  </g>
+
+  <!-- Stage 7: comparative ranking -->
+  <path d="M 822 862 L 847 862" class="arrow-purple"/>
+  <g class="canvas-text">
+    <rect class="card" x="855" y="739" width="410" height="247" rx="20"/>
+    <circle cx="889" cy="775" r="19" fill="#7048cc"/>
+    <text x="889" y="776" class="number">7</text>
+    <text x="920" y="771" class="card-subtitle">比较式评价 · LLM ＋ RUST</text>
+    <text x="885" y="815" class="card-title">得到重要性与新颖度</text>
+
+    <text x="885" y="849" class="body"><tspan class="strong">每组随机选取 4 段，重复 8 轮</tspan></text>
+    <text x="885" y="877" class="body-small">LLM 每组只选择 most / least，不打绝对分</text>
+
+    <rect x="885" y="896" width="157" height="55" rx="12" fill="#f4f0fd" stroke="#dfd2f7"/>
+    <text x="963" y="916" class="chip-text" fill="#6240b2">重要性</text>
+    <text x="963" y="937" class="pill-text" fill="#756a88">仅比较段落文字</text>
+    <rect x="1058" y="896" width="177" height="55" rx="12" fill="#fdf0f5" stroke="#efcada"/>
+    <text x="1146" y="916" class="chip-text" fill="#a63f6d">新颖度</text>
+    <text x="1146" y="937" class="pill-text" fill="#756a88">附邻近页＋检索页文字</text>
+
+    <text x="1060" y="974" class="body-small" text-anchor="middle">Rust 汇总 most / least → 全讲相对百分位</text>
+  </g>
+
+  <!-- Output -->
+  <path d="M 1265 862 L 1290 862" class="arrow-purple"/>
+  <g class="canvas-text">
+    <rect x="1298" y="739" width="247" height="247" rx="22" fill="url(#outputGradient)" filter="url(#shadow)"/>
+    <circle cx="1332" cy="775" r="19" fill="#ffffff" fill-opacity="0.18"/>
+    <text x="1332" y="776" class="number">✓</text>
+    <text x="1363" y="771" font-size="13" font-weight="680" fill="#eee8ff">交付结果</text>
+    <text x="1328" y="818" font-size="22" font-weight="740" fill="#ffffff">交互式阅读报告</text>
+    <path d="M 1328 840 L 1515 840" stroke="#ffffff" stroke-opacity="0.24"/>
+    <text x="1328" y="874" font-size="15" fill="#f7f3ff">连续课程转写</text>
+    <text x="1328" y="904" font-size="15" fill="#f7f3ff">可滚动幻灯片</text>
+    <text x="1328" y="934" font-size="15" fill="#f7f3ff">点击段落回听录音</text>
+    <text x="1328" y="964" font-size="14" fill="#eadfff">粗体＝重要性　下划线＝新颖度</text>
+  </g>
+
+  <!-- Footer -->
+  <text x="55" y="1025" class="canvas-text body-small">所有确定性校验、动态规划、检索融合、分数汇总与任务编排均由 Rust 完成；LLM 只返回受约束的结构化判断。</text>
+  <text x="1545" y="1025" class="canvas-text body-small" text-anchor="end">BeyondSlides</text>
+</svg>

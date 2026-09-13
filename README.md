@@ -4,11 +4,67 @@
 
 这是一个**本地运行的课程项目 / 预览版**，不是多用户云服务。录音转写和幻灯片检索在本机 CPU 上运行；文本恢复、语义分段和重要性 / 新颖度比较可使用你提供的 OpenAI-compatible 模型 API，或复用本机 Codex CLI 的 ChatGPT 登录。
 
-## 先看效果
+## 三分钟快速验收
 
-下载本仓库后，用浏览器打开 [examples/demo/report.html](examples/demo/report.html)，或在应用侧栏点击 **查看示例报告**。
+以下步骤是助教或新用户最短的验收路径。查看演示不需要编译或 API key；已有 Rust 1.94+ 和基本编译工具时，启动服务器只需一条构建命令和一条运行命令。首次编译和首次模型资源下载的实际耗时取决于网络与本机缓存。
+
+### 1. 先看内置演示（无需编译）
+
+```sh
+git clone https://github.com/Charliewzy/BeyondSlides.git
+cd BeyondSlides
+xdg-open examples/demo/report.html
+```
+
+也可以直接在文件管理器或浏览器中打开 [examples/demo/report.html](examples/demo/report.html)；服务器启动后，应用左侧的 **查看示例报告** 打开的是同一份内容。
 
 示例包含一堂 Rust 课程的 80 页幻灯片和完整分析文本，无需 API key、模型下载或分析等待。图片已嵌入 HTML，可离线打开；**不包含录音**。这是一次真实分析的存档，不代表所有讲座都能达到相同效果。来源见 [示例说明](examples/demo/README.md)。
+
+演示时建议依次查看：
+
+1. 调节右上角阈值，观察**粗体表示重要性、下划线表示新颖度**；
+2. 点击一个段落，观察右侧自动定位到推断对齐的幻灯片；
+3. 点击一页幻灯片，观察左侧所有对齐段落被定位和高亮；
+4. 拖动中间 minimap 的可视窗口和左右边界，检查长讲座导航与栏宽调整；
+5. 使用右上、右下折叠按钮，以及“导出当前粗体 / 下划线内容”。
+
+### 2. 编译并启动本地服务器
+
+Ubuntu / Debian 先安装构建依赖；其他 Linux 发行版请安装对应的 C/C++ toolchain、Clang、CMake、OpenSSL headers 和 `pkg-config`：
+
+```sh
+sudo apt-get update
+sudo apt-get install -y build-essential clang cmake libssl-dev pkg-config
+```
+
+在仓库根目录编译并启动：
+
+```sh
+cargo build --release --locked
+./target/release/beyond-slides serve
+```
+
+浏览器打开 **http://127.0.0.1:7842**。服务器启动本身不需要 API key；默认数据保存在仓库下的 `run/application/`。停止服务器可在终端按 `Ctrl+C`，已经启动的分析 worker 会继续运行并保存进度。
+
+### 3. 配置 Endpoint / Key 并分析自己的讲座
+
+1. 点击 **导入讲座**。书面材料选择 PDF；课堂内容选择 JSON、SRT、VTT、UTF-8 TXT 转写，或选择录音 / 视频由本机转写。也可以扫码登录雨课堂后选择同一课程、同一讲次的课件和回放。
+2. 在 **分析模型** 中选择 **OpenAI-compatible API**，填写：
+   - **API base URL**：服务商的 Chat Completions 根地址，通常以 `/v1` 结尾；
+   - **模型名称**：端点实际接受的 model ID；
+   - **API key**：只传给本地后端和本次 worker，不写入讲座配置或浏览器持久存储。
+3. 可选填写每百万 token 价格、token 预算、初始/最大并发、请求间隔及服务商额外请求字段。
+4. 点击 **开始分析**。页面会显示每个阶段的完成量、耗时与 ETA、token/费用、请求与重试；完成后点击 **打开阅读报告**。
+
+课程 GLM-5 端点的配置示例：
+
+```text
+API base URL: https://lab.cs.tsinghua.edu.cn/ai-platform/api/v1
+模型名称: glm-5
+API key: <从课程平台取得的 key>
+```
+
+该地址不是本项目提供的公共服务。使用其他服务商时替换为其 Endpoint、model ID 和 key 即可。若使用本机 Codex，则在终端完成 `codex login`，再在网页中选择 **Codex / ChatGPT 登录**；该模式无需填写 Endpoint 或 API key。
 
 ## 可以做什么
 
@@ -23,7 +79,7 @@
 
 重要性是**同一讲座内部的相对排名**，新颖度也是结合幻灯片证据的相对判断；它们不是客观分数，也不适合跨讲座比较。幻灯片位置由文本检索和序列对齐推断，并非从视频中观察得到。
 
-## 安装与启动
+## 安装与部署细节
 
 目前主要在 **Linux / WSL** 上开发和验证。仓库可以生成 Ubuntu 24.04+
 的 `.deb` 安装包和一个 Linux x86-64 便携预览包；macOS、原生 Windows 的完整流程尚未验证。
@@ -57,7 +113,7 @@ scripts/package_standalone_linux.sh
 
 本机验证生成的目录约 **424 MiB**，压缩下载约 **283 MiB**；具体大小会随 Rust 和运行时版本变化。包内含 BeyondSlides、完整的 ungoogled-Chromium AppImage、PDFium、FFmpeg、`ffprobe` 与许可证，不要求另行安装这些组件。OCR、ASR 和嵌入模型仍在第一次需要时校验下载。当前包面向具有图形桌面的现代 glibc Linux x86-64；详情和验证命令见 [独立应用说明](docs/standalone.md)。Ubuntu 24.04+ 若出现 Chromium `No usable sandbox`，请改用上述 `.deb`。
 
-### 1. 从源码安装
+### 从源码构建：依赖与首次下载
 
 从源码构建只需要 Rust / Cargo 和 C/C++ 构建工具。PDFium、FFmpeg 与
 `ffprobe` 由 BeyondSlides 按固定版本管理，不需要通过系统包管理器安装。
@@ -65,7 +121,7 @@ Ubuntu / Debian 示例：
 
 ```sh
 sudo apt-get update
-sudo apt-get install build-essential pkg-config
+sudo apt-get install build-essential clang cmake libssl-dev pkg-config
 ```
 
 Rust 可通过 [rustup](https://rustup.rs/) 安装；最低支持版本与 CI 使用的版本为 1.94.0。首次处理 PDF 或媒体时，会下载并校验约 63 MiB 的 PDFium、FFmpeg 和 `ffprobe` 压缩资源，解压后缓存约 167 MiB。首次构建会下载 Rust 依赖和 ONNX Runtime；首次分析还可能下载本地中文检索模型 `BAAI/bge-small-zh-v1.5`。首次导入雨课堂课件会下载并校验约 21 MiB 的 PP-OCRv5 模型，之后直接复用。
@@ -108,7 +164,7 @@ docker run --rm --name beyond-slides \
 
 打开 **http://127.0.0.1/**。容器内监听 `0.0.0.0:7842`，因此宿主端口可以任意映射；上例特意验证了 `80:7842`，并只向宿主 loopback 发布。模型、登录资料、讲座与检查点都保存在命名卷中。完整的端口、可信来源及冒烟测试说明见 [部署说明](docs/deployment.md)。默认镜像不含可选的 Chromium，因此雨课堂导入在该镜像中不可用。
 
-### 2. 可选：启用本地录音转写
+### 本地录音转写与雨课堂
 
 **已有转写文件时可以跳过这一节。** 录音 / 视频转写由 Rust 内的 sherpa-onnx、INT8 SenseVoiceSmall 和 Silero VAD 在本机 CPU 上完成，不需要 Python、PyTorch、GPU 或系统安装的 FFmpeg。BeyondSlides 使用经过完整性校验的托管 FFmpeg 提取 16 kHz 单声道音频。
 
@@ -116,7 +172,7 @@ docker run --rm --name beyond-slides \
 
 源码运行或默认 Docker 镜像从雨课堂导入时，还需要本机提供 Google Chrome 或 Chromium；Linux 独立预览包已自带固定版本。BeyondSlides 会在后台使用独立的浏览器配置，并把扫码登录页面显示在应用自己的对话框中；登录状态有效时会自动复用，无需每次扫码。登录时可选择雨课堂公共服务器、荷塘、长江或黄河雨课堂，四者共享同一个本地浏览器资料目录，但各域名分别保存自己的 cookie；退出登录会清除整个雨课堂资料目录。课件和录像选择会绑定到同一门课程、同一讲次，并分别提示该讲次是否缺少可导入的课件或录像；只有存在多份课件时才要求选择。若雨课堂在后台将一堂课存为多份回放，BeyondSlides 会自动合并为一份录像，不要求用户选择或理解这些内部片段。雨课堂逐页图片会组装为图片型 PDF，并由本机 CPU 上的 PP-OCRv5 提取文字；无需 Python、PaddlePaddle、GPU 或在线 OCR 服务。此功能使用雨课堂网页自身的私有接口，当前已端到端验证荷塘雨课堂；其他服务器仍需使用对应账号验证，网站更新后也可能需要同步适配。
 
-### 3. 导入并分析
+## 模型配置补充
 
 1. 点击 **导入讲座**，分别选择“书面材料”和“课堂内容”的来源。前者可上传 PDF 或选择雨课堂课件；后者可上传转写、上传录音 / 视频并本地转写，或选择雨课堂录像。
 2. 检查第一页文字、转写预览和建议检查的幻灯片。图片页或标题页文字少并不一定是错误。
@@ -137,6 +193,17 @@ API base URL: https://lab.cs.tsinghua.edu.cn/ai-platform/api/v1
 ```
 
 这是 GLM-5 的示例，**不是所有模型 / 服务商通用的设置**。本应用不会默认替你关闭思考。模型 API 可能产生费用；页面 token 用量和估算费用随已完成响应更新。价格预设来自 Models.dev，按服务商区分且可能变化；代理端点或订阅服务的实际计费应以其账单为准。
+
+使用高级 CLI 流程时，同样的连接配置由环境变量提供；不要把真实 key 写进仓库或 shell 脚本：
+
+```sh
+export BEYOND_SLIDES_API_BASE_URL='https://example.com/v1'
+export BEYOND_SLIDES_MODEL='provider-model-id'
+read -r -s -p 'API key: ' BEYOND_SLIDES_API_KEY
+export BEYOND_SLIDES_API_KEY
+```
+
+CLI 的规范化输入格式、完整命令和检查点规则见 [命令行运行说明](docs/running.md)。普通用户优先使用网页配置，因为它同时提供输入检查、阶段进度、停止/恢复、价格和 token 预算。
 
 ## 停止、恢复与分享
 
@@ -197,5 +264,5 @@ scripts/verify_deb_linux.sh dist/beyond-slides_0.1.0-1_amd64.deb
 - `src/`：Rust 流程、验证、模型通信、检索和本地服务器
 - `templates/`：应用与报告的 HTML / CSS / JavaScript
 - `prompts/`：文本恢复、分段和比较任务的模型指令
-- `scripts/`：CPU 转写桥接、实验与验证工具
+- `scripts/`：打包、实验与端到端验证工具
 - `tests/`、`examples/`：回归测试、固定样例与离线演示

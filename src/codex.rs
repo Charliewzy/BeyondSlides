@@ -266,6 +266,10 @@ impl CodexAppServerClient {
         parse: impl Fn(&str) -> Result<(T, bool), ChatCompletionsError>,
         repair: impl Fn(&ChatCompletionsError) -> String,
     ) -> Result<(T, CodexDiagnostics), ChatCompletionsError> {
+        self.config
+            .request_scheduler
+            .check_token_budget()
+            .map_err(ChatCompletionsError::TokenBudget)?;
         let server = self.server().await?;
         let initial_prompt = format!(
             "<instructions>\n{}\n</instructions>\n\n<lecture_data>\n{}\n</lecture_data>",
@@ -275,6 +279,10 @@ impl CodexAppServerClient {
         let mut diagnostics = CodexDiagnostics::default();
 
         for conversation_turn in 0..=task.max_repairs {
+            self.config
+                .request_scheduler
+                .check_token_budget()
+                .map_err(ChatCompletionsError::TokenBudget)?;
             let request_kind = if conversation_turn == 0 {
                 ModelRequestKind::Initial
             } else {
@@ -294,6 +302,10 @@ impl CodexAppServerClient {
                     let prompt = prompt.clone();
                     let schema = task.schema.clone();
                     async move {
+                        self.config
+                            .request_scheduler
+                            .check_token_budget()
+                            .map_err(ChatCompletionsError::TokenBudget)?;
                         let thread_id = match server.start_thread(&self.config.model).await {
                             Ok(thread_id) => thread_id,
                             Err(error) => {
@@ -352,6 +364,9 @@ impl CodexAppServerClient {
                             .await;
                         match turn {
                             Ok(turn) => {
+                                self.config
+                                    .request_scheduler
+                                    .record_token_usage(turn.input_tokens, turn.output_tokens);
                                 permit.finish(RequestFeedback::Success);
                                 if let (Some(trace), Some(exchange_id)) =
                                     (&self.config.model_trace, exchange_id)

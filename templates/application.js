@@ -181,7 +181,15 @@ function setSettings(settings) {
   $("uncached-input-price").value = displayPrice(pricing.uncached_input || "");
   $("cached-input-price").value = displayPrice(pricing.cached_input || "");
   $("output-price").value = displayPrice(pricing.output || "");
+  $("token-budget").value = settings.token_budget ?? "";
   syncModelBackend();
+}
+function configuredTokenBudget() {
+  const text = $("token-budget").value.trim();
+  if (!text) return null;
+  const budget = Number(text);
+  if (!Number.isSafeInteger(budget) || budget <= 0) throw new Error("Token 预算必须是大于零的整数");
+  return budget;
 }
 function configuredPricing() {
   const displayed = {
@@ -526,11 +534,28 @@ function render(status) {
   $("cache-hit-rate").textContent = cache.hitRate;
   $("output-tokens").textContent = tokenUsage(usage.known_output_tokens, usage.missing_output_usage, usage.responses);
   $("estimated-cost").textContent = costEstimate(status.estimated_cost);
+  const budget = status.token_budget;
+  $("token-budget-progress").hidden = !budget;
+  if (budget) {
+    $("token-budget-count").textContent = `${budget.incomplete_usage ? "≥ " : ""}${budget.consumed.toLocaleString()} / ${budget.limit.toLocaleString()}`;
+    $("token-budget-bar").max = budget.limit;
+    $("token-budget-bar").value = Math.min(budget.consumed, budget.limit);
+    const percent = 100 * budget.consumed / budget.limit;
+    $("token-budget-detail").textContent = budget.incomplete_usage
+      ? "部分模型响应没有返回完整 token 用量，预算无法继续可靠执行，处理将暂停。"
+      : budget.reached
+        ? `已达到预算（${percent.toFixed(1)}%）；完成的进度已保存，可提高或移除预算后继续。`
+        : `已使用 ${percent.toFixed(1)}%；并发中的请求完成后可能少量超过预算。`;
+  }
   $("active-requests").textContent = usage.active_requests; $("retries").textContent = usage.retries;
   $("hedges").textContent = `${usage.hedges} / 20`;
-  const failed = state === "failed" || state === "interrupted";
+  const budgetBlocked = state === "paused" && budget && (budget.reached || budget.incomplete_usage);
+  if (budgetBlocked) $("run-state").textContent = "Token 预算已停止处理";
+  const failed = state === "failed" || state === "interrupted" || budgetBlocked;
   $("run-error-banner").hidden = !failed;
-  $("run-error-title").textContent = state === "interrupted"
+  $("run-error-title").textContent = budgetBlocked
+    ? "Token 预算已停止处理，完成进度已保存"
+    : state === "interrupted"
     ? "处理中断，已保存完成进度"
     : "处理失败，已保存完成进度";
   $("run-error").textContent = status.error || "处理进程未提供错误详情，请查看调试日志。";
@@ -898,6 +923,7 @@ $("start-form").addEventListener("submit", async (event) => {
         codex_service_tier: codexServiceTier || null,
         extra_body: codex ? null : ($("extra-body").value.trim() ? JSON.parse($("extra-body").value) : null),
         pricing: configuredPricing(),
+        token_budget: configuredTokenBudget(),
         initial_concurrency: Number($("initial-concurrency").value), max_concurrency: Number($("concurrency").value),
         request_interval_ms: Number($("spacing").value), adaptive: $("adaptive").checked },
       api_key: codex ? "" : $("api-key").value,

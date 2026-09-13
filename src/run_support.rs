@@ -1,7 +1,7 @@
 use std::{
     env, fs,
     io::{self, Write},
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -22,6 +22,7 @@ const MODEL_ENV: &str = "BEYOND_SLIDES_MODEL";
 const MODEL_BACKEND_ENV: &str = "BEYOND_SLIDES_MODEL_BACKEND";
 const CODEX_REASONING_EFFORT_ENV: &str = "BEYOND_SLIDES_CODEX_REASONING_EFFORT";
 const CODEX_SERVICE_TIER_ENV: &str = "BEYOND_SLIDES_CODEX_SERVICE_TIER";
+const TOKEN_BUDGET_ENV: &str = "BEYOND_SLIDES_TOKEN_BUDGET";
 const CHAT_EXTRA_BODY_ENV: &str = "BEYOND_SLIDES_CHAT_EXTRA_BODY";
 const ANNOTATION_CHAT_EXTRA_BODY_ENV: &str = "BEYOND_SLIDES_ANNOTATION_CHAT_EXTRA_BODY";
 const RESTORATION_CHAT_EXTRA_BODY_ENV: &str = "BEYOND_SLIDES_RESTORATION_CHAT_EXTRA_BODY";
@@ -194,6 +195,22 @@ impl ProviderSettings {
             optional_environment_variable("BEYOND_SLIDES_MAX_CONCURRENCY")?.as_deref(),
             optional_environment_variable("BEYOND_SLIDES_REQUEST_INTERVAL_MS")?.as_deref(),
         )?;
+        let token_budget = optional_environment_variable(TOKEN_BUDGET_ENV)?
+            .map(|value| {
+                value.parse::<NonZeroU64>().map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "invalid {TOKEN_BUDGET_ENV}: expected an integer greater than zero"
+                        ),
+                    )
+                })
+            })
+            .transpose()?;
+        let scheduler = match token_budget {
+            Some(limit) => execution.scheduler().with_token_budget(limit),
+            None => execution.scheduler(),
+        };
         Ok(Self {
             worker: crate::worker_control::WorkerControl::from_environment()?,
             backend,
@@ -220,7 +237,7 @@ impl ProviderSettings {
             },
             extra_body,
             execution,
-            scheduler: execution.scheduler(),
+            scheduler,
         })
     }
 
@@ -450,7 +467,7 @@ pub(crate) fn open_run_model_trace(
 ) -> Result<ModelExchangeTrace, io::Error> {
     let path = model_trace_path(run_directory);
     let trace = ModelExchangeTrace::open(&path)?;
-    scheduler.restore_hedging_history(&read_model_trace(&path)?);
+    scheduler.restore_history(&read_model_trace(&path)?);
     Ok(trace)
 }
 

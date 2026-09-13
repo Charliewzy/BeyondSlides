@@ -1,6 +1,7 @@
 use std::{
     collections::VecDeque,
     error::Error,
+    num::{NonZeroU64, NonZeroUsize},
     sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -123,6 +124,43 @@ async fn annotation_uses_the_configured_openai_compatible_endpoint() -> Result<(
     assert_eq!(tool_names, ["inspect_slide", "search_slides"]);
     assert_eq!(request["messages"][0]["role"], "system");
     assert_eq!(request["messages"][1]["role"], "user");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn token_budget_prevents_a_repair_request_after_the_limit_is_reached()
+-> Result<(), Box<dyn Error>> {
+    let invalid_analysis = json!({
+        "passages": [{
+            "start": 0,
+            "end": 0,
+            "novelty": 1,
+            "importance": 3,
+            "related_slides": [99]
+        }]
+    })
+    .to_string();
+    let api = mock_api(vec![final_response("chat-1", invalid_analysis)]).await;
+    let scheduler = RequestScheduler::fixed(
+        NonZeroUsize::new(2).expect("non-zero concurrency"),
+        Duration::ZERO,
+    )
+    .with_token_budget(NonZeroU64::new(30).expect("non-zero budget"));
+    let client = beyond_slides::ChatCompletionsClient::new(
+        ChatCompletionsConfig::new(base_url(&api), "test-key", "test-model")?
+            .with_request_scheduler(scheduler),
+    );
+    let sources = sources()?;
+    let task = task(&sources)?;
+    let scorer = FixedScorer(scores([0.0; 6]));
+
+    let error = client
+        .annotate_window(&sources, &scorer, &task)
+        .await
+        .expect_err("the budget must prevent the repair request");
+
+    assert!(matches!(error, ChatCompletionsError::TokenBudget(_)));
+    assert_eq!(api.received_requests().await.unwrap().len(), 1);
     Ok(())
 }
 
@@ -1039,7 +1077,7 @@ async fn a_learned_straggler_is_hedged_and_the_loser_is_cancelled_in_the_trace()
             },
         })
         .collect();
-    scheduler.restore_hedging_history(&history);
+    scheduler.restore_history(&history);
     let directory = tempfile::tempdir()?;
     let trace_path = directory.path().join("model-trace.jsonl");
     let client = beyond_slides::ChatCompletionsClient::new(

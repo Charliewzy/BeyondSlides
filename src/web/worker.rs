@@ -1,6 +1,8 @@
 use std::{error::Error, ffi::OsStr, path::Path, time::Instant};
 
-use beyond_slides::{ComparativeRankingError, LectureAnalysisError, RestorationSessionError};
+use beyond_slides::{
+    ComparativeRankingError, LectureAnalysisError, RestorationSessionError, TokenBudgetError,
+};
 
 use super::jobs::{ElapsedCheckpoint, Outcome, OutcomeStatus, now_ms, read_job, worker_lock};
 use crate::run_support::write_json_atomically;
@@ -128,4 +130,31 @@ fn is_stopped(error: &(dyn Error + 'static)) -> bool {
     ) || error
         .downcast_ref::<std::io::Error>()
         .is_some_and(|e| e.kind() == std::io::ErrorKind::Interrupted)
+        || error_chain_contains_token_budget(error)
+}
+
+fn error_chain_contains_token_budget(error: &(dyn Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if error.downcast_ref::<TokenBudgetError>().is_some() {
+            return true;
+        }
+        current = error.source();
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_budget_errors_pause_even_when_wrapped() {
+        let error = beyond_slides::ChatCompletionsError::TokenBudget(TokenBudgetError::Reached {
+            limit: 100,
+            consumed: 110,
+        });
+
+        assert!(is_stopped(&error));
+    }
 }

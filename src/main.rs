@@ -127,7 +127,8 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
              BEYOND_SLIDES_RESTORATION_CHAT_EXTRA_BODY and \n\
              BEYOND_SLIDES_ANNOTATION_CHAT_EXTRA_BODY override it per stage; Codex also accepts \
              BEYOND_SLIDES_CODEX_REASONING_EFFORT and BEYOND_SLIDES_CODEX_SERVICE_TIER; adaptive \
-             scheduling accepts BEYOND_SLIDES_INITIAL_CONCURRENCY",
+             scheduling accepts BEYOND_SLIDES_INITIAL_CONCURRENCY; optional \
+             BEYOND_SLIDES_TOKEN_BUDGET limits recorded input-plus-output tokens",
         )
         .into()),
     }

@@ -55,6 +55,7 @@ const MAX_PROVIDER_ERROR_CHARACTERS: usize = 2_000;
 enum ChatAttemptError {
     Provider(genai::Error),
     Trace(io::Error),
+    TokenBudget(crate::TokenBudgetError),
 }
 
 /// Configuration for one OpenAI-compatible Chat Completions endpoint.
@@ -754,6 +755,9 @@ impl ChatCompletionsClient {
         };
         let mut retries = 0;
         loop {
+            self.request_scheduler
+                .check_token_budget()
+                .map_err(ChatCompletionsError::TokenBudget)?;
             let provider_attempt = retries;
             let attempt = self
                 .request_scheduler
@@ -761,6 +765,9 @@ impl ChatCompletionsClient {
                     let request = request.clone();
                     let options = options.clone();
                     async move {
+                        self.request_scheduler
+                            .check_token_budget()
+                            .map_err(ChatAttemptError::TokenBudget)?;
                         let metadata = permit.metadata();
                         let exchange_id = self
                             .model_trace
@@ -792,6 +799,16 @@ impl ChatCompletionsClient {
                             .await
                         {
                             Ok(response) => {
+                                self.request_scheduler.record_token_usage(
+                                    response
+                                        .usage
+                                        .prompt_tokens
+                                        .and_then(|tokens| u64::try_from(tokens).ok()),
+                                    response
+                                        .usage
+                                        .completion_tokens
+                                        .and_then(|tokens| u64::try_from(tokens).ok()),
+                                );
                                 permit.finish(RequestFeedback::Success);
                                 if let (Some(trace), Some(exchange_id)) =
                                     (&self.model_trace, exchange_id)
@@ -856,6 +873,9 @@ impl ChatCompletionsClient {
                 Ok((response, exchange_id)) => return Ok((response, retries, exchange_id)),
                 Err(ChatAttemptError::Trace(error)) => {
                     return Err(ChatCompletionsError::ModelTrace(error));
+                }
+                Err(ChatAttemptError::TokenBudget(error)) => {
+                    return Err(ChatCompletionsError::TokenBudget(error));
                 }
                 Err(ChatAttemptError::Provider(error)) => {
                     let retryable = is_retryable_provider_error(&error);
@@ -1481,6 +1501,7 @@ fn cached_prompt_token_count(response: &ChatResponse) -> Option<u64> {
 #[derive(Debug)]
 pub enum ChatCompletionsError {
     Provider(String),
+    TokenBudget(crate::TokenBudgetError),
     ModelTrace(io::Error),
     SerializeTask(serde_json::Error),
     UnexpectedChoiceCount {
@@ -1533,6 +1554,7 @@ impl fmt::Display for ChatCompletionsError {
             Self::Provider(error) => {
                 write!(formatter, "the model endpoint request failed: {error}")
             }
+            Self::TokenBudget(error) => error.fmt(formatter),
             Self::ModelTrace(error) => write!(formatter, "could not record model exchange: {error}"),
             Self::SerializeTask(error) => write!(
                 formatter,
@@ -1629,6 +1651,7 @@ impl Error for ChatCompletionsError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::ModelTrace(error) => Some(error),
+            Self::TokenBudget(error) => Some(error),
             Self::SerializeTask(error)
             | Self::SerializeTool(error)
             | Self::InvalidAnalysisJson(error)

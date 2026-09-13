@@ -92,6 +92,7 @@ details[open] > summary { margin-bottom: 20px; }
 .pricing-result span { font-weight: 400; color: #777385; font-size: 12px; }
 .pricing-more { width: 100%; border: 0; border-radius: 0; color: var(--accent); }
 #pricing-status { margin: -5px 0 14px; }
+.token-budget-setting { max-width: 360px; margin-bottom: 14px; }
 .warning, #notice { color: #9d4431; font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; white-space: pre-wrap; }
 #notice { padding: 14px 18px; border-radius: 8px; background: #fff0e7; }
 .run-error-banner {
@@ -122,6 +123,9 @@ details[open] > summary { margin-bottom: 20px; }
 .stage { padding: 12px 0; }
 .stage-label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 9px; }
 progress { width: 100%; height: 8px; accent-color: var(--accent); display: block; }
+.token-budget-progress { margin-top: 20px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 9px; background: #fdfcff; }
+.token-budget-progress .stage-label strong { font-variant-numeric: tabular-nums; }
+.token-budget-progress > small { display: block; margin-top: 8px; }
 .usage-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(8rem,1fr)); gap: 12px; border-top: 1px solid var(--line); margin-top: 24px; padding-top: 24px; }
 .usage-grid strong { display: block; font-size: 20px; font-weight: 650; margin-top: 5px; overflow-wrap: anywhere; }
 #import-status { font-size: 13px; margin-left: 15px; color: var(--accent); }

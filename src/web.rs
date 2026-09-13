@@ -874,11 +874,20 @@ struct Status {
     progress: WorkerProgress,
     usage: Usage,
     estimated_cost: Option<pricing::CostEstimate>,
+    token_budget: Option<TokenBudgetStatus>,
     usage_error: Option<String>,
     error: Option<String>,
     elapsed_ms: u64,
     report_url: Option<String>,
     transcription: Option<transcription::Progress>,
+}
+
+#[derive(Serialize)]
+struct TokenBudgetStatus {
+    limit: u64,
+    consumed: u64,
+    incomplete_usage: bool,
+    reached: bool,
 }
 
 async fn job_status(
@@ -893,6 +902,7 @@ async fn job_status(
         progress: WorkerProgress::default(),
         usage: Usage::default(),
         estimated_cost: None,
+        token_budget: None,
         usage_error: None,
         error: None,
         elapsed_ms: 0,
@@ -976,6 +986,20 @@ async fn job_status(
             .pricing
             .as_ref()
             .and_then(|pricing| pricing.estimate(&status.usage).ok());
+        status.token_budget = run.settings.token_budget.map(|limit| {
+            let consumed = status
+                .usage
+                .known_input_tokens
+                .saturating_add(status.usage.known_output_tokens);
+            let incomplete_usage =
+                status.usage.missing_input_usage > 0 || status.usage.missing_output_usage > 0;
+            TokenBudgetStatus {
+                limit,
+                consumed,
+                incomplete_usage,
+                reached: consumed >= limit,
+            }
+        });
         if status.state == "complete" && path.join("analysis/report.html").is_file() {
             status.report_url = Some(format!("/reports/{id}/report.html"));
         }
@@ -1172,6 +1196,9 @@ async fn start(
             },
         )
         .env("BEYOND_SLIDES_WORKER_CONTROL", path.join("control"));
+    if let Some(token_budget) = run.settings.token_budget {
+        command.env("BEYOND_SLIDES_TOKEN_BUDGET", token_budget.to_string());
+    }
     if let Some(runtime_tools_directory) = runtime_tools_directory {
         command.env(
             beyond_slides::runtime_tools::RUNTIME_TOOLS_DIRECTORY_ENV,

@@ -44,6 +44,22 @@ runs. Successful checkpoint reuse is unaffected by scheduling. Your shell's
 existing `BEYOND_SLIDES_MAX_CONCURRENCY=2` remains a hard ceiling unless you
 change or unset it.
 
+To stop a run before it starts further model requests after a recorded usage
+limit is reached, set an optional positive integer budget:
+
+```bash
+export BEYOND_SLIDES_TOKEN_BUDGET=1000000
+```
+
+The budget is the sum of total input tokens (including the cached subset once)
+and output tokens reported by completed responses across restoration and
+analysis. Existing traces are counted when a run resumes. Requests already in
+flight may finish slightly beyond the limit; subsequent requests are blocked
+and the run remains resumable. If a provider omits input or output usage while
+a budget is active, BeyondSlides pauses rather than pretending the missing
+usage was zero. Raise the value or unset it to continue from validated
+checkpoints.
+
 Slow-tail hedging is automatic and intentionally conservative. Latency is
 tracked separately for every workflow/request-kind class. Nothing is hedged
 until that class has ten successful responses, so a model that normally takes

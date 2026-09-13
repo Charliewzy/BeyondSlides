@@ -57,6 +57,10 @@ pub(super) struct Settings {
     pub extra_body: Option<Value>,
     #[serde(default)]
     pub pricing: Option<TokenPricing>,
+    /// Maximum cumulative input-plus-output tokens recorded for this run.
+    /// Operational only: changing it never invalidates model checkpoints.
+    #[serde(default)]
+    pub token_budget: Option<u64>,
     #[serde(default)]
     pub initial_concurrency: Option<usize>,
     pub max_concurrency: usize,
@@ -83,6 +87,9 @@ impl Settings {
         }
         if let Some(pricing) = &self.pricing {
             pricing.validate()?;
+        }
+        if self.token_budget == Some(0) {
+            return Err("Token budget must be greater than zero".into());
         }
         if self.backend == ModelBackendKind::Codex {
             if self
@@ -443,6 +450,7 @@ mod tests {
             codex_service_tier: None,
             extra_body: None,
             pricing: None,
+            token_budget: None,
             initial_concurrency: Some(2),
             max_concurrency: 2,
             request_interval_ms: 0,
@@ -497,6 +505,24 @@ mod tests {
     }
 
     #[test]
+    fn token_budget_is_positive_and_does_not_invalidate_model_checkpoints() {
+        let left = settings(ModelBackendKind::OpenAiCompatible);
+        let mut right = left.clone();
+        right.token_budget = Some(1_000_000);
+        assert_eq!(right.validate("key"), Ok(()));
+        assert!(left.same_restoration(&right));
+        assert!(left.same_analysis(&right));
+
+        right.token_budget = Some(0);
+        assert!(
+            right
+                .validate("key")
+                .unwrap_err()
+                .contains("greater than zero")
+        );
+    }
+
+    #[test]
     fn starting_concurrency_is_operational_and_cannot_exceed_the_ceiling() {
         let left = settings(ModelBackendKind::Codex);
         let mut right = left.clone();
@@ -537,6 +563,7 @@ mod tests {
         .expect("legacy settings deserialize");
         assert_eq!(settings.backend, ModelBackendKind::OpenAiCompatible);
         assert!(settings.pricing.is_none());
+        assert!(settings.token_budget.is_none());
         assert!(settings.legacy_boundary_passages);
     }
 
@@ -610,6 +637,7 @@ mod tests {
                 codex_service_tier: None,
                 extra_body: None,
                 pricing: None,
+                token_budget: None,
                 initial_concurrency: Some(2),
                 max_concurrency: 2,
                 request_interval_ms: 0,

@@ -85,7 +85,9 @@ pub use playback_timing::{
 };
 pub use ranking::rank_oral_additions;
 pub use report::render_report;
-pub use request_scheduling::{RequestScheduler, RequestSchedulingSnapshot};
+pub use request_scheduling::{
+    RequestScheduler, RequestSchedulingSnapshot, TokenBudgetError, TokenBudgetSnapshot,
+};
 pub use restoration::{
     CompleteTranscriptRestoration, RestorationError, RestorationMessage, RestorationProgress,
     RestorationProgressError, RestorationSessionError, TranscriptRestorationConfig,

@@ -1,7 +1,9 @@
 use std::{
     collections::{HashMap, VecDeque},
+    error::Error,
+    fmt,
     future::Future,
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
@@ -53,7 +55,49 @@ pub struct RequestSchedulingSnapshot {
     pub max_active_hedges: usize,
     pub max_hedges_per_run: u64,
     pub total_admission_wait_ms: u64,
+    pub token_budget: Option<TokenBudgetSnapshot>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct TokenBudgetSnapshot {
+    pub limit: u64,
+    pub consumed: u64,
+    pub missing_usage_responses: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenBudgetError {
+    Reached {
+        limit: u64,
+        consumed: u64,
+    },
+    UsageUnavailable {
+        limit: u64,
+        consumed: u64,
+        missing_responses: u64,
+    },
+}
+
+impl fmt::Display for TokenBudgetError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Reached { limit, consumed } => write!(
+                formatter,
+                "token budget of {limit} reached after {consumed} recorded tokens; increase or remove the budget to resume"
+            ),
+            Self::UsageUnavailable {
+                limit,
+                consumed,
+                missing_responses,
+            } => write!(
+                formatter,
+                "token budget of {limit} cannot be enforced after {consumed} recorded tokens because {missing_responses} model responses omitted input or output token usage; increase or remove the budget to resume"
+            ),
+        }
+    }
+}
+
+impl Error for TokenBudgetError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct RequestClass {
@@ -115,6 +159,7 @@ struct State {
     hedges_started: u64,
     response_latencies: HashMap<RequestClass, VecDeque<Duration>>,
     wait_ms: u64,
+    token_budget: Option<TokenBudgetSnapshot>,
 }
 
 pub(crate) enum RequestFeedback {
@@ -187,6 +232,7 @@ impl RequestScheduler {
                 hedges_started: 0,
                 response_latencies: HashMap::new(),
                 wait_ms: 0,
+                token_budget: None,
             }),
             changed: Notify::new(),
         }))
@@ -223,7 +269,45 @@ impl RequestScheduler {
             max_active_hedges: MAX_ACTIVE_HEDGES,
             max_hedges_per_run: MAX_HEDGES_PER_RUN,
             total_admission_wait_ms: state.wait_ms,
+            token_budget: state.token_budget,
         }
+    }
+
+    /// Applies one run-wide budget to every request admitted through this
+    /// shared scheduler. Existing trace history must be restored afterward.
+    pub fn with_token_budget(self, limit: NonZeroU64) -> Self {
+        self.lock().token_budget = Some(TokenBudgetSnapshot {
+            limit: limit.get(),
+            consumed: 0,
+            missing_usage_responses: 0,
+        });
+        self
+    }
+
+    pub(crate) fn check_token_budget(&self) -> Result<(), TokenBudgetError> {
+        let state = self.lock();
+        let Some(budget) = state.token_budget else {
+            return Ok(());
+        };
+        if budget.missing_usage_responses > 0 {
+            return Err(TokenBudgetError::UsageUnavailable {
+                limit: budget.limit,
+                consumed: budget.consumed,
+                missing_responses: budget.missing_usage_responses,
+            });
+        }
+        if budget.consumed >= budget.limit {
+            return Err(TokenBudgetError::Reached {
+                limit: budget.limit,
+                consumed: budget.consumed,
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn record_token_usage(&self, input: Option<u64>, output: Option<u64>) {
+        let mut state = self.lock();
+        state.record_token_usage(input, output);
     }
 
     #[cfg(test)]
@@ -231,9 +315,10 @@ impl RequestScheduler {
         self.acquire_class(None).await
     }
 
-    /// Restores latency samples and the run-wide hedge budget from an existing
-    /// trace before a resumable run admits new requests.
-    pub fn restore_hedging_history(&self, records: &[ModelTraceRecord]) {
+    /// Restores request identifiers, latency samples, hedge usage, and token
+    /// usage from one existing trace before a resumable run admits requests.
+    /// Call this once for each trace that belongs to the run.
+    pub fn restore_history(&self, records: &[ModelTraceRecord]) {
         let mut state = self.lock();
         for record in records {
             let class = RequestClass {
@@ -255,12 +340,20 @@ impl RequestScheduler {
                         state.hedges_started = state.hedges_started.saturating_add(1);
                     }
                 }
-                ModelTraceEvent::Response { elapsed_ms, .. } => {
+                ModelTraceEvent::Response {
+                    elapsed_ms,
+                    response,
+                    ..
+                } => {
                     let latencies = state.response_latencies.entry(class).or_default();
                     if latencies.len() == MAX_HEDGE_SAMPLES {
                         latencies.pop_front();
                     }
                     latencies.push_back(Duration::from_millis(*elapsed_ms));
+                    state.record_token_usage(
+                        response["usage"]["prompt_tokens"].as_u64(),
+                        response["usage"]["completion_tokens"].as_u64(),
+                    );
                 }
                 _ => {}
             }
@@ -491,6 +584,19 @@ impl Drop for RequestPermit {
 }
 
 impl State {
+    fn record_token_usage(&mut self, input: Option<u64>, output: Option<u64>) {
+        let Some(budget) = self.token_budget.as_mut() else {
+            return;
+        };
+        let Some(tokens) =
+            input.and_then(|input| output.and_then(|output| input.checked_add(output)))
+        else {
+            budget.missing_usage_responses = budget.missing_usage_responses.saturating_add(1);
+            return;
+        };
+        budget.consumed = budget.consumed.saturating_add(tokens);
+    }
+
     fn interval(&self) -> Duration {
         self.floor.max(self.learned_interval)
     }
@@ -826,6 +932,49 @@ mod tests {
         assert_eq!(snapshot.max_concurrency, 3);
     }
 
+    #[test]
+    fn token_budget_counts_input_and_output_and_stops_at_the_limit() {
+        let scheduler =
+            scheduler(false, 2).with_token_budget(NonZeroU64::new(100).expect("non-zero budget"));
+
+        scheduler.record_token_usage(Some(70), Some(29));
+        assert_eq!(scheduler.check_token_budget(), Ok(()));
+        scheduler.record_token_usage(Some(1), Some(0));
+
+        assert_eq!(
+            scheduler.check_token_budget(),
+            Err(TokenBudgetError::Reached {
+                limit: 100,
+                consumed: 100,
+            })
+        );
+        assert_eq!(
+            scheduler.snapshot().token_budget,
+            Some(TokenBudgetSnapshot {
+                limit: 100,
+                consumed: 100,
+                missing_usage_responses: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn token_budget_fails_closed_when_usage_is_missing() {
+        let scheduler =
+            scheduler(false, 2).with_token_budget(NonZeroU64::new(100).expect("non-zero budget"));
+
+        scheduler.record_token_usage(Some(40), None);
+
+        assert_eq!(
+            scheduler.check_token_budget(),
+            Err(TokenBudgetError::UsageUnavailable {
+                limit: 100,
+                consumed: 0,
+                missing_responses: 1,
+            })
+        );
+    }
+
     #[tokio::test(start_paused = true)]
     async fn hedging_starts_only_after_ten_same_class_successes() {
         let scheduler = RequestScheduler::fixed(NonZeroUsize::new(20).unwrap(), Duration::ZERO);
@@ -977,7 +1126,7 @@ mod tests {
         });
 
         let scheduler = RequestScheduler::fixed(NonZeroUsize::new(20).unwrap(), Duration::ZERO);
-        scheduler.restore_hedging_history(&records);
+        scheduler.restore_history(&records);
         assert_eq!(scheduler.snapshot().hedges_started, 1);
         let permit = scheduler.acquire_for(context()).await;
         assert_eq!(permit.metadata().logical_request_id, 42);
@@ -986,5 +1135,39 @@ mod tests {
             Duration::from_secs(8)
         );
         permit.finish(RequestFeedback::Success);
+    }
+
+    #[test]
+    fn resumed_history_contributes_to_the_token_budget() {
+        let records = [ModelTraceRecord {
+            format_version: crate::MODEL_TRACE_FORMAT_VERSION,
+            event_index: 0,
+            timestamp_unix_ms: 0,
+            exchange_id: 0,
+            workflow: ModelWorkflow::Restoration,
+            window_index: 0,
+            conversation_turn: 0,
+            request_kind: ModelRequestKind::Initial,
+            event: ModelTraceEvent::Response {
+                provider_attempt: 0,
+                elapsed_ms: 1_000,
+                response: serde_json::json!({
+                    "usage": {"prompt_tokens": 80, "completion_tokens": 20}
+                }),
+                raw_response: None,
+            },
+        }];
+        let scheduler =
+            scheduler(false, 2).with_token_budget(NonZeroU64::new(100).expect("non-zero budget"));
+
+        scheduler.restore_history(&records);
+
+        assert!(matches!(
+            scheduler.check_token_budget(),
+            Err(TokenBudgetError::Reached {
+                limit: 100,
+                consumed: 100
+            })
+        ));
     }
 }

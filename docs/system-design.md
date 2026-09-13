@@ -113,6 +113,8 @@ PDF 由托管的 PDFium 逐页提取文字并渲染预览图。系统会规范�
 
 ### 3.1 模块划分与数据流
 
+![](beyondslides-pipeline.svg)
+
 ```mermaid
 flowchart TD
     UI["浏览器 UI<br/>HTML + CSS + 原生 JavaScript"] <-->|"同源 HTTP / JSON；轮询状态"| WEB["Axum 控制服务"]

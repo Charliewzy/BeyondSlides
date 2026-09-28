@@ -35,7 +35,7 @@ and removal. `sudo apt remove beyond-slides` removes the program;
 `sudo apt purge beyond-slides` also removes its local AppArmor override file,
 but never deletes user lecture data.
 
-The current package is approximately 211 MiB to download and 949 MiB installed.
+The current package is approximately 222 MiB to download and 967 MiB installed.
 Unlike the portable archive, it expands Chromium under `/opt` so Ubuntu can
 apply a fixed, path-scoped AppArmor profile. It targets Ubuntu 24.04 or later
 on amd64 and declares the browser's ordinary desktop-library dependencies.

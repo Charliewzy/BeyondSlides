@@ -8,6 +8,23 @@ README, and the example README record that permission while keeping the course
 material outside the project's MIT software license. Replacing the example or
 rewriting its Git history is therefore no longer a public-release prerequisite.
 
+The public-release preparation was repeated from commit `2859258` in a fresh
+clone. Formatting, strict Clippy, the complete default Rust test suite, 18
+lightweight Python tests, and the release build passed. The local mock-provider
+application verifier completed a real server/worker run with 12 model calls;
+the browser verifier passed reload, debug-log, report, export, mobile, source,
+and untimed-import checks without JavaScript errors.
+
+Gitleaks 8.30.1 scanned every reachable commit and the repository's existing
+GitHub Actions log with full redaction enabled and reported no findings. The
+repository has no configured GitHub Actions secrets. This scan supplements,
+rather than replaces, GitHub's automatic secret scanning after publication.
+
+The rebuilt `beyond-slides_0.1.0-1_amd64.deb` is 222 MiB (967 MiB installed).
+Its package verifier passed the layout, AppArmor, launcher, managed runtime,
+Chromium, HTTP, and four-server Rain Classroom smoke checks. Its SHA-256 digest
+is `055da9cce18b7a63b6f4dde261f0c99e2840365c3e1eaa38fa9a2423b8f9e6e7`.
+
 ## Native ASR follow-up — 2026-09-08
 
 Recording transcription now runs through statically linked sherpa-onnx with

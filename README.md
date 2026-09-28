@@ -96,8 +96,8 @@ scripts/package_deb_linux.sh
 sudo apt install ./dist/beyond-slides_0.1.0-1_amd64.deb
 ```
 
-安装后从应用菜单打开 **BeyondSlides**。当前包约 **211 MiB**，安装后约
-**949 MiB**；课程、检查点、登录状态和模型仍保存在用户数据目录，升级或卸载
+安装后从应用菜单打开 **BeyondSlides**。当前包约 **222 MiB**，安装后约
+**967 MiB**；课程、检查点、登录状态和模型仍保存在用户数据目录，升级或卸载
 程序不会删除它们。构建、验证和卸载说明见 [独立应用说明](docs/standalone.md)。
 
 ### Linux 独立预览包

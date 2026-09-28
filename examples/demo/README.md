@@ -1,9 +1,9 @@
 # Example lecture report
 
 The embedded lecture text and slide images are third-party course material,
-excluded from the project's MIT license. This demo is retained for the current
-course submission; public redistribution still requires permission or replacement.
-See [NOTICE](../../NOTICE).
+excluded from the project's MIT license. The course instructor has granted the
+project author permission to distribute this example publicly with BeyondSlides.
+See [NOTICE](../../NOTICE) for the scope of that permission.
 
 Open `report.html` directly in a browser, or choose **查看示例报告** in the
 application. It is self-contained: slide images, styles and interactions are

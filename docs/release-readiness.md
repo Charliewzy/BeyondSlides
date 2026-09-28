@@ -1,5 +1,13 @@
 # Release-readiness review — 2026-09-06
 
+## Public-release follow-up — 2026-09-28
+
+The course instructor has granted the project author permission to distribute
+the bundled real-course example publicly with BeyondSlides. `NOTICE`, the main
+README, and the example README record that permission while keeping the course
+material outside the project's MIT software license. Replacing the example or
+rewriting its Git history is therefore no longer a public-release prerequisite.
+
 ## Native ASR follow-up — 2026-09-08
 
 Recording transcription now runs through statically linked sherpa-onnx with
@@ -36,9 +44,9 @@ The three code findings below have now been addressed in separate commits:
   tests cover competing processes, initialization and lock release on drop.
 
 The project owner selected MIT for the software and explicitly retained the
-bundled example for the current course submission. `NOTICE` excludes third-party
-course content from MIT; permission or replacement remains necessary before a
-public release. Minimal CI now covers Rust formatting, Clippy, Rust tests and
+bundled example. `NOTICE` excludes third-party course content from MIT and now
+records the instructor's permission to distribute the example publicly with
+BeyondSlides. Minimal CI covers Rust formatting, Clippy, Rust tests and
 lightweight Python tests, using Rust 1.94.0 / Python 3.11. Native test dependencies
 and the Python tests' `httpx` dependency are explicitly installed.
 

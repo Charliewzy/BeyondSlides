@@ -7,10 +7,11 @@ third-party course material, not covered by this project's MIT license.
 Their copyright and any applicable permissions remain with their respective
 rights holders. Original attribution is preserved in the slides.
 
-The bundled example is retained for the current course-repository submission.
-This notice does not grant permission to redistribute the course material
-publicly. Before a public release, confirm redistribution permission or replace
-the example and remove historical copies from the public repository as needed.
+The course instructor has granted the project author permission to distribute
+this embedded course example publicly with BeyondSlides, including in the
+source repository and application packages. This permission does not place the
+course material under the project's MIT license or grant a separate license to
+reuse the course material outside BeyondSlides.
 
 Third-party dependencies and model weights retain their own licenses.
 

@@ -24,6 +24,11 @@ jobs:
       - name: Diagnose Sherpa release linking
         shell: pwsh
         run: |
+          $sherpaCache = "target/sherpa-onnx-prebuilt"
+          if ((Test-Path $sherpaCache) -and
+              -not (Get-ChildItem -Recurse -File $sherpaCache -Filter "sherpa-onnx-c-api.lib")) {
+            Remove-Item -Recurse -Force $sherpaCache
+          }
           cargo build --release --locked --bin beyond-slides -vv
           $status = $LASTEXITCODE
           Write-Host "Sherpa prebuilt cache contents:"

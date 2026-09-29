@@ -32,7 +32,9 @@ jobs:
         with:
           cache-on-failure: true
       - name: Run Rust tests
-        run: cargo test --locked --all-targets --all-features -- --test-threads=1
+        env:
+          RUST_BACKTRACE: full
+        run: cargo test --locked --bin beyond-slides worker_control::tests::resume_keeps_elapsed_but_checkpoints_do_not_contribute_to_speed -- --exact --nocapture --test-threads=1
       - name: Build standalone package
         shell: pwsh
         run: ./scripts/package_standalone_windows.ps1

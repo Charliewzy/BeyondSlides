@@ -39,30 +39,57 @@ New-Item -ItemType Directory $Temporary | Out-Null
 try {
     $env:BEYOND_SLIDES_DATA_DIR = Join-Path $Temporary "data"
     $env:BEYOND_SLIDES_PORT = "$Port"
-    $env:BEYOND_SLIDES_BROWSER_EXTRA_ARGS = "--headless=new --dump-dom --disable-gpu"
+    $env:BEYOND_SLIDES_BROWSER_EXTRA_ARGS = "--headless=new --disable-gpu"
     $Process = Start-Process -FilePath $Launcher -PassThru
-    if (-not $Process.WaitForExit(30000)) {
-        Stop-Process -Id $Process.Id -Force
-        throw "The standalone launcher did not finish its headless smoke test."
+    $Deadline = [DateTime]::UtcNow.AddSeconds(30)
+    $Ready = $false
+    while ([DateTime]::UtcNow -lt $Deadline) {
+        if ($Process.HasExited) {
+            $Log = Join-Path $env:BEYOND_SLIDES_DATA_DIR "controller.log"
+            $Diagnostics = if (Test-Path $Log) { Get-Content $Log -Raw } else { "no controller log" }
+            throw "The standalone launcher exited with code $($Process.ExitCode): $Diagnostics"
+        }
+        try {
+            $Probe = [Net.Sockets.TcpClient]::new("127.0.0.1", $Port)
+            $Probe.Dispose()
+            $Ready = $true
+            break
+        } catch [Net.Sockets.SocketException] {
+            Start-Sleep -Milliseconds 200
+        }
     }
-    if ($Process.ExitCode -ne 0) {
-        $Log = Join-Path $env:BEYOND_SLIDES_DATA_DIR "controller.log"
-        $Diagnostics = if (Test-Path $Log) { Get-Content $Log -Raw } else { "no controller log" }
-        throw "The standalone launcher exited with code $($Process.ExitCode): $Diagnostics"
+    if (-not $Ready) {
+        throw "The standalone controller did not become reachable within 30 seconds."
     }
-    Start-Sleep -Milliseconds 300
-    try {
-        $Probe = [Net.Sockets.TcpClient]::new("127.0.0.1", $Port)
-        $Probe.Dispose()
-        throw "The launcher left its controller running after Chromium exited."
-    } catch [Net.Sockets.SocketException] {
-        # Expected: closing the browser stops the local controller.
+    Start-Sleep -Seconds 1
+    if ($Process.HasExited) {
+        throw "The standalone launcher did not keep its application window alive."
     }
 } finally {
+    if ($null -ne $Process -and -not $Process.HasExited) {
+        & taskkill.exe /PID "$($Process.Id)" /T /F | Out-Null
+        $Process.WaitForExit()
+    }
     Remove-Item Env:BEYOND_SLIDES_DATA_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:BEYOND_SLIDES_PORT -ErrorAction SilentlyContinue
     Remove-Item Env:BEYOND_SLIDES_BROWSER_EXTRA_ARGS -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $Temporary -ErrorAction SilentlyContinue
+}
+
+$Deadline = [DateTime]::UtcNow.AddSeconds(10)
+$ControllerStopped = $false
+while ([DateTime]::UtcNow -lt $Deadline) {
+    try {
+        $Probe = [Net.Sockets.TcpClient]::new("127.0.0.1", $Port)
+        $Probe.Dispose()
+        Start-Sleep -Milliseconds 200
+    } catch [Net.Sockets.SocketException] {
+        $ControllerStopped = $true
+        break
+    }
+}
+if (-not $ControllerStopped) {
+    throw "The launcher smoke test left its controller running."
 }
 
 Write-Host "Windows launcher, Chromium, FFmpeg, ffprobe, and PDFium smoke tests passed."

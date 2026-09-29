@@ -300,7 +300,7 @@ fn report_requires_one_playback_interval_per_passage() -> Result<(), Box<dyn Err
 fn report_embeds_score_typography_and_escapes_restored_text() -> Result<(), Box<dyn Error>> {
     let analysis = analysis()?;
     assert_eq!(analysis.passages()[0].text, "<所有权 & 资源管理>。");
-    let report = render_continuous_report(&analysis);
+    let report = render_continuous_report(&analysis).replace("\r\n", "\n");
 
     assert!(report.contains("data-score-threshold=\"importance\""));
     assert!(report.contains("data-score-threshold=\"novelty\""));

@@ -65,6 +65,30 @@ try {
     if ($Process.HasExited) {
         throw "The standalone launcher did not keep its application window alive."
     }
+
+    # End only the application Chromium process. The launcher must respond by
+    # gracefully stopping the controller; killing the launcher's whole process
+    # tree would hide regressions that orphan auxiliary Chromium sessions.
+    $ApplicationBrowser = Get-CimInstance Win32_Process |
+        Where-Object {
+            $_.ParentProcessId -eq $Process.Id -and
+            $_.Name -eq "chrome.exe" -and
+            $_.CommandLine -like "*application-browser*"
+        } |
+        Select-Object -First 1
+    if ($null -eq $ApplicationBrowser) {
+        throw "Could not identify the packaged application Chromium process."
+    }
+    Stop-Process -Id $ApplicationBrowser.ProcessId -Force
+    if (-not $Process.WaitForExit(30000)) {
+        throw "The launcher did not exit after its application Chromium closed."
+    }
+
+    $Log = Join-Path $env:BEYOND_SLIDES_DATA_DIR "controller.log"
+    $Diagnostics = if (Test-Path $Log) { Get-Content $Log -Raw } else { "" }
+    if ($Diagnostics -notlike "*BeyondSlides application shutdown complete.*") {
+        throw "The launcher did not let the controller shut down gracefully: $Diagnostics"
+    }
 } finally {
     if ($null -ne $Process -and -not $Process.HasExited) {
         & taskkill.exe /PID "$($Process.Id)" /T /F | Out-Null
@@ -90,6 +114,19 @@ while ([DateTime]::UtcNow -lt $Deadline) {
 }
 if (-not $ControllerStopped) {
     throw "The launcher smoke test left its controller running."
+}
+
+$ProcessDeadline = [DateTime]::UtcNow.AddSeconds(10)
+do {
+    $Survivors = @(Get-CimInstance Win32_Process | Where-Object {
+        $_.CommandLine -like "*$Temporary*"
+    })
+    if ($Survivors.Count -eq 0) { break }
+    Start-Sleep -Milliseconds 200
+} while ([DateTime]::UtcNow -lt $ProcessDeadline)
+if ($Survivors.Count -ne 0) {
+    $Descriptions = $Survivors | ForEach-Object { "$($_.Name) ($($_.ProcessId))" }
+    throw "The launcher smoke test left packaged processes running: $($Descriptions -join ', ')"
 }
 
 Write-Host "Windows launcher, Chromium, FFmpeg, ffprobe, and PDFium smoke tests passed."

@@ -14,6 +14,8 @@ use std::{
 
 const DEFAULT_PORT: u16 = 7842;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
+const SHUTDOWN_ON_STDIN_CLOSE_ENV: &str = "BEYOND_SLIDES_SHUTDOWN_ON_STDIN_CLOSE";
 
 fn main() {
     if let Err(error) = run() {
@@ -72,8 +74,9 @@ fn run() -> Result<(), Box<dyn Error>> {
             application_directory.join("runtime-tools"),
         )
         .env("BEYOND_SLIDES_BIND_ADDRESS", "127.0.0.1")
+        .env(SHUTDOWN_ON_STDIN_CLOSE_ENV, "1")
         .env_remove("BEYOND_SLIDES_TRUSTED_ORIGINS")
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log));
     hide_console(&mut server_command);
@@ -187,6 +190,23 @@ impl ChildGuard {
         if self.stopped {
             return;
         }
+
+        // The packaged server watches this private pipe. Closing it lets Axum
+        // drain and, importantly, gives Rain Classroom's Chromium session a
+        // chance to close before the controller process exits.
+        drop(self.child.stdin.take());
+        let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
+        while Instant::now() < deadline {
+            match self.child.try_wait() {
+                Ok(Some(_)) => {
+                    self.stopped = true;
+                    return;
+                }
+                Ok(None) => thread::sleep(Duration::from_millis(50)),
+                Err(_) => break,
+            }
+        }
+
         if self.child.try_wait().ok().flatten().is_none() {
             let _ = self.child.kill();
         }

@@ -16,7 +16,8 @@ use std::{
     collections::{HashMap, HashSet},
     error::Error,
     ffi::OsStr,
-    fs, io,
+    fs,
+    io::{self, Read},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Component, Path as FsPath, PathBuf},
     process::Stdio,
@@ -57,6 +58,7 @@ const APP_ICON: &str = include_str!(concat!(
 ));
 const BIND_ADDRESS_ENV: &str = "BEYOND_SLIDES_BIND_ADDRESS";
 const TRUSTED_ORIGINS_ENV: &str = "BEYOND_SLIDES_TRUSTED_ORIGINS";
+const SHUTDOWN_ON_STDIN_CLOSE_ENV: &str = "BEYOND_SLIDES_SHUTDOWN_ON_STDIN_CLOSE";
 
 #[derive(Clone)]
 struct App {
@@ -184,13 +186,33 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
         .with_state(app);
     println!("BeyondSlides application: http://{bind_address}:{port}");
     let result = axum::serve(listener, router)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(shutdown_signal())
         .await;
     rain_classroom.shutdown().await;
+    println!("BeyondSlides application shutdown complete.");
     result?;
     Ok(())
+}
+
+async fn shutdown_signal() {
+    if std::env::var_os(SHUTDOWN_ON_STDIN_CLOSE_ENV).is_some() {
+        // The desktop launcher owns the only write end of this pipe. Reading
+        // on a blocking worker keeps the Tokio runtime free while the app is
+        // open; EOF means the application window has closed.
+        let _ = tokio::task::spawn_blocking(|| {
+            let mut stdin = io::stdin().lock();
+            let mut buffer = [0_u8; 64];
+            loop {
+                match stdin.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+            }
+        })
+        .await;
+    } else {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 fn bind_address_from_environment() -> Result<IpAddr, String> {

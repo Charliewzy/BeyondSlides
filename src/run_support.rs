@@ -36,7 +36,9 @@ pub(crate) fn lock_run_directory(directory: &Path) -> Result<fs::File, io::Error
     fs::create_dir_all(directory)?;
     let lock = fs::OpenOptions::new()
         .create(true)
-        .append(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
         .open(directory.join(RUN_LOCK_FILE))?;
     lock.try_lock().map_err(|error| {
         io::Error::other(format!(

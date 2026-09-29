@@ -29,6 +29,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.94.0
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Run Rust tests
         run: cargo test --locked --all-targets --all-features -- --test-threads=1
       - name: Build standalone package

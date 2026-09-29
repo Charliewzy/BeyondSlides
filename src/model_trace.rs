@@ -116,10 +116,19 @@ impl ModelExchangeTrace {
             next_exchange_id = next_exchange_id.max(record.exchange_id.saturating_add(1));
         }
 
-        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
         if let Some(partial_tail_start) = partial_tail_start {
-            file.set_len(partial_tail_start as u64)?;
-        } else if !bytes.is_empty() && !ends_with_newline {
+            // On Windows, an append-only handle has FILE_APPEND_DATA but not
+            // FILE_WRITE_DATA, so SetEndOfFile fails with AccessDenied. Repair
+            // the crash tail through an ordinary writable handle before
+            // opening the long-lived append-only writer.
+            OpenOptions::new()
+                .write(true)
+                .open(&path)?
+                .set_len(partial_tail_start as u64)?;
+        }
+
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        if partial_tail_start.is_none() && !bytes.is_empty() && !ends_with_newline {
             file.write_all(b"\n")?;
             file.flush()?;
         }

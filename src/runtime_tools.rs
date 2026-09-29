@@ -289,6 +289,7 @@ fn install_download_asset(
     replace_file(&staged, destination)
 }
 
+#[cfg(target_os = "linux")]
 pub(crate) fn install_verified_executable(
     destination: &Path,
     url: &str,

@@ -453,6 +453,7 @@ dependencies = [
  "tower-http",
  "unicode-normalization",
  "url",
+ "windows-sys 0.61.2",
  "wiremock",
  "zip 8.6.0",
 ]
@@ -5559,6 +5560,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
 dependencies = [
  "crc32fast",
+ "flate2",
  "indexmap 2.14.0",
  "memchr",
  "typed-path",

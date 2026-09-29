@@ -1,0 +1,53 @@
+name: Windows standalone
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.lock
+      - Cargo.toml
+      - src/**
+      - packaging/windows/**
+      - scripts/package_standalone_windows.ps1
+      - scripts/verify_standalone_windows.ps1
+      - .github/workflows/windows-standalone.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-standalone-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Build and verify portable package
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Run Rust tests
+        run: cargo test --locked --all-targets --all-features -- --test-threads=1
+      - name: Build standalone package
+        shell: pwsh
+        run: ./scripts/package_standalone_windows.ps1
+      - name: Verify standalone package
+        shell: pwsh
+        run: ./scripts/verify_standalone_windows.ps1 ./dist/beyond-slides-windows-x86_64
+      - name: Record package checksum
+        shell: pwsh
+        run: |
+          $archive = Resolve-Path ./dist/beyond-slides-windows-x86_64.zip
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $([IO.Path]::GetFileName($archive))" | Set-Content -Encoding ascii ./dist/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beyond-slides-windows-x86_64
+          path: |
+            dist/beyond-slides-windows-x86_64.zip
+            dist/SHA256SUMS.txt
+          compression-level: 0
+          if-no-files-found: error

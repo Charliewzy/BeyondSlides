@@ -306,7 +306,7 @@ pub(crate) fn install_verified_executable(
     make_executable(destination)
 }
 
-fn download_verified(
+pub(crate) fn download_verified(
     destination: &Path,
     url: &str,
     expected_bytes: u64,

@@ -58,10 +58,10 @@ Build the package from an x86-64 Linux checkout with `dpkg-deb` installed:
 scripts/package_deb_linux.sh
 ```
 
-The result is `dist/beyond-slides_0.1.0-1_amd64.deb`. Install or update it with:
+The result is `dist/beyond-slides_0.1.1-1_amd64.deb`. Install or update it with:
 
 ```sh
-sudo apt install ./dist/beyond-slides_0.1.0-1_amd64.deb
+sudo apt install ./dist/beyond-slides_0.1.1-1_amd64.deb
 ```
 
 Launch **BeyondSlides** from the desktop application menu, or run
@@ -79,7 +79,7 @@ on amd64 and declares the browser's ordinary desktop-library dependencies.
 Verify a built package without installing it on the host:
 
 ```sh
-scripts/verify_deb_linux.sh dist/beyond-slides_0.1.0-1_amd64.deb
+scripts/verify_deb_linux.sh dist/beyond-slides_0.1.1-1_amd64.deb
 ```
 
 The verifier checks ownership, metadata, the parsed AppArmor profile, browser,

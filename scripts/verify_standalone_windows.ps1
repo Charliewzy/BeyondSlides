@@ -15,9 +15,9 @@ foreach ($Required in @($Launcher, $Backend, $Chromium, $RuntimeTools)) {
     }
 }
 
-$Version = & $Chromium --version
-if ($LASTEXITCODE -ne 0 -or "$Version" -notmatch "Chromium 152\.0\.7977\.82") {
-    throw "Unexpected packaged Chromium version: $Version"
+$ChromiumHash = (Get-FileHash $Chromium -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($ChromiumHash -ne "11ca7ce7021bdffcf102797f8a00c713f5295b5e7313f3f136efcd998422e6f2") {
+    throw "Unexpected packaged Chromium executable hash: $ChromiumHash"
 }
 $Ffmpeg = Get-ChildItem $RuntimeTools -Filter "ffmpeg.exe" -Recurse -File | Select-Object -First 1
 $Ffprobe = Get-ChildItem $RuntimeTools -Filter "ffprobe.exe" -Recurse -File | Select-Object -First 1

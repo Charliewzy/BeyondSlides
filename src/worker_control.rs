@@ -266,10 +266,14 @@ impl Drop for WorkerControl {
         if let Some(monitor) = &self.monitor {
             monitor.abort();
         }
-        if let Some(timing) = &self.timing
-            && let Err(error) = timing.lock().unwrap().save(true)
-        {
-            eprintln!("Could not checkpoint final stage timing: {error}");
+        if let Some(timing) = &self.timing {
+            let Ok(mut timing) = timing.lock() else {
+                eprintln!("Could not checkpoint final stage timing: timing lock is poisoned");
+                return;
+            };
+            if let Err(error) = timing.save(true) {
+                eprintln!("Could not checkpoint final stage timing: {error}");
+            }
         }
     }
 }
@@ -293,26 +297,35 @@ mod tests {
         let path = directory.path().join("progress.json");
         let control = WorkerControl::new(Some(directory.path().into()))?;
         control.baseline(Stage::Restoration, 80, 100)?;
-        {
+        let (position, length) = {
             let mut timing = control.timing.as_ref().unwrap().lock().unwrap();
             let clock = timing.active.as_mut().unwrap();
             clock.started -= Duration::from_secs(20);
-            assert_eq!(clock.estimate.position(), 0);
-            assert_eq!(clock.estimate.length(), Some(20));
+            let position = clock.estimate.position();
+            let length = clock.estimate.length();
             timing.save(false)?;
-        }
+            (position, length)
+        };
+        assert_eq!(position, 0);
+        assert_eq!(length, Some(20));
         let saved: WorkerProgress = read_json(&path, "progress")?;
         assert!(saved.stages[&Stage::Restoration].eta_ms.is_none());
         control.progress(Stage::Restoration, 81, Some(100))?;
-        {
+        let (position, saved_eta, clock_eta) = {
             let timing = control.timing.as_ref().unwrap().lock().unwrap();
             let clock = timing.active.as_ref().unwrap();
-            assert_eq!(clock.estimate.position(), 1);
             let saved: WorkerProgress = read_json(&path, "progress")?;
-            let eta = saved.stages[&Stage::Restoration].eta_ms.unwrap();
-            // No second estimator or custom rounding: this is indicatif's value.
-            assert!(eta.abs_diff(clock.estimate.eta().as_millis() as u64) < 100);
-        }
+            (
+                clock.estimate.position(),
+                saved.stages[&Stage::Restoration].eta_ms,
+                clock.progress.eta_ms,
+            )
+        };
+        assert_eq!(position, 1);
+        // The serialized value is exactly the Indicatif-backed stage clock's
+        // snapshot; comparing two live ETA calls is timing-sensitive.
+        assert_eq!(saved_eta, clock_eta);
+        assert!(saved_eta.is_some());
         drop(control);
         let saved: WorkerProgress = read_json(&path, "progress")?;
         let elapsed = saved.stages[&Stage::Restoration].elapsed_ms.unwrap();

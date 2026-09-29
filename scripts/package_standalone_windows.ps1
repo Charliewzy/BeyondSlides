@@ -18,6 +18,20 @@ if ((Test-Path $OutputDirectory) -or (Test-Path $Archive)) {
     throw "Refusing to replace existing package output: $OutputDirectory"
 }
 
+# rust-cache can restore the Sherpa directory structure without its large
+# native libraries. Sherpa's upstream build script treats an existing lib/
+# directory as complete, so remove an incomplete cache before Cargo runs and
+# let the build script download and extract the pinned archive again.
+$SherpaCache = Join-Path $Repository "target\sherpa-onnx-prebuilt"
+if (Test-Path $SherpaCache) {
+    $SherpaCApi = Get-ChildItem -Path $SherpaCache -Recurse -File `
+        -Filter "sherpa-onnx-c-api.lib" | Select-Object -First 1
+    if ($null -eq $SherpaCApi) {
+        Write-Host "Removing incomplete Sherpa-ONNX native-library cache."
+        Remove-Item -Recurse -Force $SherpaCache
+    }
+}
+
 $OutputParent = Split-Path $OutputDirectory -Parent
 $OutputName = Split-Path $OutputDirectory -Leaf
 New-Item -ItemType Directory -Force $OutputParent | Out-Null

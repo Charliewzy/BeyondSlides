@@ -30,16 +30,23 @@ if ($LASTEXITCODE -ne 0) { throw "Packaged FFmpeg did not start." }
 & $Ffprobe.FullName -version | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Packaged ffprobe did not start." }
 
-$Listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
-$Listener.Start()
-$Port = ([Net.IPEndPoint]$Listener.LocalEndpoint).Port
-$Listener.Stop()
+function Get-FreeTcpPort {
+    $Listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    $Listener.Start()
+    $SelectedPort = ([Net.IPEndPoint]$Listener.LocalEndpoint).Port
+    $Listener.Stop()
+    return $SelectedPort
+}
+
+$Port = Get-FreeTcpPort
+$BrowserPort = Get-FreeTcpPort
+while ($BrowserPort -eq $Port) { $BrowserPort = Get-FreeTcpPort }
 $Temporary = Join-Path ([IO.Path]::GetTempPath()) "beyond-slides-windows-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory $Temporary | Out-Null
 try {
     $env:BEYOND_SLIDES_DATA_DIR = Join-Path $Temporary "data"
     $env:BEYOND_SLIDES_PORT = "$Port"
-    $env:BEYOND_SLIDES_BROWSER_EXTRA_ARGS = "--headless=new --disable-gpu"
+    $env:BEYOND_SLIDES_BROWSER_EXTRA_ARGS = "--headless=new --disable-gpu --remote-debugging-port=$BrowserPort"
     $Process = Start-Process -FilePath $Launcher -PassThru
     $Deadline = [DateTime]::UtcNow.AddSeconds(30)
     $Ready = $false
@@ -66,20 +73,39 @@ try {
         throw "The standalone launcher did not keep its application window alive."
     }
 
-    # End only the application Chromium process. The launcher must respond by
-    # gracefully stopping the controller; killing the launcher's whole process
-    # tree would hide regressions that orphan auxiliary Chromium sessions.
-    $ApplicationBrowser = Get-CimInstance Win32_Process |
-        Where-Object {
-            $_.ParentProcessId -eq $Process.Id -and
-            $_.Name -eq "chrome.exe" -and
-            $_.CommandLine -like "*application-browser*"
-        } |
-        Select-Object -First 1
-    if ($null -eq $ApplicationBrowser) {
-        throw "Could not identify the packaged application Chromium process."
+    # Ask only the application Chromium to close through its private DevTools
+    # endpoint. The launcher must then gracefully stop the controller; killing
+    # the launcher's process tree would hide orphaned auxiliary Chromium.
+    $BrowserDeadline = [DateTime]::UtcNow.AddSeconds(15)
+    $BrowserMetadata = $null
+    while ([DateTime]::UtcNow -lt $BrowserDeadline) {
+        try {
+            $BrowserMetadata = Invoke-RestMethod "http://127.0.0.1:$BrowserPort/json/version"
+            break
+        } catch {
+            Start-Sleep -Milliseconds 200
+        }
     }
-    Stop-Process -Id $ApplicationBrowser.ProcessId -Force
+    if ($null -eq $BrowserMetadata.webSocketDebuggerUrl) {
+        throw "The packaged application Chromium did not expose its test endpoint."
+    }
+    $Socket = [Net.WebSockets.ClientWebSocket]::new()
+    try {
+        $null = $Socket.ConnectAsync(
+            [Uri]$BrowserMetadata.webSocketDebuggerUrl,
+            [Threading.CancellationToken]::None
+        ).GetAwaiter().GetResult()
+        $Command = [Text.Encoding]::UTF8.GetBytes('{"id":1,"method":"Browser.close"}')
+        $Segment = [ArraySegment[byte]]::new($Command)
+        $null = $Socket.SendAsync(
+            $Segment,
+            [Net.WebSockets.WebSocketMessageType]::Text,
+            $true,
+            [Threading.CancellationToken]::None
+        ).GetAwaiter().GetResult()
+    } finally {
+        $Socket.Dispose()
+    }
     if (-not $Process.WaitForExit(30000)) {
         throw "The launcher did not exit after its application Chromium closed."
     }

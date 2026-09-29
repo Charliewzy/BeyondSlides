@@ -21,6 +21,7 @@ let desiredCodexServiceTier = "";
 let pricingSearchTimer;
 let pricingSearchSequence = 0;
 let pricingActiveQuery = "";
+let reportViewerTrigger = null;
 
 function showReviewPage(page, source) {
   $("review-page-title").textContent = `第 ${page.page} 页`;
@@ -71,6 +72,37 @@ async function api(path, options = {}) {
   return body;
 }
 function notice(message) { $("notice").textContent = message; $("notice").hidden = !message; }
+function openReportViewer(url, title, downloadUrl = null, downloadLabel = "下载分享包") {
+  const viewer = $("report-viewer");
+  reportViewerTrigger = document.activeElement;
+  $("report-viewer-title").textContent = title;
+  $("report-viewer-frame").src = new URL(url, location.href).href;
+  $("report-viewer-external").href = new URL(url, location.href).href;
+  const download = $("report-viewer-download");
+  download.hidden = !downloadUrl;
+  if (downloadUrl) {
+    download.href = downloadUrl;
+    download.textContent = downloadLabel;
+  } else {
+    download.removeAttribute("href");
+  }
+  viewer.hidden = false;
+  document.body.classList.add("report-viewer-open");
+  $("report-viewer-close").focus();
+}
+function closeReportViewer() {
+  const viewer = $("report-viewer");
+  if (viewer.hidden) return;
+  viewer.hidden = true;
+  document.body.classList.remove("report-viewer-open");
+  $("report-viewer-frame").src = "about:blank";
+  $("report-viewer-external").removeAttribute("href");
+  $("report-viewer-download").removeAttribute("href");
+  if (reportViewerTrigger instanceof HTMLElement && reportViewerTrigger.isConnected) {
+    reportViewerTrigger.focus();
+  }
+  reportViewerTrigger = null;
+}
 function duration(ms) { const seconds = Math.floor(ms / 1000); return `${Math.floor(seconds / 60)}分${String(seconds % 60).padStart(2, "0")}秒`; }
 function fileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
@@ -943,6 +975,26 @@ $("start-form").addEventListener("submit", async (event) => {
 $("stop-button").addEventListener("click", async () => {
   try { await api(`/api/jobs/${currentId}/stop`, { method: "POST" }); clearTimeout(pollingTimer); await poll(); }
   catch (error) { notice(error.message); }
+});
+$("open-example").addEventListener("click", event => {
+  event.preventDefault();
+  openReportViewer(event.currentTarget.href, "BeyondSlides 示例报告");
+});
+$("open-report").addEventListener("click", event => {
+  event.preventDefault();
+  openReportViewer(
+    event.currentTarget.href,
+    `${$("lecture-title").textContent} · 阅读报告`,
+    $("export-report").href,
+    $("export-report").textContent,
+  );
+});
+$("report-viewer-close").addEventListener("click", closeReportViewer);
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && !$("report-viewer").hidden) {
+    event.preventDefault();
+    closeReportViewer();
+  }
 });
 $("model-backend").addEventListener("change", syncModelBackend);
 $("concurrency").addEventListener("input", syncConcurrencyLimits);

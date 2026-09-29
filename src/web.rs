@@ -51,6 +51,10 @@ const EXAMPLE_REPORT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/examples/demo/report.html"
 ));
+const APP_ICON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/packaging/debian/beyond-slides.svg"
+));
 const BIND_ADDRESS_ENV: &str = "BEYOND_SLIDES_BIND_ADDRESS";
 const TRUSTED_ORIGINS_ENV: &str = "BEYOND_SLIDES_TRUSTED_ORIGINS";
 
@@ -121,6 +125,15 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
                         env!("CARGO_MANIFEST_DIR"),
                         "/templates/application.css"
                     )),
+                )
+            }),
+        )
+        .route(
+            "/favicon.svg",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "image/svg+xml; charset=utf-8")],
+                    APP_ICON,
                 )
             }),
         )

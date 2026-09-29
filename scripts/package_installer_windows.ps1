@@ -57,10 +57,12 @@ if (Test-Path $Installer) {
 }
 
 $Script = Join-Path $Repository "packaging\windows\BeyondSlides.iss"
+$Icon = Join-Path $Repository "packaging\windows\BeyondSlides.ico"
 & $InnoCompiler `
     "/DAppVersion=$Version" `
     "/DSourceDir=$PackageDirectory" `
     "/DOutputDir=$OutputDirectory" `
+    "/DIconFile=$Icon" `
     $Script
 if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup failed with exit code $LASTEXITCODE."

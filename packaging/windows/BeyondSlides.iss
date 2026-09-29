@@ -7,6 +7,9 @@
 #ifndef OutputDir
   #error OutputDir must be supplied by the packaging script.
 #endif
+#ifndef IconFile
+  #error IconFile must be supplied by the packaging script.
+#endif
 
 [Setup]
 AppId={{ED572A50-2F36-4DD0-9718-61A7C7E4043B}
@@ -33,6 +36,7 @@ UninstallDisplayIcon={app}\BeyondSlides.exe
 CloseApplications=yes
 RestartApplications=no
 SetupLogging=yes
+SetupIconFile={#IconFile}
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked

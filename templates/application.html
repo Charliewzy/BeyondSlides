@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BeyondSlides · 讲座工作台</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/app.css">
   <script src="/app.js" defer></script>
 </head>
@@ -12,7 +13,7 @@
     <a class="brand" href="/">Beyond<span>Slides</span></a>
     <p class="muted">从课堂中，发现讲义之外。</p>
     <button id="new-lecture" class="primary">＋ 导入讲座</button>
-    <a id="open-example" class="button example-link" href="/example/report.html" target="_blank" rel="noopener">查看示例报告 ↗</a>
+    <a id="open-example" class="button example-link" href="/example/report.html">查看示例报告</a>
     <nav id="lectures" aria-label="我的讲座"></nav>
     <div class="local-badge">● 本地工作台 <small>文件保存在这台电脑上</small></div>
   </aside>
@@ -137,7 +138,7 @@
             <label id="extra-body-setting">服务商额外请求字段（JSON，可选）<textarea id="extra-body" rows="3" placeholder='例如 GLM 关闭思考：{"thinking":{"type":"disabled"}}'></textarea></label>
             <p class="muted">更改并发或间隔可直接续跑；更改模型会先提示需要重跑的阶段。</p>
           </details>
-          <div class="actions"><button class="primary" id="start-button">开始分析</button><button type="button" id="stop-button" hidden>完成当前任务后停止</button><a class="primary button" id="open-report" hidden target="_blank" rel="noopener">打开阅读报告 ↗</a><a class="button" id="export-report" hidden>下载分享包（含录音）</a></div>
+          <div class="actions"><button class="primary" id="start-button">开始分析</button><button type="button" id="stop-button" hidden>完成当前任务后停止</button><a class="primary button" id="open-report" hidden>打开阅读报告</a><a class="button" id="export-report" hidden>下载分享包（含录音）</a></div>
         </form>
       </section>
       <section class="card" id="processing-panel" hidden>
@@ -167,6 +168,20 @@
       </section>
     </section>
   </main>
+  <section id="report-viewer" class="report-viewer" role="dialog" aria-modal="true" aria-labelledby="report-viewer-title" hidden>
+    <header class="report-viewer-toolbar">
+      <div class="report-viewer-heading">
+        <button type="button" id="report-viewer-close">← 返回讲座</button>
+        <img src="/favicon.svg" alt="">
+        <strong id="report-viewer-title">阅读报告</strong>
+      </div>
+      <div class="report-viewer-actions">
+        <a class="button" id="report-viewer-download" hidden>下载分享包</a>
+        <a class="button" id="report-viewer-external" target="_blank" rel="noopener">在浏览器中打开 ↗</a>
+      </div>
+    </header>
+    <iframe id="report-viewer-frame" title="BeyondSlides 阅读报告" allow="autoplay"></iframe>
+  </section>
   <aside id="run-error-banner" class="run-error-banner" role="alert" aria-labelledby="run-error-title" hidden>
     <div>
       <strong id="run-error-title">处理失败，已保存完成进度</strong>

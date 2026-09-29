@@ -8,7 +8,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 
 def main():
@@ -31,9 +31,20 @@ def main():
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(url)
+            assert page.locator('link[rel="icon"]').get_attribute("href") == "/favicon.svg"
+            icon = page.request.get(f"{url}/favicon.svg")
+            assert icon.ok
+            assert icon.headers["content-type"].startswith("image/svg+xml")
             jobs_before_example = page.request.get(f"{url}/api/jobs").json()
+            page.locator("#open-example").click()
+            page.locator("#report-viewer").wait_for(state="visible")
+            assert page.locator("#report-viewer-title").inner_text() == "BeyondSlides 示例报告"
+            assert page.locator("#report-viewer-download").is_hidden()
+            example_frame = page.frame_locator("#report-viewer-frame")
+            example_frame.locator("[data-example-notice]").wait_for(state="visible")
+            expect(example_frame.locator("[data-slide]")).to_have_count(80)
             with page.expect_popup() as opened_example:
-                page.locator("#open-example").click()
+                page.locator("#report-viewer-external").click()
             example = opened_example.value
             example.on("pageerror", lambda error: errors.append(str(error)))
             example.wait_for_load_state()
@@ -172,6 +183,9 @@ def main():
             assert not example.evaluate("performance.getEntriesByType('resource').some(entry => entry.name.startsWith('http'))")
             example.screenshot(path=str(args.workspace / "browser-example-report.png"))
             example.close()
+            page.locator("#report-viewer-close").click()
+            assert page.locator("#report-viewer").is_hidden()
+            assert page.locator("#report-viewer-frame").get_attribute("src") == "about:blank"
             assert page.request.get(f"{url}/api/jobs").json() == jobs_before_example
             offline_context = browser.new_context(offline=True, viewport={"width": 1440, "height": 1000})
             offline = offline_context.new_page()
@@ -337,8 +351,15 @@ def main():
             assert "预计剩余" not in page.locator("#stage-progress").inner_text()
             page.unroute(f"**/api/jobs/{job}")
             page.wait_for_function("document.getElementById('run-state').textContent === '处理完成'")
+            page.locator("#open-report").click()
+            page.locator("#report-viewer").wait_for(state="visible")
+            report_frame = page.frame_locator("#report-viewer-frame")
+            report_frame.locator("[data-minimap-prototype]").wait_for(state="visible")
+            assert report_frame.locator("[data-passage]").count() > 0
+            assert page.locator("#report-viewer-download").is_visible()
+            assert page.locator("#report-viewer-download").get_attribute("href").endswith(f"/api/jobs/{job}/export")
             with page.expect_popup() as opened:
-                page.locator("#open-report").click()
+                page.locator("#report-viewer-external").click()
             reader = opened.value
             reader.wait_for_load_state()
             assert reader.locator("[data-passage]").count() > 0
@@ -351,6 +372,7 @@ def main():
             for resizer in reader.locator("[data-reader-resizer]").all():
                 assert resizer.is_hidden()
             reader.close()
+            page.locator("#report-viewer-close").click()
             with page.expect_download() as download:
                 page.locator("#export-report").click()
             assert download.value.failure() is None

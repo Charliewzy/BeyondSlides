@@ -1,4 +1,40 @@
-# Linux standalone package
+# Standalone desktop packages
+
+## Windows x86-64
+
+The recommended Windows artifact is the per-user installer
+`BeyondSlides-Setup-x86_64.exe`. It installs without elevation under
+`%LOCALAPPDATA%\Programs\BeyondSlides`, registers a normal Windows uninstaller,
+adds a Start-menu shortcut, and offers an optional desktop shortcut. Application
+data remains under `%LOCALAPPDATA%\BeyondSlides`; upgrades and uninstalling the
+program do not remove lectures, checkpoints, reports, browser login state, or
+downloaded models.
+
+The same build publishes `beyond-slides-windows-x86_64.zip` for users who prefer
+a portable program directory. Extract the whole directory and run
+`BeyondSlides.exe`; the adjacent Chromium, native runtimes, DLLs, and notices are
+part of the application and must remain together. Both variants are currently
+unsigned, so Windows SmartScreen may report an unknown publisher. The published
+`SHA256SUMS.txt` covers both downloads.
+
+GitHub Actions builds and verifies the native package on `windows-2025`. For a
+local Windows build, install Rust 1.94, the required native C/C++ build tools,
+and Inno Setup 6.3 or later, then run:
+
+```powershell
+./scripts/package_standalone_windows.ps1
+./scripts/verify_standalone_windows.ps1 ./dist/beyond-slides-windows-x86_64
+./scripts/package_installer_windows.ps1
+./scripts/verify_installer_windows.ps1 ./dist/BeyondSlides-Setup-x86_64.exe
+```
+
+The installer verifier silently installs into a temporary per-user directory,
+runs the portable bundle's Chromium/FFmpeg/ffprobe/PDFium and launcher lifecycle
+checks against the installed files, silently uninstalls, and confirms that the
+program files were removed. The installer is deliberately built from the exact
+portable payload rather than maintaining a second component list.
+
+## Linux x86-64
 
 The current standalone preview targets a contemporary x86-64 Linux desktop
 with glibc and a graphical session. It packages the BeyondSlides release binary,
@@ -124,4 +160,4 @@ The portable browser avoids a separate Chrome installation but cannot remove
 the ordinary baseline requirements of a Linux graphical application: a
 supported kernel, glibc, display server, and working desktop graphics stack.
 On Ubuntu 24.04 or later, use the `.deb` package if the portable AppImage reports
-`No usable sandbox`. The package is not a macOS or Windows build.
+`No usable sandbox`. These Linux artifacts are not macOS or Windows builds.

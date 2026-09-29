@@ -10,7 +10,9 @@ on:
       - src/**
       - packaging/windows/**
       - scripts/package_standalone_windows.ps1
+      - scripts/package_installer_windows.ps1
       - scripts/verify_standalone_windows.ps1
+      - scripts/verify_installer_windows.ps1
       - .github/workflows/windows-standalone.yml
 
 permissions:
@@ -22,9 +24,9 @@ concurrency:
 
 jobs:
   package:
-    name: Build and verify portable package
+    name: Build and verify portable package and installer
     runs-on: windows-2025
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.94.0
@@ -39,17 +41,27 @@ jobs:
       - name: Verify standalone package
         shell: pwsh
         run: ./scripts/verify_standalone_windows.ps1 ./dist/beyond-slides-windows-x86_64
+      - name: Build per-user installer
+        shell: pwsh
+        run: ./scripts/package_installer_windows.ps1
+      - name: Verify installer lifecycle
+        shell: pwsh
+        run: ./scripts/verify_installer_windows.ps1 ./dist/BeyondSlides-Setup-x86_64.exe
       - name: Record package checksum
         shell: pwsh
         run: |
           $archive = Resolve-Path ./dist/beyond-slides-windows-x86_64.zip
-          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $([IO.Path]::GetFileName($archive))" | Set-Content -Encoding ascii ./dist/SHA256SUMS.txt
+          $installer = Resolve-Path ./dist/BeyondSlides-Setup-x86_64.exe
+          @($archive, $installer) | ForEach-Object {
+            $hash = (Get-FileHash $_ -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $([IO.Path]::GetFileName($_))"
+          } | Set-Content -Encoding ascii ./dist/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: beyond-slides-windows-x86_64
           path: |
             dist/beyond-slides-windows-x86_64.zip
+            dist/BeyondSlides-Setup-x86_64.exe
             dist/SHA256SUMS.txt
           compression-level: 0
           if-no-files-found: error

@@ -81,8 +81,24 @@ API key: <从课程平台取得的 key>
 
 ## 安装与部署细节
 
-目前主要在 **Linux / WSL** 上开发和验证。仓库可以生成 Ubuntu 24.04+
-的 `.deb` 安装包和一个 Linux x86-64 便携预览包；macOS、原生 Windows 的完整流程尚未验证。
+目前主要在 **Linux / WSL** 上开发。仓库可以生成 Ubuntu 24.04+ 的 `.deb`
+安装包、Linux x86-64 便携包，以及由 Windows CI 原生构建并完成安装、启动、卸载
+冒烟测试的 Windows x86-64 安装包和便携 ZIP。macOS 尚未支持。
+
+### Windows x86-64 安装包（推荐）
+
+从 GitHub Actions 的 **Windows standalone** 构建产物中下载
+`BeyondSlides-Setup-x86_64.exe`，双击后按向导安装即可。安装不需要管理员权限；
+默认写入当前用户的 `%LOCALAPPDATA%\Programs\BeyondSlides`，并创建开始菜单入口，
+桌面快捷方式可选。课程、检查点、雨课堂登录状态和模型缓存保存在
+`%LOCALAPPDATA%\BeyondSlides`，升级或卸载程序不会删除这些用户数据。
+
+同一构建还提供 `beyond-slides-windows-x86_64.zip`，适合不想安装的用户。
+解压完整目录后双击 `BeyondSlides.exe`；不要只复制其中一个 exe。两个分发包都包含
+Chromium、PDFium、FFmpeg 和 `ffprobe`，但 OCR、ASR 与嵌入模型仍会在首次使用时
+校验下载。当前 Windows 构建尚未进行代码签名，因此 SmartScreen 可能显示未知发布者；
+可用同一构建产物内的 `SHA256SUMS.txt` 核对文件。构建与验证说明见
+[独立应用说明](docs/standalone.md)。
 
 ### Ubuntu 24.04+ 安装包（推荐）
 

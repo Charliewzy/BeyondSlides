@@ -9,7 +9,9 @@ fn model_runs_reject_a_directory_locked_by_another_process() {
     let directory = tempfile::tempdir().unwrap();
     let lock = fs::OpenOptions::new()
         .create(true)
-        .append(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
         .open(directory.path().join(".run.lock"))
         .unwrap();
     lock.try_lock().unwrap();

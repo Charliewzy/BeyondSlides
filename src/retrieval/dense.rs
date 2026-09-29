@@ -1,11 +1,11 @@
 use std::sync::Mutex;
 
-use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
+use fastembed::{InitOptionsUserDefined, TextEmbedding};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::{SlideId, ValidatedSources};
 
-use super::{SearchError, SlideScore, SlideScorer};
+use super::{SearchError, SlideScore, SlideScorer, modelscope::load_embedding_model};
 
 const CHINESE_RETRIEVAL_INSTRUCTION: &str = "为这个句子生成表示以用于检索相关文章：";
 
@@ -16,10 +16,14 @@ pub struct DenseSlideScorer {
 }
 
 impl DenseSlideScorer {
-    /// Loads BAAI/bge-small-zh-v1.5 and embeds every non-empty slide once.
+    /// Loads the pinned BAAI/bge-small-zh-v1.5 assets from ModelScope and
+    /// embeds every non-empty slide once.
     pub fn try_new(sources: &ValidatedSources) -> Result<Self, SearchError> {
-        let mut model = TextEmbedding::try_new(
-            TextInitOptions::new(EmbeddingModel::BGESmallZHV15).with_show_download_progress(true),
+        let user_defined_model = load_embedding_model()
+            .map_err(|error| SearchError::ModelInitialization(error.to_string()))?;
+        let mut model = TextEmbedding::try_new_from_user_defined(
+            user_defined_model,
+            InitOptionsUserDefined::default(),
         )
         .map_err(|error| SearchError::ModelInitialization(error.to_string()))?;
 

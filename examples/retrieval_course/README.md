@@ -16,8 +16,9 @@ comparison with:
 cargo run --example compare_retrieval
 ```
 
-The first dense run downloads `BAAI/bge-small-zh-v1.5` into
-`.fastembed_cache`; the downloaded model is about 91 MiB and is gitignored.
+The first dense run downloads the pinned `BAAI/bge-small-zh-v1.5` ONNX assets
+from ModelScope into the operating system's BeyondSlides cache. The download is
+about 91 MiB; subsequent runs validate and reuse it.
 
 ## Baseline result
 

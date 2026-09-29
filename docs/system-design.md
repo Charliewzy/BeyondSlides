@@ -271,7 +271,7 @@ flowchart TD
 | 模块 | 关键 crate / 工具 | 选择原因 |
 | --- | --- | --- |
 | 中文词汇检索 | `jieba-rs`、`unicode-normalization` + Rust 自研 BM25 | Jieba 适合中文搜索切词，NFKC 统一全半角与技术文本；BM25 公式简单且需要返回全页顺序分数，直接实现更透明 |
-| 语义检索 | `fastembed` + BGE-small-zh-v1.5 | 自动管理本地 embedding/ONNX Runtime，中文检索效果明显优于只匹配字面词，模型规模适合 CPU |
+| 语义检索 | `fastembed` + BGE-small-zh-v1.5 | 固定版本的模型文件从 ModelScope 校验下载并缓存，FastEmbed 负责本地 ONNX 推理；中文检索可补充只匹配字面的 BM25，模型规模适合 CPU |
 | 混合与序列算法 | Rust 自研 RRF、分段 DP、幻灯片对齐 DP | 规则规模小、目标函数是本项目特有约束；显式实现便于测试确定性、来源完整性和 tie-breaking |
 | 文本时间投影 | `similar` | 使用成熟 Myers diff 将恢复文本的字符边界投影到 ASR token，而不是手写易错编辑距离回溯 |
 | OpenAI-compatible 模型 | `genai`、`serde_json` | `genai` 负责 Chat Completions 传输与常见服务商兼容；JSON schema、反序列化和后续领域校验仍由项目控制 |

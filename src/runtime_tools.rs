@@ -289,8 +289,12 @@ fn install_download_asset(
     replace_file(&staged, destination)
 }
 
-#[cfg(target_os = "linux")]
-pub(crate) fn install_verified_executable(
+/// Installs one immutable file after validating its length and SHA-256 digest.
+///
+/// Callers provide their own versioned destination. A per-directory lock and
+/// atomic rename ensure that concurrent processes never observe a partial
+/// download.
+pub(crate) fn install_verified_file(
     destination: &Path,
     url: &str,
     bytes: u64,
@@ -303,7 +307,17 @@ pub(crate) fn install_verified_executable(
             sha256,
         },
         destination,
-    )?;
+    )
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn install_verified_executable(
+    destination: &Path,
+    url: &str,
+    bytes: u64,
+    sha256: &'static str,
+) -> Result<(), RuntimeToolError> {
+    install_verified_file(destination, url, bytes, sha256)?;
     make_executable(destination)
 }
 

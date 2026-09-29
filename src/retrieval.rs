@@ -1,6 +1,7 @@
 mod dense;
 mod hybrid;
 mod lexical;
+mod modelscope;
 
 use std::{error::Error, fmt};
 

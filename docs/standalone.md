@@ -40,7 +40,8 @@ The current standalone preview targets a contemporary x86-64 Linux desktop
 with glibc and a graphical session. It packages the BeyondSlides release binary,
 the managed PDFium/FFmpeg/ffprobe layout, and a complete pinned
 ungoogled-Chromium AppImage. It does not package OCR, ASR, or embedding model
-weights, which retain the application's verified first-use download behavior.
+weights, which retain the application's verified first-use download behavior;
+the BGE embedding assets are fetched from a pinned ModelScope revision.
 The optional Codex backend still requires an installed, authenticated Codex
 CLI; OpenAI-compatible endpoints need no additional local program.
 

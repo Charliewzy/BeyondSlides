@@ -281,8 +281,9 @@ Every scorer returns one finite score per slide in presentation order:
 
 - lexical scoring uses BM25, Unicode compatibility normalization, and Jieba
   search-mode segmentation;
-- dense scoring uses `BAAI/bge-small-zh-v1.5`, applies the model's Chinese query
-  instruction, and brute-forces in-memory cosine similarity;
+- dense scoring loads a pinned `BAAI/bge-small-zh-v1.5` ONNX export from the
+  verified ModelScope cache, applies the model's Chinese query instruction,
+  and brute-forces in-memory cosine similarity;
 - hybrid scoring combines complete rankings with equal-weight reciprocal-rank
   fusion (`k = 60`).
 

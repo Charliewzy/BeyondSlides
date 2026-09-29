@@ -17,7 +17,7 @@ bzip2 = "0.6"
 chromiumoxide = "0.9.1"
 colorous = "1"
 dirs = "6"
-fastembed = { version = "6.0.2", default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries-rustls-tls"] }
+fastembed = { version = "6.0.2", default-features = false, features = ["ort-download-binaries-rustls-tls"] }
 flate2 = "1"
 fs2 = "0.4"
 futures = "0.3"

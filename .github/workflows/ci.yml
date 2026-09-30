@@ -24,6 +24,18 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # rust-cache can restore Sherpa's directory marker without the large
+      # native archive. Upstream then mistakes the partial directory for a
+      # complete prebuilt installation and fails at link time.
+      - name: Discard incomplete Sherpa native cache
+        shell: bash
+        run: |
+          sherpa_cache=target/sherpa-onnx-prebuilt
+          if [[ -d "$sherpa_cache" ]] && \
+             ! find "$sherpa_cache" -type f -name 'libsherpa-onnx-c-api.a' -print -quit | grep -q .; then
+            echo "Removing incomplete Sherpa-ONNX native-library cache."
+            rm -rf -- "$sherpa_cache"
+          fi
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-targets --all-features -- --test-threads=1

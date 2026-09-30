@@ -33,6 +33,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+      # rust-cache can restore Sherpa's directory marker without the large
+      # native archive. Upstream then mistakes the partial directory for a
+      # complete prebuilt installation and fails at link time.
+      - name: Discard incomplete Sherpa native cache
+        shell: pwsh
+        run: |
+          $sherpaCache = Join-Path $PWD "target\sherpa-onnx-prebuilt"
+          if (Test-Path $sherpaCache) {
+            $nativeLibrary = Get-ChildItem -Path $sherpaCache -Recurse -File `
+              -Filter "sherpa-onnx-c-api.lib" | Select-Object -First 1
+            if ($null -eq $nativeLibrary) {
+              Write-Host "Removing incomplete Sherpa-ONNX native-library cache."
+              Remove-Item -Recurse -Force $sherpaCache
+            }
+          }
       - name: Run Rust tests
         run: cargo test --locked --all-targets --all-features -- --test-threads=1
       - name: Build standalone package

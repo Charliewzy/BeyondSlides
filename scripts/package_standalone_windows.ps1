@@ -29,6 +29,10 @@ if (Test-Path $SherpaCache) {
     if ($null -eq $SherpaCApi) {
         Write-Host "Removing incomplete Sherpa-ONNX native-library cache."
         Remove-Item -Recurse -Force $SherpaCache
+        cargo clean -p sherpa-onnx-sys
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not invalidate the incomplete Sherpa-ONNX Cargo cache."
+        }
     }
 }
 

@@ -46,6 +46,10 @@ jobs:
             if ($null -eq $nativeLibrary) {
               Write-Host "Removing incomplete Sherpa-ONNX native-library cache."
               Remove-Item -Recurse -Force $sherpaCache
+              cargo clean -p sherpa-onnx-sys
+              if ($LASTEXITCODE -ne 0) {
+                throw "Could not invalidate the incomplete Sherpa-ONNX Cargo cache."
+              }
             }
           }
       - name: Run Rust tests

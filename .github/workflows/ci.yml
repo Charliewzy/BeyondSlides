@@ -35,6 +35,7 @@ jobs:
              ! find "$sherpa_cache" -type f -name 'libsherpa-onnx-c-api.a' -print -quit | grep -q .; then
             echo "Removing incomplete Sherpa-ONNX native-library cache."
             rm -rf -- "$sherpa_cache"
+            cargo clean -p sherpa-onnx-sys
           fi
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings

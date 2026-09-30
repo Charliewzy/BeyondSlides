@@ -110,7 +110,7 @@ Ubuntu 24.04 及以后版本可能通过 AppArmor 阻止便携 AppImage 中的 C
 
 ```sh
 scripts/package_deb_linux.sh
-sudo apt install ./dist/beyond-slides_0.1.4-1_amd64.deb
+sudo apt install ./dist/beyond-slides_0.1.5-1_amd64.deb
 ```
 
 安装后从应用菜单打开 **BeyondSlides**。当前包约 **222 MiB**，安装后约
@@ -264,7 +264,7 @@ uv run scripts/verify_application_browser.py run/release-check
 # 构建独立包后，验证启动、关闭、运行时和雨课堂浏览器：
 scripts/verify_standalone_linux.sh dist/beyond-slides-linux-x86_64
 # 构建 Ubuntu 安装包后，验证布局、AppArmor、运行时和浏览器：
-scripts/verify_deb_linux.sh dist/beyond-slides_0.1.4-1_amd64.deb
+scripts/verify_deb_linux.sh dist/beyond-slides_0.1.5-1_amd64.deb
 ```
 
 运行验证脚本前先完成构建；不要在脚本运行过程中替换其使用的二进制。端到端验证需要已缓存的中文检索模型；详细要求见 [本地应用说明](docs/local-application.md#verification)。模拟模型测试验证流程，不验证真实模型的判断质量。

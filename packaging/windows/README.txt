@@ -19,8 +19,9 @@ The application listens only on a free 127.0.0.1 port. Set
 BEYOND_SLIDES_PORT to require a particular port, or BEYOND_SLIDES_DATA_DIR to
 choose another data directory.
 
-The package includes verified FFmpeg, ffprobe, PDFium, and Chromium builds.
-ASR, OCR, and embedding model weights are downloaded and cached on first use.
+The package includes verified FFmpeg, ffprobe, PDFium, Chromium, and
+BGE-small-zh-v1.5 embedding assets. ASR and OCR model weights are downloaded
+and cached on first use.
 An OpenAI-compatible endpoint needs no additional software. Codex mode remains
 optional and requires a separately installed and authenticated Codex CLI.
 

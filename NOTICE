@@ -22,3 +22,12 @@ ungoogled-Chromium AppImage. It is not part of the MIT-licensed BeyondSlides
 executable. The package retains the portable-build and Chromium licenses,
 records the exact source URL and SHA-256 digest, and exposes Chromium's bundled
 third-party notices through chrome://credits.
+
+Bundled embedding model
+-----------------------
+The Windows standalone package includes the Xenova ONNX export of
+BAAI/bge-small-zh-v1.5 from ModelScope revision
+08d7186b7de51be7c12444137221ad96825593d6. The ModelScope model card declares
+the model under the MIT license. The model weights and tokenizer assets are not
+authored by the BeyondSlides contributors and retain their upstream license.
+Source: https://modelscope.cn/models/Xenova/bge-small-zh-v1.5

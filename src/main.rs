@@ -59,6 +59,14 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
             );
             Ok(())
         }
+        [command, directory] if command == OsStr::new("install-embedding-model") => {
+            beyond_slides::install_dense_embedding_model(Path::new(directory))?;
+            println!(
+                "Installed verified BGE embedding model in {}",
+                Path::new(directory).display()
+            );
+            Ok(())
+        }
         [command, trace_path] if command == OsStr::new("summarize-trace") => {
             trace_summary_run::run(trace_path)
         }
@@ -114,6 +122,7 @@ async fn run(arguments: Vec<OsString>) -> Result<(), Box<dyn Error>> {
             "usage: beyond-slides serve [<application-directory> <port>]\n\
              or:    beyond-slides install-runtime-tools <directory>\n\
              or:    beyond-slides install-chromium <directory>\n\
+             or:    beyond-slides install-embedding-model <directory>\n\
              or:    beyond-slides <transcript.json> <slides.json> <annotations.json> <result.html>\n\
              or:    beyond-slides summarize-trace <model-trace.jsonl>\n\
              or:    beyond-slides analyze <transcript.json> <slides.json> <run-directory> [--slides-pdf <slides.pdf>] [--audio <recording> --timed-tokens <timing.json>]\n\

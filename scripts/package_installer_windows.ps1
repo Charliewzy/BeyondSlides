@@ -21,7 +21,7 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force $OutputDirectory | Out-Null
 
-foreach ($Required in @("BeyondSlides.exe", "beyond-slides.exe", "chromium", "runtime-tools")) {
+foreach ($Required in @("BeyondSlides.exe", "beyond-slides.exe", "chromium", "runtime-tools", "models")) {
     if (-not (Test-Path (Join-Path $PackageDirectory $Required))) {
         throw "The portable package is incomplete; missing $Required"
     }

@@ -9,7 +9,8 @@ $Launcher = Join-Path $PackageDirectory "BeyondSlides.exe"
 $Backend = Join-Path $PackageDirectory "beyond-slides.exe"
 $Chromium = Join-Path $PackageDirectory "chromium\chrome.exe"
 $RuntimeTools = Join-Path $PackageDirectory "runtime-tools"
-foreach ($Required in @($Launcher, $Backend, $Chromium, $RuntimeTools)) {
+$EmbeddingModel = Join-Path $PackageDirectory "models\bge-small-zh-v1.5-modelscope-08d7186b7de51be7c12444137221ad96825593d6"
+foreach ($Required in @($Launcher, $Backend, $Chromium, $RuntimeTools, $EmbeddingModel)) {
     if (-not (Test-Path $Required)) {
         throw "Missing standalone component: $Required"
     }
@@ -24,6 +25,26 @@ $Ffprobe = Get-ChildItem $RuntimeTools -Filter "ffprobe.exe" -Recurse -File | Se
 $Pdfium = Get-ChildItem $RuntimeTools -Filter "pdfium.dll" -Recurse -File | Select-Object -First 1
 if ($null -in @($Ffmpeg, $Ffprobe, $Pdfium)) {
     throw "The package is missing FFmpeg, ffprobe, or PDFium."
+}
+$EmbeddingAssets = @(
+    @{ Name = "model.onnx"; Bytes = 94851877; Sha256 = "69a0b846f4f116b5e6aabf9546ea6754d02264f3211a13a1bd69b31b8040749a" },
+    @{ Name = "tokenizer.json"; Bytes = 439125; Sha256 = "48cea5d44424912a6fd1ea647bf4fe50b55ab8b1e5879c3275f80e339e8fae26" },
+    @{ Name = "config.json"; Bytes = 716; Sha256 = "d4193ead3a810fd694fa8a31d7fc72fbaebc0668b603e398734bf2f6538ff42f" },
+    @{ Name = "special_tokens_map.json"; Bytes = 125; Sha256 = "b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3" },
+    @{ Name = "tokenizer_config.json"; Bytes = 367; Sha256 = "e6f3b96db926a37d4039995fbf5ad17de158dfb8f6343d607e4dbaad18d75f5a" }
+)
+foreach ($Asset in $EmbeddingAssets) {
+    $Path = Join-Path $EmbeddingModel $Asset.Name
+    if (-not (Test-Path $Path)) {
+        throw "The package is missing BGE embedding asset $($Asset.Name)."
+    }
+    if ((Get-Item $Path).Length -ne $Asset.Bytes) {
+        throw "Unexpected packaged BGE embedding asset length: $($Asset.Name)."
+    }
+    $Hash = (Get-FileHash $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($Hash -ne $Asset.Sha256) {
+        throw "Unexpected packaged BGE embedding asset hash: $($Asset.Name): $Hash"
+    }
 }
 & $Ffmpeg.FullName -version | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Packaged FFmpeg did not start." }
@@ -155,4 +176,4 @@ if ($Survivors.Count -ne 0) {
     throw "The launcher smoke test left packaged processes running: $($Descriptions -join ', ')"
 }
 
-Write-Host "Windows launcher, Chromium, FFmpeg, ffprobe, and PDFium smoke tests passed."
+Write-Host "Windows launcher, Chromium, FFmpeg, ffprobe, PDFium, and BGE model smoke tests passed."

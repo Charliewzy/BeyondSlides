@@ -3,6 +3,7 @@ mod hybrid;
 mod lexical;
 mod modelscope;
 
+use std::path::Path;
 use std::{error::Error, fmt};
 
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,14 @@ use crate::SlideId;
 pub use dense::DenseSlideScorer;
 pub use hybrid::HybridSlideScorer;
 pub use lexical::LexicalSlideScorer;
+
+/// Installs the pinned dense-retrieval model under `models_root` for an
+/// executable-adjacent standalone package.
+pub fn install_dense_embedding_model(models_root: &Path) -> Result<(), SearchError> {
+    modelscope::install_embedding_model(models_root)
+        .map(|_| ())
+        .map_err(|error| SearchError::ModelInitialization(error.to_string()))
+}
 
 /// Scores every slide for semantic relevance without exposing the retrieval algorithm.
 pub trait SlideScorer: Sync {

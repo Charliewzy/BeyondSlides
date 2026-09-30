@@ -13,7 +13,10 @@ downloaded models.
 The same build publishes `beyond-slides-windows-x86_64.zip` for users who prefer
 a portable program directory. Extract the whole directory and run
 `BeyondSlides.exe`; the adjacent Chromium, native runtimes, DLLs, and notices are
-part of the application and must remain together. Both variants are currently
+part of the application and must remain together. The Windows payload also
+contains the pinned, SHA-256-verified BGE-small-zh-v1.5 ModelScope assets, so
+semantic slide retrieval does not need a first-run model download. ASR and OCR
+weights retain their verified first-use downloads. Both variants are currently
 unsigned, so Windows SmartScreen may report an unknown publisher. The published
 `SHA256SUMS.txt` covers both downloads.
 
@@ -29,10 +32,11 @@ and Inno Setup 6.3 or later, then run:
 ```
 
 The installer verifier silently installs into a temporary per-user directory,
-runs the portable bundle's Chromium/FFmpeg/ffprobe/PDFium and launcher lifecycle
-checks against the installed files, silently uninstalls, and confirms that the
-program files were removed. The installer is deliberately built from the exact
-portable payload rather than maintaining a second component list.
+runs the portable bundle's Chromium/FFmpeg/ffprobe/PDFium/BGE integrity and
+launcher lifecycle checks against the installed files, silently uninstalls,
+and confirms that the program files were removed. The installer is deliberately
+built from the exact portable payload rather than maintaining a second
+component list.
 
 ## Linux x86-64
 

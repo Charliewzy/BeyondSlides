@@ -104,6 +104,7 @@ pub use restored_annotation::{
 };
 pub use retrieval::{
     DenseSlideScorer, HybridSlideScorer, LexicalSlideScorer, SearchError, SlideScore, SlideScorer,
+    install_dense_embedding_model,
 };
 pub use validation::{ValidatedAnalysis, ValidatedSources, ValidationError};
 pub use windowing::{

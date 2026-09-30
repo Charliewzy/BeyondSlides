@@ -64,6 +64,10 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Could not install the managed FFmpeg and PDFium runtimes."
     }
+    & $Backend install-embedding-model (Join-Path $Staging "models")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not install the packaged BGE embedding model."
+    }
     & $Backend install-chromium (Join-Path $Staging "chromium")
     if ($LASTEXITCODE -ne 0) {
         throw "Could not install the packaged Chromium browser."

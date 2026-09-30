@@ -95,8 +95,9 @@ API key: <从课程平台取得的 key>
 
 同一构建还提供 `beyond-slides-windows-x86_64.zip`，适合不想安装的用户。
 解压完整目录后双击 `BeyondSlides.exe`；不要只复制其中一个 exe。两个分发包都包含
-Chromium、PDFium、FFmpeg 和 `ffprobe`，但 OCR、ASR 与嵌入模型仍会在首次使用时
-校验下载。当前 Windows 构建尚未进行代码签名，因此 SmartScreen 可能显示未知发布者；
+Chromium、PDFium、FFmpeg、`ffprobe` 和经过校验的 BGE 中文检索模型；只有 OCR 与
+ASR 模型仍会在首次使用时校验下载。当前 Windows 构建尚未进行代码签名，因此
+SmartScreen 可能显示未知发布者；
 可用同一构建产物内的 `SHA256SUMS.txt` 核对文件。构建与验证说明见
 [独立应用说明](docs/standalone.md)。
 

@@ -62,15 +62,12 @@ impl ModelAsset {
 }
 
 pub(super) fn load_embedding_model() -> Result<UserDefinedEmbeddingModel, ModelScopeModelError> {
-    let cache_root = dirs::cache_dir().ok_or(ModelScopeModelError::NoCacheDirectory)?;
-    load_embedding_model_from(&cache_root.join("beyond-slides").join("models"))
+    let model_directory = resolve_model_directory()?;
+    load_embedding_model_from(&model_directory)
 }
 
-fn load_embedding_model_from(
-    models_root: &Path,
-) -> Result<UserDefinedEmbeddingModel, ModelScopeModelError> {
-    let model_directory =
-        models_root.join(format!("bge-small-zh-v1.5-modelscope-{MODEL_REVISION}"));
+pub(super) fn install_embedding_model(models_root: &Path) -> Result<PathBuf, ModelScopeModelError> {
+    let model_directory = model_directory(models_root);
     for asset in MODEL_ASSETS {
         let destination = model_directory.join(asset.local_name);
         install_verified_file(&destination, &asset.url(), asset.bytes, asset.sha256).map_err(
@@ -80,7 +77,51 @@ fn load_embedding_model_from(
             },
         )?;
     }
+    Ok(model_directory)
+}
 
+fn resolve_model_directory() -> Result<PathBuf, ModelScopeModelError> {
+    let executable = std::env::current_exe().map_err(ModelScopeModelError::CurrentExecutable)?;
+    let cache_root = dirs::cache_dir();
+    resolve_model_directory_from(&executable, cache_root.as_deref())
+}
+
+fn resolve_model_directory_from(
+    executable: &Path,
+    cache_root: Option<&Path>,
+) -> Result<PathBuf, ModelScopeModelError> {
+    if let Some(executable_directory) = executable.parent() {
+        let packaged = model_directory(&executable_directory.join("models"));
+        if packaged.is_dir() {
+            verify_model_directory(&packaged)?;
+            return Ok(packaged);
+        }
+    }
+
+    let cache_root = cache_root.ok_or(ModelScopeModelError::NoCacheDirectory)?;
+    install_embedding_model(&cache_root.join("beyond-slides").join("models"))
+}
+
+fn model_directory(models_root: &Path) -> PathBuf {
+    models_root.join(format!("bge-small-zh-v1.5-modelscope-{MODEL_REVISION}"))
+}
+
+fn verify_model_directory(model_directory: &Path) -> Result<(), ModelScopeModelError> {
+    for asset in MODEL_ASSETS {
+        let path = model_directory.join(asset.local_name);
+        crate::runtime_tools::verify_file(&path, asset.bytes, asset.sha256).map_err(|source| {
+            ModelScopeModelError::PackagedAsset {
+                file: asset.remote_path,
+                source,
+            }
+        })?;
+    }
+    Ok(())
+}
+
+fn load_embedding_model_from(
+    model_directory: &Path,
+) -> Result<UserDefinedEmbeddingModel, ModelScopeModelError> {
     let read = |file_name: &'static str| {
         let path = model_directory.join(file_name);
         fs::read(&path).map_err(|source| ModelScopeModelError::Read { path, source })
@@ -99,7 +140,12 @@ fn load_embedding_model_from(
 #[derive(Debug)]
 pub(super) enum ModelScopeModelError {
     NoCacheDirectory,
+    CurrentExecutable(std::io::Error),
     Install {
+        file: &'static str,
+        source: RuntimeToolError,
+    },
+    PackagedAsset {
         file: &'static str,
         source: RuntimeToolError,
     },
@@ -115,9 +161,17 @@ impl fmt::Display for ModelScopeModelError {
             Self::NoCacheDirectory => formatter.write_str(
                 "could not determine the user cache directory for the BGE embedding model",
             ),
+            Self::CurrentExecutable(source) => write!(
+                formatter,
+                "could not locate the executable while resolving the packaged BGE model: {source}"
+            ),
             Self::Install { file, source } => write!(
                 formatter,
                 "could not install BGE embedding asset {file} from ModelScope: {source}"
+            ),
+            Self::PackagedAsset { file, source } => write!(
+                formatter,
+                "packaged BGE embedding asset {file} failed integrity validation: {source}"
             ),
             Self::Read { path, source } => write!(
                 formatter,
@@ -131,8 +185,8 @@ impl fmt::Display for ModelScopeModelError {
 impl Error for ModelScopeModelError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Install { source, .. } => Some(source),
-            Self::Read { source, .. } => Some(source),
+            Self::CurrentExecutable(source) | Self::Read { source, .. } => Some(source),
+            Self::Install { source, .. } | Self::PackagedAsset { source, .. } => Some(source),
             Self::NoCacheDirectory => None,
         }
     }
@@ -156,5 +210,29 @@ mod tests {
                 )
             );
         }
+        assert_eq!(
+            model_directory(Path::new("models")),
+            Path::new("models").join(format!("bge-small-zh-v1.5-modelscope-{MODEL_REVISION}"))
+        );
+    }
+
+    #[test]
+    fn executable_adjacent_model_is_checked_before_a_user_cache_is_required() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let executable = temporary.path().join("BeyondSlides.exe");
+        fs::write(&executable, []).expect("placeholder executable");
+        let packaged = model_directory(&temporary.path().join("models"));
+        fs::create_dir_all(&packaged).expect("packaged model directory");
+
+        let error = resolve_model_directory_from(&executable, None)
+            .expect_err("the intentionally incomplete packaged model must be validated");
+
+        assert!(matches!(
+            error,
+            ModelScopeModelError::PackagedAsset {
+                file: "onnx/model.onnx",
+                ..
+            }
+        ));
     }
 }

@@ -2,6 +2,7 @@
 
 PDF extraction and rendering in this decision are superseded by ADR 0011; the
 native PP-OCRv5 fallback remains accepted.
+ADR 0015 extends this to uploaded PDFs and mixed-content pages.
 
 Rain Classroom exposes courseware as page images, while the canonical written
 source remains a PDF and ordinary PDFs often contain better embedded text. Keep

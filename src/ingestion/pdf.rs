@@ -7,7 +7,12 @@ use std::{
 
 use image::DynamicImage;
 use once_cell::sync::OnceCell;
-use pdfium_render::prelude::{PdfPageRenderRotation, PdfRenderConfig, Pdfium, PdfiumError};
+use pdfium_render::prelude::{
+    PdfPageObjectCommon, PdfPageObjectsCommon, PdfPageRenderRotation, PdfRenderConfig, Pdfium,
+    PdfiumError,
+};
+use similar::{Algorithm, DiffTag, capture_diff_slices};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::{Slide, SlideDeck, SlideId, runtime_tools};
 
@@ -19,6 +24,12 @@ static PDFIUM: OnceCell<Pdfium> = OnceCell::new();
 pub struct ImportedDeck {
     pub slide_deck: SlideDeck,
     pub warnings: Vec<ImportWarning>,
+}
+
+/// Pages worth rendering for OCR in a manually uploaded PDF.
+pub struct OcrPlan {
+    pub page_count: usize,
+    pub page_indices: Vec<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,10 +49,44 @@ pub fn import(path: &Path) -> Result<ImportedDeck, ImportError> {
     import_with_page_text(path, None)
 }
 
-/// Extracts PDF text first, then uses one OCR result per page only where the
-/// PDF contains too little searchable text.
+/// Extracts PDF text first, then fills sparse pages or adds OCR-only lines.
 pub fn import_with_ocr(path: &Path, ocr_pages: &[String]) -> Result<ImportedDeck, ImportError> {
     import_with_page_text(path, Some(ocr_pages))
+}
+
+/// Plain searchable pages do not need OCR. Sparse or broken text and sizable
+/// embedded images may contain words that PDFium cannot extract.
+pub fn plan_ocr(path: &Path) -> Result<OcrPlan, ImportError> {
+    let pdfium = bind_pdfium()?;
+    let document = pdfium
+        .load_pdf_from_file(path, None)
+        .map_err(ImportError::Pdfium)?;
+    let page_count = document.pages().len() as usize;
+    let mut page_indices = Vec::new();
+    for (index, page) in document.pages().iter().enumerate() {
+        let text = page
+            .text()
+            .map(|text| text.all())
+            .map_err(ImportError::Pdfium)?;
+        let sparse_or_broken = (non_whitespace_characters(&text) < SPARSE_TEXT_THRESHOLD
+            && !page.objects().is_empty())
+            || text.contains(['\u{25a1}', '\u{fffd}']);
+        let page_area = page.width().value * page.height().value;
+        let substantial_image =
+            page.objects().iter().any(|object| {
+                object.as_image_object().is_some()
+                    && object.width().ok().zip(object.height().ok()).is_some_and(
+                        |(width, height)| width.value * height.value >= page_area * 0.05,
+                    )
+            });
+        if sparse_or_broken || substantial_image {
+            page_indices.push(index);
+        }
+    }
+    Ok(OcrPlan {
+        page_count,
+        page_indices,
+    })
 }
 
 fn import_with_page_text(
@@ -84,6 +129,14 @@ fn normalize_pages(
                 && ocr_characters >= SPARSE_TEXT_THRESHOLD
             {
                 *lines = ocr_lines;
+            } else {
+                for ocr_line in ocr_lines {
+                    let candidate = comparable_text(&ocr_line);
+                    if candidate.chars().count() < 4 || ocr_line_is_duplicate(&candidate, lines) {
+                        continue;
+                    }
+                    lines.push(ocr_line);
+                }
             }
         }
     }
@@ -220,6 +273,47 @@ fn non_whitespace_characters(text: &str) -> usize {
         .count()
 }
 
+/// Ignore layout and ordinary punctuation, while retaining programming
+/// operators so that `C++` and `C` do not become the same evidence.
+fn comparable_text(text: &str) -> String {
+    text.nfkc()
+        .flat_map(char::to_lowercase)
+        .filter(|character| {
+            character.is_alphanumeric()
+                || matches!(
+                    character,
+                    '+' | '-' | '*' | '/' | '=' | '<' | '>' | '&' | '|' | '#' | '_' | '%'
+                )
+        })
+        .collect()
+}
+
+fn ocr_line_is_duplicate(candidate: &str, existing_lines: &[String]) -> bool {
+    let existing = comparable_text(&existing_lines.join(""));
+    if existing.contains(candidate) {
+        return true;
+    }
+    let candidate: Vec<char> = candidate.chars().collect();
+    if candidate.len() < 6 {
+        return false;
+    }
+    let existing: Vec<char> = existing.chars().collect();
+    let operations = capture_diff_slices(Algorithm::Myers, &existing, &candidate);
+    let mut matched = 0;
+    let mut first = None;
+    let mut last = 0;
+    for operation in operations {
+        if operation.tag() == DiffTag::Equal {
+            let range = operation.old_range();
+            matched += range.len();
+            first.get_or_insert(range.start);
+            last = range.end;
+        }
+    }
+    let nearby = first.is_some_and(|first| last - first <= candidate.len() + candidate.len() / 5);
+    nearby && matched * 100 >= candidate.len() * 85
+}
+
 /// Checks extracted page text, including saved imports. `page` is the PDF's
 /// one-based page number, used only to locate warnings in the original document.
 pub fn page_text_warnings(page: u32, text: &str) -> Vec<ImportWarning> {
@@ -328,8 +422,8 @@ mod tests {
             ],
             Some(&[
                 "OCR title\nfooter 1 / 3".into(),
-                "ignored OCR\nfooter 2 / 3".into(),
-                "ignored OCR\nfooter 3 / 3".into(),
+                "native searchable text\nfooter 2 / 3".into(),
+                "native third page\nfooter 3 / 3".into(),
             ]),
         )
         .unwrap();
@@ -338,6 +432,34 @@ mod tests {
         assert_eq!(imported.slide_deck.slides[1].text, "native searchable text");
         assert_eq!(imported.slide_deck.slides[2].text, "native third page");
         assert!(imported.warnings.is_empty());
+    }
+
+    #[test]
+    fn ocr_adds_text_missing_from_an_otherwise_searchable_page() {
+        let imported = normalize_pages(
+            &["可检索标题\nC++ 模板函数".into()],
+            Some(&["可检索标题\nC++ 模板函数\n截图中的编译错误\n截图中的编译错误".into()]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            imported.slide_deck.slides[0].text,
+            "可检索标题\nC++ 模板函数\n截图中的编译错误"
+        );
+    }
+
+    #[test]
+    fn ocr_errors_do_not_duplicate_pdf_text() {
+        let imported = normalize_pages(
+            &["机器学习模型的训练过程".into()],
+            Some(&["机器学刁模型的训练过程\n额外的实践建议".into()]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            imported.slide_deck.slides[0].text,
+            "机器学习模型的训练过程\n额外的实践建议"
+        );
     }
 
     #[test]

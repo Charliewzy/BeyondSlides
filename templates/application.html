@@ -30,7 +30,7 @@
             <h2><span>1</span> 书面材料</h2>
             <p class="muted">提供分析所依据的幻灯片。</p>
             <label>来源<select id="slides-source-mode"><option value="upload">上传 PDF</option><option value="rain">从雨课堂导入课件</option></select></label>
-            <label class="upload" id="slides-upload-label">幻灯片 PDF<input name="slides" type="file" accept=".pdf" required><small>提取每页文字，保留原始幻灯片展示。</small></label>
+            <label class="upload" id="slides-upload-label">幻灯片 PDF<input name="slides" type="file" accept=".pdf" required><small>结合 PDF 内嵌文字与本机 OCR，保留原始幻灯片展示。</small></label>
             <div id="rain-slides-selection" class="provider-selection" hidden>
               <label>课程<select id="rain-slides-course" disabled><option value="">先加载课程</option></select></label>
               <label>讲次<select id="rain-slides-lecture" disabled><option value="">先选择课程</option></select></label>
@@ -66,12 +66,12 @@
             <button type="button" id="rain-connect">扫码登录雨课堂</button>
           </div>
           <p id="rain-status" class="muted" role="status"></p>
-          <div id="rain-download" class="import-progress" hidden>
-            <div class="stage-label"><span id="rain-download-phase">正在准备雨课堂导入…</span><span id="rain-download-percent"></span></div>
-            <progress id="rain-download-bar" aria-label="雨课堂导入进度"></progress>
-            <small id="rain-download-bytes"></small>
-          </div>
         </section>
+        <div id="rain-download" class="import-progress" hidden>
+          <div class="stage-label"><span id="rain-download-phase">正在准备导入…</span><span id="rain-download-percent"></span></div>
+          <progress id="rain-download-bar" aria-label="讲座导入进度"></progress>
+          <small id="rain-download-bytes"></small>
+        </div>
         <p class="muted">导入预览不会向分析模型发送内容。录音转写使用本机 CPU，首次运行可能需要下载 SenseVoice 等模型；分析会在转写后开始。</p>
         <button class="primary" id="import-button">导入并预览</button><span id="import-status" role="status"></span>
       </form>

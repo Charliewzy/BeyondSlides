@@ -8,10 +8,12 @@ use rapidocr_core::{
     RapidOcr,
     config::{LimitType, PipelineConfig},
     model::{ModelAssetSpec, PPOCRV5_CH_MOBILE},
+    types::OcrOutput,
 };
 use reqwest::Client;
 
 use super::model_assets::download_verified;
+use beyond_slides::ingestion::pdf;
 
 const MODEL_DIRECTORY: &str = "pp-ocr-v5-chinese-mobile";
 const DETECTION_MODEL_BYTES: u64 = 4_819_576;
@@ -81,6 +83,54 @@ pub(super) fn recognize_pages(
     models: ModelPaths,
     mut report: impl FnMut(usize, usize),
 ) -> Result<Vec<String>, String> {
+    let mut engine = engine(models)?;
+    let mut texts = Vec::with_capacity(pages.len());
+    report(0, pages.len());
+    for (index, page) in pages.iter().enumerate() {
+        let output = engine.run_path(page).map_err(|error| {
+            format!(
+                "could not recognize Rain Classroom courseware page {}: {error}",
+                index + 1
+            )
+        })?;
+        texts.push(output_text(output));
+        report(index + 1, pages.len());
+    }
+    Ok(texts)
+}
+
+/// Reads each PDF page at a time so a large uploaded deck does not hold all
+/// rendered pages in memory while its text is recognized.
+pub(super) fn recognize_pdf(
+    path: &Path,
+    page_count: usize,
+    page_indices: &[usize],
+    models: ModelPaths,
+    mut report: impl FnMut(usize, usize),
+) -> Result<Vec<String>, String> {
+    let mut engine = engine(models)?;
+    let mut texts = vec![String::new(); page_count];
+    report(0, page_indices.len());
+    for (completed, &index) in page_indices.iter().enumerate() {
+        let image = pdf::render_page_to_fit(path, index, 1600).map_err(|error| {
+            format!(
+                "could not render uploaded slide page {}: {error}",
+                index + 1
+            )
+        })?;
+        let output = engine.run_image(&image.to_rgb8()).map_err(|error| {
+            format!(
+                "could not recognize uploaded slide page {}: {error}",
+                index + 1
+            )
+        })?;
+        texts[index] = output_text(output);
+        report(completed + 1, page_indices.len());
+    }
+    Ok(texts)
+}
+
+fn engine(models: ModelPaths) -> Result<RapidOcr, String> {
     let pipeline = PipelineConfig {
         use_det: true,
         use_cls: false,
@@ -102,27 +152,16 @@ pub(super) fn recognize_pages(
     detector.limit_type = LimitType::Max;
     detector.unclip_ratio = 1.5;
 
-    let mut engine = RapidOcr::new(config).map_err(provider_error)?;
-    let mut texts = Vec::with_capacity(pages.len());
-    report(0, pages.len());
-    for (index, page) in pages.iter().enumerate() {
-        let output = engine.run_path(page).map_err(|error| {
-            format!(
-                "could not recognize Rain Classroom courseware page {}: {error}",
-                index + 1
-            )
-        })?;
-        texts.push(
-            output
-                .lines
-                .into_iter()
-                .map(|line| line.text)
-                .collect::<Vec<_>>()
-                .join("\n"),
-        );
-        report(index + 1, pages.len());
-    }
-    Ok(texts)
+    RapidOcr::new(config).map_err(provider_error)
+}
+
+fn output_text(output: OcrOutput) -> String {
+    output
+        .lines
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn asset_bytes(asset: ModelAssetSpec) -> Result<u64, String> {

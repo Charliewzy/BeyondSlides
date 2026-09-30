@@ -112,11 +112,11 @@ function fileSize(bytes) {
 }
 function renderRainDownloadProgress(observed) {
   const container = $("rain-download"), progress = $("rain-download-bar");
-  const resource = observed.resource === "slides" ? "雨课堂课件" : observed.resource === "recording" ? "雨课堂录像" : "雨课堂内容";
+  const resource = observed.resource === "slides" ? "课件" : observed.resource === "recording" ? "录像" : "内容";
   container.hidden = false;
   if (observed.phase === "assembling") {
     $("rain-download-phase").textContent = `正在整理${resource}…`;
-    $("rain-download-percent").textContent = "下载完成";
+    $("rain-download-percent").textContent = "即将完成";
     progress.max = 1; progress.value = 1;
   } else if (["downloading", "downloading_ocr_models", "recognizing_text"].includes(observed.phase)) {
     $("rain-download-phase").textContent = observed.phase === "downloading_ocr_models"
@@ -133,11 +133,13 @@ function renderRainDownloadProgress(observed) {
       progress.removeAttribute("value");
     }
   } else {
-    $("rain-download-phase").textContent = "正在准备雨课堂导入…";
+    $("rain-download-phase").textContent = "正在准备导入…";
     $("rain-download-percent").textContent = "";
     progress.removeAttribute("value");
   }
-  $("rain-download-bytes").textContent = observed.total_items > 0
+  $("rain-download-bytes").textContent = observed.phase === "assembling"
+    ? "正在保存导入内容…"
+    : observed.total_items > 0
     ? observed.phase === "recognizing_text"
       ? `${observed.completed_items} / ${observed.total_items} 页`
       : `${observed.completed_items} / ${observed.total_items} 页 · 已下载 ${fileSize(observed.downloaded_bytes)}`
@@ -148,7 +150,7 @@ function renderRainDownloadProgress(observed) {
 async function pollRainDownload(importId) {
   if (activeRainImportId !== importId) return;
   try {
-    renderRainDownloadProgress(await api(`/api/rain-classroom/imports/${importId}`));
+    renderRainDownloadProgress(await api(`/api/imports/${importId}`));
   } catch (error) {
     if (error.status !== 404) notice(error.message);
   }
@@ -927,12 +929,10 @@ $("import-form").addEventListener("submit", async (event) => {
       if (!classroomId || !lessonId) throw new Error("请选择要导入的雨课堂录像");
       form.set("rain_recording", JSON.stringify({ classroom_id: classroomId, lesson_id: lessonId }));
     }
-    if (usesRain) {
-      activeRainImportId = crypto.randomUUID();
-      form.set("rain_import_id", activeRainImportId);
-      renderRainDownloadProgress({ resource: "preparing", phase: "preparing", downloaded_bytes: 0, total_bytes: null });
-      pollRainDownload(activeRainImportId);
-    }
+    activeRainImportId = crypto.randomUUID();
+    form.set("import_id", activeRainImportId);
+    renderRainDownloadProgress({ resource: "preparing", phase: "preparing", downloaded_bytes: 0, total_bytes: null });
+    pollRainDownload(activeRainImportId);
     const job = await api("/api/jobs", { method: "POST", body: form });
     await refreshLibrary(); await select(job.id); event.target.reset(); syncImportSources();
   } catch (error) { notice(error.message); }

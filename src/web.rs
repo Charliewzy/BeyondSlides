@@ -1,4 +1,5 @@
 mod export;
+mod import_progress;
 mod jobs;
 mod logs;
 mod model_assets;
@@ -69,6 +70,7 @@ struct App {
     preview_renders: Arc<tokio::sync::Semaphore>,
     recognition_estimators: Arc<Mutex<HashMap<String, recognition_eta::RecognitionEstimator>>>,
     rain_classroom: Arc<rain_classroom::RainClassroom>,
+    import_progress: Arc<import_progress::ImportTracker>,
     pricing_catalog: Arc<pricing::PricingCatalog>,
 }
 
@@ -83,7 +85,11 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
     let request_policy = RequestPolicy::from_environment()?;
     let listener = tokio::net::TcpListener::bind(SocketAddr::new(bind_address, port)).await?;
     let port = listener.local_addr()?.port();
-    let rain_classroom = Arc::new(rain_classroom::RainClassroom::new(&root));
+    let import_progress = Arc::new(import_progress::ImportTracker::default());
+    let rain_classroom = Arc::new(rain_classroom::RainClassroom::new(
+        &root,
+        Arc::clone(&import_progress),
+    ));
     let pricing_catalog = Arc::new(pricing::PricingCatalog::new()?);
     let app = App {
         root,
@@ -93,6 +99,7 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
         preview_renders: Arc::new(tokio::sync::Semaphore::new(2)),
         recognition_estimators: Arc::default(),
         rain_classroom,
+        import_progress,
         pricing_catalog,
     };
     let rain_classroom = app.rain_classroom.clone();
@@ -163,8 +170,9 @@ pub(crate) async fn serve(root: &OsStr, port: u16) -> Result<(), Box<dyn Error>>
         )
         .route(
             "/api/rain-classroom/imports/{import_id}",
-            get(rain_classroom_download_progress),
+            get(get_import_progress),
         )
+        .route("/api/imports/{import_id}", get(get_import_progress))
         .route(
             "/example/report.html",
             get(|| async { Html(EXAMPLE_REPORT) }),
@@ -416,6 +424,7 @@ mod tests {
     use super::*;
 
     fn test_app(root: &FsPath) -> App {
+        let import_progress = Arc::new(import_progress::ImportTracker::default());
         App {
             root: root.into(),
             request_policy: Arc::new(RequestPolicy::parse("").unwrap()),
@@ -423,7 +432,11 @@ mod tests {
             cursors: Arc::default(),
             preview_renders: Arc::new(tokio::sync::Semaphore::new(2)),
             recognition_estimators: Arc::default(),
-            rain_classroom: Arc::new(rain_classroom::RainClassroom::new(root)),
+            rain_classroom: Arc::new(rain_classroom::RainClassroom::new(
+                root,
+                Arc::clone(&import_progress),
+            )),
+            import_progress,
             pricing_catalog: Arc::new(pricing::PricingCatalog::new().unwrap()),
         }
     }
@@ -685,19 +698,14 @@ async fn rain_classroom_presentations(
     ))
 }
 
-async fn rain_classroom_download_progress(
+async fn get_import_progress(
     State(app): State<App>,
     Path(import_id): Path<String>,
-) -> Result<Json<rain_classroom::DownloadProgress>, AppError> {
-    app.rain_classroom
-        .download_progress(&import_id)
+) -> Result<Json<import_progress::ImportProgress>, AppError> {
+    app.import_progress
+        .get(&import_id)
         .map(Json)
-        .ok_or_else(|| {
-            AppError(
-                StatusCode::NOT_FOUND,
-                "Rain Classroom import not found".into(),
-            )
-        })
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Import not found".into()))
 }
 
 fn log_path(app: &App, id: &str) -> Result<PathBuf, AppError> {
@@ -753,7 +761,7 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
     let mut recording = None;
     let mut rain_slides = None;
     let mut rain_recording = None;
-    let mut rain_import_id = None;
+    let mut import_id = None;
     while let Some(mut field) = multipart.next_field().await.map_err(AppError::bad)? {
         let name = field.name().unwrap_or("").to_owned();
         if !fields.insert(name.clone()) {
@@ -797,14 +805,15 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
             }
             continue;
         }
-        if name == "rain_import_id" {
+        if matches!(name.as_str(), "import_id" | "rain_import_id") {
             let bytes = field.bytes().await.map_err(AppError::bad)?;
             if bytes.len() > 64 {
-                return Err(AppError::bad(
-                    "Invalid Rain Classroom import progress identifier",
-                ));
+                return Err(AppError::bad("Invalid import progress identifier"));
             }
-            rain_import_id = Some(String::from_utf8(bytes.to_vec()).map_err(AppError::bad)?);
+            if import_id.is_some() {
+                return Err(AppError::bad("Duplicate import progress identifier"));
+            }
+            import_id = Some(String::from_utf8(bytes.to_vec()).map_err(AppError::bad)?);
             continue;
         }
         let ext = FsPath::new(field.file_name().unwrap_or(""))
@@ -850,8 +859,7 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
         ));
     }
     let uses_rain = rain_slides.is_some() || rain_recording.is_some();
-    let mut rain_slide_ocr = None;
-    if uses_rain != rain_import_id.is_some() {
+    if uses_rain && import_id.is_none() {
         return Err(AppError::bad(
             "Rain Classroom imports require a progress identifier",
         ));
@@ -866,21 +874,107 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
             "Upload slides and provide a transcript, a recording, or a Rain Classroom lecture",
         ));
     }
-    if let Some(import_id) = rain_import_id {
+    let _registration = import_id
+        .as_deref()
+        .map(|id| app.import_progress.register(id))
+        .transpose()
+        .map_err(AppError::bad)?;
+    let mut slide_ocr = None;
+    if uses_rain {
         let acquired = app
             .rain_classroom
             .acquire_sources(
                 rain_slides.as_ref(),
                 rain_recording.as_ref(),
                 directory.path(),
-                &import_id,
+                import_id
+                    .as_deref()
+                    .expect("Rain Classroom import has an ID"),
             )
             .await
             .map_err(AppError::bad)?;
-        rain_slide_ocr = acquired.slide_ocr;
+        slide_ocr = acquired.slide_ocr;
         if rain_recording.is_some() {
             recording = Some("recording.mp4".into());
         }
+    }
+    if rain_slides.is_none() {
+        let pdf_path = directory.path().join("slides.pdf");
+        let plan = {
+            let pdf_path = pdf_path.clone();
+            tokio::task::spawn_blocking(move || {
+                beyond_slides::ingestion::pdf::plan_ocr(&pdf_path)
+                    .map_err(|error| error.to_string())
+            })
+            .await
+            .map_err(AppError::bad)?
+            .map_err(AppError::bad)?
+        };
+        if plan.page_count == 0 {
+            return Err(AppError::bad("The PDF contains no slides"));
+        }
+        if !plan.page_indices.is_empty() {
+            if let Some(id) = import_id.as_deref() {
+                app.import_progress.update(id, |progress| {
+                    progress.resource = "slides";
+                    progress.phase = "downloading_ocr_models";
+                    progress.downloaded_bytes = 0;
+                    progress.total_bytes = None;
+                    progress.completed_items = None;
+                    progress.total_items = None;
+                });
+            }
+            let tracker = Arc::clone(&app.import_progress);
+            let progress_id = import_id.clone();
+            let models = slide_ocr::ensure_models(&app.root, |downloaded, total| {
+                if let Some(id) = progress_id.as_deref() {
+                    tracker.update(id, |progress| {
+                        progress.downloaded_bytes = downloaded;
+                        progress.total_bytes = Some(total);
+                    });
+                }
+            })
+            .await
+            .map_err(AppError::bad)?;
+            if let Some(id) = import_id.as_deref() {
+                app.import_progress.update(id, |progress| {
+                    progress.phase = "recognizing_text";
+                    progress.downloaded_bytes = 0;
+                    progress.total_bytes = None;
+                    progress.completed_items = Some(0);
+                    progress.total_items = Some(plan.page_indices.len());
+                });
+            }
+            let tracker = Arc::clone(&app.import_progress);
+            let progress_id = import_id.clone();
+            slide_ocr = Some(
+                tokio::task::spawn_blocking(move || {
+                    slide_ocr::recognize_pdf(
+                        &pdf_path,
+                        plan.page_count,
+                        &plan.page_indices,
+                        models,
+                        |completed, total| {
+                            if let Some(id) = progress_id.as_deref() {
+                                tracker.update(id, |progress| {
+                                    progress.completed_items = Some(completed);
+                                    progress.total_items = Some(total);
+                                });
+                            }
+                        },
+                    )
+                })
+                .await
+                .map_err(AppError::bad)?
+                .map_err(AppError::bad)?,
+            );
+        }
+    }
+    if let Some(id) = import_id.as_deref() {
+        app.import_progress.update(id, |progress| {
+            progress.resource = "content";
+            progress.phase = "assembling";
+        });
     }
     let root = app.root.clone();
     let job = tokio::task::spawn_blocking(move || {
@@ -891,7 +985,7 @@ async fn upload(State(app): State<App>, mut multipart: Multipart) -> Result<Json
             title,
             &extension,
             recording,
-            rain_slide_ocr.as_deref(),
+            slide_ocr.as_deref(),
         )?;
         fs::rename(directory.path(), root.join(id)).map_err(|e| e.to_string())?;
         Ok::<_, String>(job)

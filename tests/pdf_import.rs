@@ -1,6 +1,6 @@
 use std::{error::Error, path::Path};
 
-use beyond_slides::ingestion::pdf::{ImportWarning, import};
+use beyond_slides::ingestion::pdf::{ImportWarning, import, plan_ocr};
 use beyond_slides::{Slide, SlideId};
 
 #[test]
@@ -81,6 +81,19 @@ fn pdf_import_aggregates_suspicious_glyphs_per_page() -> Result<(), Box<dyn Erro
             glyphs: vec!['□', '�'],
         }]
     );
+    Ok(())
+}
+
+#[test]
+fn ocr_plan_skips_searchable_and_blank_pages_but_flags_broken_text() -> Result<(), Box<dyn Error>> {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let ordinary = plan_ocr(&fixtures.join("pdf_import.pdf"))?;
+    assert_eq!(ordinary.page_count, 4);
+    assert!(ordinary.page_indices.is_empty());
+
+    let broken = plan_ocr(&fixtures.join("pdf_warning.pdf"))?;
+    assert_eq!(broken.page_count, 1);
+    assert_eq!(broken.page_indices, vec![0]);
     Ok(())
 }
 

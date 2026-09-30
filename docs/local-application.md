@@ -38,8 +38,8 @@ Open `http://127.0.0.1:7842`. Source runs bind to loopback by default; this is
 not a multi-user hosted deployment. Docker and reverse-proxy configuration are
 documented separately in [deployment.md](deployment.md). Pinned PDFium, FFmpeg,
 and `ffprobe` assets are resolved beside the executable, from the user cache,
-or downloaded with SHA-256 verification on first use. Dense-retrieval and Rain
-Classroom OCR models may also download on first use.
+or downloaded with SHA-256 verification on first use. Dense-retrieval and slide
+OCR models may also download on first use.
 
 1. Choose the written source: upload a slides PDF (up to 100 MiB), or select a
    Rain Classroom course, lecture, and presentation. Choose the lecture source
@@ -56,13 +56,16 @@ Classroom OCR models may also download on first use.
    unchanged transcription pipeline sees them; replay segmentation is not part
    of the UI or job model.
    Selected courseware pages are downloaded in provider order and assembled
-   into the canonical `slides.pdf`. Native PP-OCRv5 recognizes the original
-   page images on CPU, after which the PDFium importer retains
-   extracted text where available and fills only sparse pages from OCR. The
-   model cache is shared across lectures; no Python, PaddlePaddle, GPU, or OCR
-   service is required.
+   into the canonical `slides.pdf`. For either imported or uploaded PDFs,
+   PDFium extracts embedded text and identifies sparse, broken, or image-rich
+   pages. Native PP-OCRv5 recognizes those pages on CPU. The importer keeps
+   usable embedded text, replaces sparse text with OCR where possible, and
+   appends only distinct OCR lines on mixed pages. Searchable text-only pages
+   skip OCR. The model cache is shared across lectures; no Python,
+   PaddlePaddle, GPU, or OCR service is required.
    During import, recording progress uses downloaded bytes when sizes are
    known; courseware download and OCR progress use completed page count.
+   Uploaded PDFs also report OCR progress when recognition is needed.
 2. Inspect the text preview and extraction warnings. Upload/preview does not
    contact the analysis provider.
    “建议检查的页面” lists flagged pages in a horizontal thumbnail strip, with

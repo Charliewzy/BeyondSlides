@@ -452,6 +452,10 @@ def main():
             assert page.locator("#rain-download-percent").inner_text() == "25%"
             assert page.locator("#rain-download-bytes").inner_text() == "20 / 80 页 · 已下载 25.0 MiB"
             assert page.locator("#rain-download-bar").evaluate("progress => progress.value / progress.max") == 0.25
+            page.evaluate("renderRainDownloadProgress({resource: 'slides', phase: 'recognizing_text', downloaded_bytes: 0, total_bytes: null, completed_items: 2, total_items: 5})")
+            assert page.locator("#rain-download-phase").inner_text() == "正在识别课件文字…"
+            assert page.locator("#rain-download-percent").inner_text() == "40%"
+            assert page.locator("#rain-download-bytes").inner_text() == "2 / 5 页"
             page.evaluate("stopRainDownloadProgress()")
             assert page.locator("#rain-download").is_hidden()
             page.locator("#rain-logout").click()

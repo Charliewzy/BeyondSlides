@@ -69,7 +69,7 @@ API key: <从课程平台取得的 key>
 ## 可以做什么
 
 - 分别选择书面材料和课堂内容：幻灯片可上传 PDF 或从雨课堂导入；讲述内容可上传转写、上传录音 / 视频，或从雨课堂导入录像。支持 JSON、SRT、VTT 和 UTF-8 TXT。
-- 在本机 CPU 上识别雨课堂的图片型课件，并保留原 PDF 作为可视书面来源。
+- 在本机 CPU 上识别雨课堂和本地 PDF 的图片型课件，并保留原 PDF 作为可视书面来源。
 - 使用本地 CPU 将录音转写，再恢复标点和连贯表达，保留原始文本的来源范围。
 - 比较全讲座中的段落，分别评估重要性与相对幻灯片的新颖度。
 - 开始、停止继续派发任务、恢复处理；查看阶段进度、预计剩余时间、token 用量、估算费用和调试日志。
@@ -141,7 +141,7 @@ sudo apt-get update
 sudo apt-get install build-essential clang cmake libssl-dev pkg-config
 ```
 
-Rust 可通过 [rustup](https://rustup.rs/) 安装；最低支持版本与 CI 使用的版本为 1.94.0。首次处理 PDF 或媒体时，会下载并校验约 63 MiB 的 PDFium、FFmpeg 和 `ffprobe` 压缩资源，解压后缓存约 167 MiB。首次构建会下载 Rust 依赖和 ONNX Runtime；首次分析还会从 ModelScope 下载并校验约 91 MiB 的本地中文检索模型 `BAAI/bge-small-zh-v1.5`，随后从操作系统用户缓存复用。首次导入雨课堂课件会下载并校验约 21 MiB 的 PP-OCRv5 模型，之后直接复用。
+Rust 可通过 [rustup](https://rustup.rs/) 安装；最低支持版本与 CI 使用的版本为 1.94.0。首次处理 PDF 或媒体时，会下载并校验约 63 MiB 的 PDFium、FFmpeg 和 `ffprobe` 压缩资源，解压后缓存约 167 MiB。首次构建会下载 Rust 依赖和 ONNX Runtime；首次分析还会从 ModelScope 下载并校验约 91 MiB 的本地中文检索模型 `BAAI/bge-small-zh-v1.5`，随后从操作系统用户缓存复用。首次导入需要 OCR 的课件（雨课堂或本地 PDF）会下载并校验约 21 MiB 的 PP-OCRv5 模型，之后直接复用；普通可提取文字的 PDF 无需 OCR。
 
 ```sh
 git clone https://github.com/Charliewzy/BeyondSlides.git
@@ -240,7 +240,7 @@ CLI 的规范化输入格式、完整命令和检查点规则见 [命令行运�
 - 本地检查点、模型请求 / 响应 traces 和日志可能包含完整课程文本。默认 `run/`、`data/` 被 Git 忽略；不要把自己的数据目录提交到仓库。
 - 新写入的模型 traces 和服务商错误会过滤配置的 API key（含 JSON / URL 编码形式）。修复前的 traces 不会自动清理；不要分享原始 traces。过滤不保证识别任意混淆方式或其他秘密。
 - 源码启动默认只绑定 loopback；Docker 镜像在容器内绑定 `0.0.0.0`，但示例只向宿主 loopback 发布。服务没有多用户鉴权，**不要直接通过反向代理或端口转发将它公开到互联网。**
-- 本地上传的 PDF 目前仍依赖可提取文字；PP-OCRv5 只自动处理雨课堂导入的逐页图片。检查警告与 OCR 都不能保证提取内容完整。
+- 本地上传和雨课堂导入的 PDF 均可对图片页使用 PP-OCRv5；对同时含内嵌文字和图片的页面，会保留 PDFium 文本并补充非重复的 OCR 行。页面检测、检查警告与 OCR 都不能保证提取内容完整，请检查可疑幻灯片。
 - ASR、文本恢复、分段、排名和幻灯片对齐都可能出错；音频定位可能退回较粗的转写区间。请对重要内容回看原始讲义 / 录音。
 - 软件使用 [MIT 许可证](LICENSE)。托管的 FFmpeg/ffprobe 是独立的 GPLv3 程序，预装包会同时保留上游许可证与构建说明；PDFium 和独立包中的 ungoogled-Chromium 也保留各自的上游许可证与来源。内置示例的课程文字和幻灯片不在 MIT 授权范围内；授课教师已授权项目作者随 BeyondSlides 公开分发该示例，授权范围见 [NOTICE](NOTICE)。
 

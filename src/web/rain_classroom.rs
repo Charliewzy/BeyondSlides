@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex as StdMutex},
+    sync::Arc,
     time::Duration,
 };
 
@@ -12,6 +12,8 @@ use chromiumoxide::{Browser, Page, browser::BrowserConfig, page::ScreenshotParam
 use futures::StreamExt;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{io::AsyncWriteExt, sync::Mutex, task::JoinHandle};
+
+use super::import_progress::{ImportProgress, ImportTracker};
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -79,35 +81,11 @@ pub(super) struct RainClassroom {
     application_root: PathBuf,
     profile: PathBuf,
     session: Mutex<Option<BrowserSession>>,
-    downloads: Arc<StdMutex<HashMap<String, DownloadProgress>>>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct DownloadProgress {
-    resource: &'static str,
-    phase: &'static str,
-    downloaded_bytes: u64,
-    total_bytes: Option<u64>,
-    completed_items: Option<usize>,
-    total_items: Option<usize>,
+    imports: Arc<ImportTracker>,
 }
 
 pub(super) struct AcquiredSources {
     pub slide_ocr: Option<Vec<String>>,
-}
-
-struct DownloadRegistration {
-    downloads: Arc<StdMutex<HashMap<String, DownloadProgress>>>,
-    import_id: String,
-}
-
-impl Drop for DownloadRegistration {
-    fn drop(&mut self) {
-        self.downloads
-            .lock()
-            .expect("Rain Classroom download progress lock is not poisoned")
-            .remove(&self.import_id);
-    }
 }
 
 struct BrowserSession {
@@ -119,21 +97,13 @@ struct BrowserSession {
 }
 
 impl RainClassroom {
-    pub fn new(application_root: &Path) -> Self {
+    pub fn new(application_root: &Path, imports: Arc<ImportTracker>) -> Self {
         Self {
             application_root: application_root.to_owned(),
             profile: application_root.join(".rain-classroom-browser"),
             session: Mutex::new(None),
-            downloads: Arc::default(),
+            imports,
         }
-    }
-
-    pub fn download_progress(&self, import_id: &str) -> Option<DownloadProgress> {
-        self.downloads
-            .lock()
-            .expect("Rain Classroom download progress lock is not poisoned")
-            .get(import_id)
-            .cloned()
     }
 
     /// Opens a dedicated headless browser. Its profile is retained locally so
@@ -200,12 +170,7 @@ impl RainClassroom {
     /// Forgets the dedicated local login without affecting the user's normal
     /// browser profile or their remote Rain Classroom account.
     pub async fn logout(&self) -> Result<(), String> {
-        if !self
-            .downloads
-            .lock()
-            .expect("Rain Classroom download progress lock is not poisoned")
-            .is_empty()
-        {
+        if self.imports.has_active_import() {
             return Err("Wait for the active Rain Classroom import before logging out".into());
         }
         self.close_browser().await;
@@ -401,7 +366,6 @@ impl RainClassroom {
         destination: &Path,
         import_id: &str,
     ) -> Result<AcquiredSources, String> {
-        let _registration = self.register_download(import_id)?;
         let slide_ocr = match slides {
             Some(selection) => Some(
                 self.acquire_slides(selection, &destination.join("slides.pdf"), import_id)
@@ -643,18 +607,14 @@ impl RainClassroom {
             progress.completed_items = Some(0);
             progress.total_items = Some(page_paths.len());
         });
-        let downloads = Arc::clone(&self.downloads);
+        let imports = Arc::clone(&self.imports);
         let progress_id = import_id.to_owned();
         let slide_ocr = tokio::task::spawn_blocking(move || {
             super::slide_ocr::recognize_pages(&page_paths, models, |completed, total| {
-                if let Some(progress) = downloads
-                    .lock()
-                    .expect("Rain Classroom download progress lock is not poisoned")
-                    .get_mut(&progress_id)
-                {
+                imports.update(&progress_id, |progress| {
                     progress.completed_items = Some(completed);
                     progress.total_items = Some(total);
-                }
+                });
             })
         })
         .await
@@ -766,48 +726,8 @@ impl RainClassroom {
             .ok_or_else(|| login_error("missing courseware data"))
     }
 
-    fn register_download(&self, import_id: &str) -> Result<DownloadRegistration, String> {
-        if import_id.is_empty()
-            || import_id.len() > 64
-            || !import_id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        {
-            return Err("Invalid Rain Classroom import progress identifier".into());
-        }
-        let mut downloads = self
-            .downloads
-            .lock()
-            .expect("Rain Classroom download progress lock is not poisoned");
-        if downloads.contains_key(import_id) {
-            return Err("This Rain Classroom import is already in progress".into());
-        }
-        downloads.insert(
-            import_id.into(),
-            DownloadProgress {
-                resource: "preparing",
-                phase: "preparing",
-                downloaded_bytes: 0,
-                total_bytes: None,
-                completed_items: None,
-                total_items: None,
-            },
-        );
-        Ok(DownloadRegistration {
-            downloads: Arc::clone(&self.downloads),
-            import_id: import_id.into(),
-        })
-    }
-
-    fn update_download(&self, import_id: &str, update: impl FnOnce(&mut DownloadProgress)) {
-        if let Some(progress) = self
-            .downloads
-            .lock()
-            .expect("Rain Classroom download progress lock is not poisoned")
-            .get_mut(import_id)
-        {
-            update(progress);
-        }
+    fn update_download(&self, import_id: &str, update: impl FnOnce(&mut ImportProgress)) {
+        self.imports.update(import_id, update);
     }
 
     async fn evaluate<T: DeserializeOwned>(&self, script: &str) -> Result<T, String> {
@@ -1061,7 +981,7 @@ mod tests {
     #[tokio::test]
     async fn logout_removes_only_the_dedicated_profile() {
         let root = tempfile::tempdir().unwrap();
-        let rain_classroom = RainClassroom::new(root.path());
+        let rain_classroom = RainClassroom::new(root.path(), Arc::default());
         tokio::fs::create_dir_all(&rain_classroom.profile)
             .await
             .unwrap();
@@ -1078,11 +998,11 @@ mod tests {
     #[tokio::test]
     async fn logout_does_not_interrupt_an_active_import() {
         let root = tempfile::tempdir().unwrap();
-        let rain_classroom = RainClassroom::new(root.path());
+        let rain_classroom = RainClassroom::new(root.path(), Arc::default());
         tokio::fs::create_dir_all(&rain_classroom.profile)
             .await
             .unwrap();
-        let _registration = rain_classroom.register_download("active-import").unwrap();
+        let _registration = rain_classroom.imports.register("active-import").unwrap();
 
         let error = rain_classroom.logout().await.unwrap_err();
 
@@ -1093,18 +1013,11 @@ mod tests {
     #[test]
     fn download_progress_exists_only_for_the_registered_import() {
         let root = tempfile::tempdir().unwrap();
-        let rain_classroom = RainClassroom::new(root.path());
+        let rain_classroom = RainClassroom::new(root.path(), Arc::default());
 
-        let registration = rain_classroom
-            .register_download("browser-import-1")
-            .unwrap();
+        let registration = rain_classroom.imports.register("browser-import-1").unwrap();
         assert_eq!(
-            serde_json::to_value(
-                rain_classroom
-                    .download_progress("browser-import-1")
-                    .unwrap()
-            )
-            .unwrap(),
+            serde_json::to_value(rain_classroom.imports.get("browser-import-1").unwrap()).unwrap(),
             serde_json::json!({
                 "resource": "preparing",
                 "phase": "preparing",
@@ -1121,30 +1034,24 @@ mod tests {
             progress.downloaded_bytes = 125;
             progress.total_bytes = Some(500);
         });
-        let progress = rain_classroom
-            .download_progress("browser-import-1")
-            .unwrap();
+        let progress = rain_classroom.imports.get("browser-import-1").unwrap();
         assert_eq!(progress.phase, "downloading");
         assert_eq!(progress.resource, "recording");
         assert_eq!(progress.downloaded_bytes, 125);
         assert_eq!(progress.total_bytes, Some(500));
 
         drop(registration);
-        assert!(
-            rain_classroom
-                .download_progress("browser-import-1")
-                .is_none()
-        );
+        assert!(rain_classroom.imports.get("browser-import-1").is_none());
     }
 
     #[test]
     fn download_progress_rejects_unsafe_or_duplicate_identifiers() {
         let root = tempfile::tempdir().unwrap();
-        let rain_classroom = RainClassroom::new(root.path());
-        assert!(rain_classroom.register_download("../escape").is_err());
+        let rain_classroom = RainClassroom::new(root.path(), Arc::default());
+        assert!(rain_classroom.imports.register("../escape").is_err());
 
-        let _registration = rain_classroom.register_download("same-import").unwrap();
-        assert!(rain_classroom.register_download("same-import").is_err());
+        let _registration = rain_classroom.imports.register("same-import").unwrap();
+        assert!(rain_classroom.imports.register("same-import").is_err());
     }
 
     #[test]
